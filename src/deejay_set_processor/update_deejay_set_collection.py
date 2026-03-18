@@ -1,5 +1,4 @@
 import re
-from typing import List, Tuple
 
 import kaiano.config as config
 from kaiano import logger as logger_mod
@@ -33,7 +32,7 @@ def generate_dj_set_collection():
     log.debug(f"Retrieved {len(subfolders)} subfolders")
     subfolders.sort(key=lambda f: f.name, reverse=True)
 
-    tabs_to_add: List[str] = []
+    tabs_to_add: list[str] = []
 
     # Build a JSON snapshot alongside the Google Sheet output.
     collection_snapshot = create_collection_snapshot("folders")
@@ -169,7 +168,7 @@ def generate_dj_set_collection():
     log.info("✅ Finished generate_dj_set_collection")
 
 
-def _extract_date_and_title(file_name: str) -> Tuple[str, str]:
+def _extract_date_and_title(file_name: str) -> tuple[str, str]:
     match = re.match(r"^(\d{4}-\d{2}-\d{2})(.*)", file_name)
     if not match:
         return ("", file_name)

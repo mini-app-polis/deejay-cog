@@ -19,18 +19,16 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Install Poetry
-        run: pip install poetry
+        run: uv python install 3.11
 
       - name: Install dependencies
-        run: poetry install
+        run: uv sync --all-extras
 
       - name: Run process_new_files
-        run: poetry run python -u src/deejay_set_processor/process_new_files.py
+        run: uv run python -u src/deejay_set_processor/process_new_files.py

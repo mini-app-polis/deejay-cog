@@ -73,13 +73,19 @@ def deduplicate_summary(spreadsheet_id: str, g: GoogleAPI | None = None) -> None
         # - non-empty vs different non-empty is NOT allowed
         identity_to_entries: dict[tuple[str, ...], list[dict[str, Any]]] = {}
 
-        def _norm_optional(col_i: int, cell: Any) -> str:
+        def _norm_optional(
+            col_i: int,
+            cell: Any,
+            *,
+            _len_idx: int | None = length_index,
+            _bpm_idx: int | None = bpm_index,
+        ) -> str:
             s = _normalize_key_cell(cell)
             if not s:
                 return ""
-            if length_index is not None and col_i == length_index:
+            if _len_idx is not None and col_i == _len_idx:
                 return _normalize_length(s)
-            if bpm_index is not None and col_i == bpm_index:
+            if _bpm_idx is not None and col_i == _bpm_idx:
                 return _normalize_bpm(s)
             return s
 
@@ -193,13 +199,10 @@ def _normalize_key_cell(value: Any) -> str:
 
     NOTE: We only apply this to the *key*, not to the stored template row.
     """
-    if value is None:
-        s = ""
-    else:
-        s = str(value)
+    s = "" if value is None else str(value)
 
     # Normalize non-breaking spaces and common whitespace to plain spaces
-    s = s.replace("\u00A0", " ")  # NBSP
+    s = s.replace("\u00a0", " ")  # NBSP
     s = s.replace("\t", " ").replace("\r", " ").replace("\n", " ")
 
     try:
@@ -235,7 +238,7 @@ def _strip_cell_value(value: Any) -> str:
     if value is None:
         return ""
     s = str(value)
-    s = s.replace("\u00A0", " ")  # NBSP → space
+    s = s.replace("\u00a0", " ")  # NBSP → space
     return s.strip()
 
 
@@ -314,7 +317,7 @@ def _normalize_bpm(value: Any) -> str:
 
     # Otherwise keep a stable string form (trim trailing zeros)
     # e.g. 100.50 -> '100.5'
-    out = ("%f" % f).rstrip("0").rstrip(".")
+    out = f"{f:f}".rstrip("0").rstrip(".")
     return out
 
 

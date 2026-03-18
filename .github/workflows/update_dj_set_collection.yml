@@ -24,19 +24,17 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
 
-      - name: Install Poetry
-        run: pip install poetry
+      - name: Set up Python
+        run: uv python install 3.11
 
       - name: Install dependencies
-        run: poetry install
+        run: uv sync --all-extras
 
       - name: Run create_dj_set_collection
-        run: poetry run python -u src/deejay_set_processor/update_deejay_set_collection.py
+        run: uv run python -u src/deejay_set_processor/update_deejay_set_collection.py
 
       - name: Checkout kaiano-api repo
         uses: actions/checkout@v4

@@ -1,3 +1,4 @@
+import contextlib
 import os
 import re
 
@@ -187,10 +188,8 @@ def process_csv_file(g: GoogleAPI, file_metadata: dict, year: str) -> None:
             log.error(f"Failed to rename original to FAILED_: {rename_exc}")
     finally:
         if os.path.exists(temp_path):
-            try:
+            with contextlib.suppress(Exception):
                 os.remove(temp_path)
-            except Exception:
-                pass
 
 
 def _extract_year_from_filename(filename: str) -> str | None:
@@ -214,7 +213,7 @@ def _normalize_csv(file_path: str) -> None:
     """
     log.debug(f"normalize_csv called with file_path: {file_path} - reading file")
 
-    with open(file_path, "r") as f:
+    with open(file_path) as f:
         lines = f.readlines()
 
     cleaned_lines: list[str] = []

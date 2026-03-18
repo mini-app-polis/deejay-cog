@@ -167,7 +167,7 @@ def generate_summary_for_folder(
 
     desired_display = [str(c).strip() for c in config.desiredOrder]
     desired_canon = [_canon_header(c) for c in desired_display]
-    desired_map = {c: d for c, d in zip(desired_canon, desired_display)}
+    desired_map = dict(zip(desired_canon, desired_display, strict=True))
 
     ordered_header = [c for c in desired_canon if c in all_headers]
     unordered_header = sorted([c for c in all_headers if c not in set(desired_canon)])
