@@ -19,9 +19,6 @@ jobs:
     env:
       LOGGING_LEVEL: ${{ vars.LOGGING_LEVEL }}
       GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-      KAIANO_API_BASE_URL: ${{ vars.KAIANO_API_BASE_URL }}
-      KAIANO_API_OWNER_ID: ${{ vars.KAIANO_API_OWNER_ID }}
-      OWNER_ID: ${{ vars.OWNER_ID }}
 
     steps:
       - name: Checkout repo

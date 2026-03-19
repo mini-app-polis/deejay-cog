@@ -79,62 +79,12 @@ def _parse_play_time(value: str | None) -> str | None:
     return None
 
 
-def parse_track_row(
-    row: list[Any],
-    col_index: dict[str, int],
-    *,
-    play_order: int,
-) -> dict[str, Any] | None:
-    """Parse a single track row using case-insensitive column mapping.
+def read_tracks_from_sheet(g: GoogleAPI, spreadsheet_id: str) -> list[dict[str, Any]]:
+    """Read raw track rows from a Google Sheet.
 
-    Returns a normalized track dict, or None if required fields are missing.
+    Returns a list of raw row dicts (strings) keyed by known columns.
+    Returns [] if sheet is empty or unreadable.
     """
-
-    def _cell(name: str) -> str:
-        i = col_index.get(name, -1)
-        if i < 0 or i >= len(row):
-            return ""
-        v = row[i]
-        return "" if v is None else str(v).strip()
-
-    title = _cell("title")
-    artist = _cell("artist")
-    if not title or not artist:
-        return None
-
-    length_secs = _parse_length_secs(_cell("length"))
-
-    bpm_raw = _cell("bpm")
-    try:
-        bpm = float(bpm_raw) if bpm_raw else None
-    except Exception:
-        bpm = None
-
-    year_raw = _cell("year")
-    try:
-        release_year = int(year_raw) if year_raw else None
-    except Exception:
-        release_year = None
-
-    play_time = _parse_play_time(_cell("play_time"))
-
-    out: dict[str, Any] = {
-        "play_order": play_order,
-        "label": _cell("label") or None,
-        "title": title,
-        "remix": _cell("remix") or None,
-        "artist": artist,
-        "comment": _cell("comment") or None,
-        "genre": _cell("genre") or None,
-        "length_secs": length_secs,
-        "bpm": bpm,
-        "release_year": release_year,
-        "play_time": play_time,
-    }
-    return out
-
-
-def _read_tracks_from_sheet(g: GoogleAPI, spreadsheet_id: str) -> list[dict[str, Any]]:
     try:
         meta = g.sheets.get_metadata(spreadsheet_id, fields="sheets(properties(title))")
         sheets = meta.get("sheets") or []
@@ -168,18 +118,82 @@ def _read_tracks_from_sheet(g: GoogleAPI, spreadsheet_id: str) -> list[dict[str,
         "year",
         "play_time",
     ]
-    col_index: dict[str, int] = {}
-    for c in columns:
-        if c in header_canon:
-            col_index[c] = header_canon.index(c)
+    col_index = {c: header_canon.index(c) for c in columns if c in header_canon}
 
-    tracks: list[dict[str, Any]] = []
+    raw_tracks: list[dict[str, Any]] = []
     for idx, row in enumerate(values[1:], start=1):
-        parsed = parse_track_row(row, col_index, play_order=idx)
-        if parsed is None:
+        row_out: dict[str, Any] = {"play_order": idx}
+        for c in columns:
+            i = col_index.get(c)
+            if i is None or i >= len(row):
+                row_out[c] = ""
+                continue
+            v = row[i]
+            row_out[c] = "" if v is None else str(v).strip()
+        raw_tracks.append(row_out)
+
+    return raw_tracks
+
+
+def build_ingest_payload(
+    *,
+    set_date: str,
+    venue: str,
+    source_file: str,
+    tracks: list[dict],
+) -> dict[str, Any]:
+    """Build POST /v1/ingest payload from raw track dicts."""
+    out_tracks: list[dict[str, Any]] = []
+    for t in tracks:
+        title = str(t.get("title") or "").strip()
+        artist = str(t.get("artist") or "").strip()
+        if not title or not artist:
             continue
-        tracks.append(parsed)
-    return tracks
+
+        length_secs = _parse_length_secs(str(t.get("length") or "").strip())
+
+        bpm_raw = str(t.get("bpm") or "").strip()
+        try:
+            bpm = float(bpm_raw) if bpm_raw else None
+        except Exception:
+            bpm = None
+
+        year_raw = str(t.get("year") or "").strip()
+        try:
+            release_year = int(year_raw) if year_raw else None
+        except Exception:
+            release_year = None
+
+        play_time = _parse_play_time(str(t.get("play_time") or "").strip())
+
+        play_order = t.get("play_order")
+        try:
+            play_order_int = int(play_order)
+        except Exception:
+            play_order_int = len(out_tracks) + 1
+
+        out_tracks.append(
+            {
+                "play_order": play_order_int,
+                "label": (str(t.get("label") or "").strip() or None),
+                "title": title,
+                "remix": (str(t.get("remix") or "").strip() or None),
+                "artist": artist,
+                "comment": (str(t.get("comment") or "").strip() or None),
+                "genre": (str(t.get("genre") or "").strip() or None),
+                "length_secs": length_secs,
+                "bpm": bpm,
+                "release_year": release_year,
+                "play_time": play_time,
+            }
+        )
+
+    return {
+        "set_date": set_date,
+        "venue": venue,
+        "source_file": source_file,
+        "tracks": out_tracks,
+    }
 
 
 def ingest_new_sets_to_api(
@@ -210,20 +224,22 @@ def ingest_new_sets_to_api(
     for ssid in new_spreadsheet_ids:
         meta = meta_by_id.get(ssid) or {}
         label = meta.get("label") or ssid
-        tracks = _read_tracks_from_sheet(g, ssid)
+        raw_tracks = read_tracks_from_sheet(g, ssid)
+        payload = build_ingest_payload(
+            set_date=meta.get("date") or "",
+            venue=meta.get("venue") or "",
+            source_file=label,
+            tracks=raw_tracks,
+        )
+        tracks = payload.get("tracks") or []
         if not tracks:
             log.warning(f"⚠️ Empty or unreadable sheet; skipping: {label}")
             continue
 
         total_tracks += len(tracks)
         log.info(f"🚀 Sending to API: {label} ({len(tracks)} tracks)")
-
-        payload = {
-            "set_date": meta.get("date") or None,
-            "venue": meta.get("venue") or None,
-            "source_file": label,
-            "tracks": tracks,
-        }
+        payload["set_date"] = meta.get("date") or None
+        payload["venue"] = meta.get("venue") or None
         if owner_id:
             payload["owner_id"] = owner_id
 

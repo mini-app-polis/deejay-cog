@@ -6,6 +6,11 @@ import kaiano.config as config
 from kaiano import logger as logger_mod
 from kaiano.google import GoogleAPI
 
+from deejay_set_processor.ingest_to_api import (
+    build_ingest_payload,
+    read_tracks_from_sheet,
+)
+
 log = logger_mod.get_logger()
 
 
@@ -175,6 +180,22 @@ def process_csv_file(g: GoogleAPI, file_metadata: dict, year: str) -> None:
                 file_id, new_parent_id=archive_folder_id, remove_from_parents=True
             )
             log.info(f"📦 Moved original file to Archive subfolder: {filename}")
+
+            base_name = os.path.splitext(filename)[0]
+            set_date, venue = _extract_date_and_venue(base_name)
+            if set_date and venue:
+                _ingest_set_to_api(
+                    spreadsheet_id=sheet_id,
+                    set_date=set_date,
+                    venue=venue,
+                    label=base_name,
+                    g=g,
+                )
+            else:
+                log.warning(
+                    "Could not extract date/venue from filename; skipping API ingest for %s",
+                    base_name,
+                )
         except Exception as move_exc:
             log.error(f"Failed to move original file to Archive subfolder: {move_exc}")
 
@@ -198,6 +219,67 @@ def _extract_year_from_filename(filename: str) -> str | None:
     year = match.group(1) if match else None
     log.debug(f"Extracted year: {year} from filename: {filename}")
     return year
+
+
+def _extract_date_and_venue(
+    base_name: str,
+) -> tuple[str, str] | tuple[None, None]:
+    """
+    Extract date and venue from a base filename.
+    Returns (date_str, venue_str) or (None, None) if no match.
+    e.g. "2024-01-15 MADjam" → ("2024-01-15", "MADjam")
+    """
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})\s+(.+)$", base_name.strip())
+    if not match:
+        return None, None
+    return match.group(1), match.group(2)
+
+
+def _ingest_set_to_api(
+    spreadsheet_id: str,
+    set_date: str,
+    venue: str,
+    label: str,
+    g: GoogleAPI,
+) -> None:
+    """
+    Send a single newly processed set to deejay-marvel-api.
+    Skips gracefully if KAIANO_API_BASE_URL is not set.
+    Logs success or failure but never raises — pipeline must continue.
+    """
+    import os as _os
+
+    if not _os.environ.get("KAIANO_API_BASE_URL"):
+        log.warning("KAIANO_API_BASE_URL not set — skipping API ingest for %s", label)
+        return
+
+    try:
+        from kaiano.api import KaianoApiClient  # type: ignore
+        from kaiano.api.errors import KaianoApiError  # type: ignore
+    except Exception as e:
+        log.error("❌ API client not available; skipping ingest for %s: %s", label, e)
+        return
+
+    try:
+        tracks = read_tracks_from_sheet(g, spreadsheet_id)
+        payload = build_ingest_payload(
+            set_date=set_date,
+            venue=venue,
+            source_file=label,
+            tracks=tracks,
+        )
+        final_tracks = payload.get("tracks") or []
+        if not final_tracks:
+            log.warning("⚠️ No tracks to ingest for %s", label)
+            return
+
+        client = KaianoApiClient.from_env()
+        client.post("/v1/ingest", payload)
+        log.info("✅ Ingested to API: %s (%d tracks)", label, len(final_tracks))
+    except KaianoApiError as e:
+        log.error("❌ API ingest failed for %s: %s", label, e)
+    except Exception as e:
+        log.error("❌ Unexpected error during API ingest for %s: %s", label, e)
 
 
 def _normalize_csv(file_path: str) -> None:

@@ -1,13 +1,9 @@
-import json
-import os
 import re
 
 import kaiano.config as config
 from kaiano import logger as logger_mod
 from kaiano.google import GoogleAPI
 from kaiano.json import create_collection_snapshot, write_json_snapshot
-
-from deejay_set_processor.ingest_to_api import ingest_new_sets_to_api
 
 log = logger_mod.get_logger()
 
@@ -40,7 +36,6 @@ def generate_dj_set_collection():
 
     # Build a JSON snapshot alongside the Google Sheet output.
     collection_snapshot = create_collection_snapshot("folders")
-    set_metadata: list[dict] = []
 
     for folder in subfolders:
         name = folder.name
@@ -84,28 +79,13 @@ def generate_dj_set_collection():
                 rows.append([f'=HYPERLINK("{file_url}", "{file_name}")', file_name])
             else:
                 date, title = _extract_date_and_title(file_name)
-                item = {
-                    "date": date,
-                    "title": title,
-                    "label": file_name,
-                    "url": file_url,
-                    "spreadsheet_id": f.id,
-                }
                 folder_snapshot["items"].append(
                     {
-                        "date": item["date"],
-                        "title": item["title"],
-                        "label": item["label"],
-                        "url": item["url"],
-                        "spreadsheet_id": item["spreadsheet_id"],
-                    }
-                )
-                set_metadata.append(
-                    {
-                        "spreadsheet_id": f.id,
                         "date": date,
-                        "venue": title,
+                        "title": title,
                         "label": file_name,
+                        "url": file_url,
+                        "spreadsheet_id": f.id,
                     }
                 )
                 date_cell = f"'{date}" if date else ""
@@ -160,47 +140,9 @@ def generate_dj_set_collection():
         getattr(config, "DEEJAY_SET_COLLECTION_JSON_PATH", None)
         or "v1/deejay-sets/deejay_set_collection.json"
     )
-
-    # Compute "new sets" by diffing prior snapshot IDs against the newly built snapshot.
-    previous_ids: set[str] = set()
-    if os.path.exists(json_output_path):
-        try:
-            with open(json_output_path) as f:
-                previous = json.load(f)
-            for folder in previous.get("folders", []) or []:
-                if (folder.get("name") or "").lower() == "summary":
-                    continue
-                for item in folder.get("items", []) or []:
-                    ssid = item.get("spreadsheet_id")
-                    if ssid:
-                        previous_ids.add(ssid)
-        except Exception:
-            previous_ids = set()
-
-    current_ids: set[str] = set()
-    for folder in collection_snapshot.get("folders", []) or []:
-        if (folder.get("name") or "").lower() == "summary":
-            continue
-        for item in folder.get("items", []) or []:
-            ssid = item.get("spreadsheet_id")
-            if ssid:
-                current_ids.add(ssid)
-
-    new_spreadsheet_ids = sorted(current_ids - previous_ids)
     try:
         write_json_snapshot(collection_snapshot, json_output_path)
         log.info(f"🧾 Wrote DJ set collection JSON snapshot to: {json_output_path}")
-
-        api_base = os.getenv("KAIANO_API_BASE_URL", "").strip()
-        if not api_base:
-            log.warning("KAIANO_API_BASE_URL not set; skipping API ingest step.")
-        elif new_spreadsheet_ids:
-            summary = ingest_new_sets_to_api(g, new_spreadsheet_ids, set_metadata)
-            log.info(
-                f"✅ API ingest complete: sent={summary.sets_sent}, failed={summary.sets_failed}, tracks={summary.total_tracks}"
-            )
-        else:
-            log.info("No new sets detected; skipping API ingest step.")
     except Exception:
         log.exception(
             f"Failed to write DJ set collection JSON snapshot to: {json_output_path}"

@@ -4,28 +4,43 @@ from unittest.mock import MagicMock, patch
 import deejay_set_processor.ingest_to_api as ingest
 
 
-def test_parse_track_row_converts_mmss_length_to_seconds():
-    col_index = {"title": 0, "artist": 1, "length": 2}
-    row = ["Song", "Artist", "02:30"]
-    parsed = ingest.parse_track_row(row, col_index, play_order=1)
-    assert parsed is not None
-    assert parsed["length_secs"] == 150
+def test_read_tracks_from_sheet_handles_missing_columns_gracefully():
+    g = SimpleNamespace()
+    g.sheets = SimpleNamespace(
+        get_metadata=MagicMock(
+            return_value={"sheets": [{"properties": {"title": "Sheet1"}}]}
+        ),
+        read_values=MagicMock(
+            return_value=[
+                ["Title", "Artist"],
+                ["Song", "Artist"],
+            ]
+        ),
+    )
+
+    tracks = ingest.read_tracks_from_sheet(g, "ssid")
+    assert tracks and tracks[0]["title"] == "Song"
+    assert tracks[0]["genre"] == ""
+    assert tracks[0]["length"] == ""
 
 
-def test_parse_track_row_handles_missing_columns_as_null():
-    col_index = {"title": 0, "artist": 1}
-    row = ["Song", "Artist"]
-    parsed = ingest.parse_track_row(row, col_index, play_order=1)
-    assert parsed is not None
-    assert parsed["genre"] is None
-    assert parsed["bpm"] is None
-    assert parsed["release_year"] is None
-
-
-def test_parse_track_row_skips_rows_with_empty_title_or_artist():
-    col_index = {"title": 0, "artist": 1}
-    assert ingest.parse_track_row(["", "Artist"], col_index, play_order=1) is None
-    assert ingest.parse_track_row(["Song", ""], col_index, play_order=1) is None
+def test_build_ingest_payload_converts_mmss_length_and_skips_empty_title_or_artist():
+    raw_tracks = [
+        {"play_order": 1, "title": "Song", "artist": "Artist", "length": "02:30"},
+        {"play_order": 2, "title": "", "artist": "Artist", "length": "01:00"},
+        {"play_order": 3, "title": "Song2", "artist": "", "length": "01:00"},
+    ]
+    payload = ingest.build_ingest_payload(
+        set_date="2024-01-01",
+        venue="Venue",
+        source_file="label",
+        tracks=raw_tracks,
+    )
+    assert payload["set_date"] == "2024-01-01"
+    assert payload["venue"] == "Venue"
+    assert payload["source_file"] == "label"
+    assert len(payload["tracks"]) == 1
+    assert payload["tracks"][0]["length_secs"] == 150
 
 
 def test_ingest_new_sets_to_api_posts_each_set_with_correct_payload_shape(monkeypatch):

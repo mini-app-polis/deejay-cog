@@ -1,4 +1,5 @@
 import os
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -193,3 +194,116 @@ def test_temp_file_is_removed_in_all_cases(tmp_path):
 
     temp_path = os.path.join("/tmp", file_meta["name"])
     assert not os.path.exists(temp_path)
+
+
+# --- API ingest integration ---------------------------------------------------
+
+
+def test_ingest_set_to_api_skips_when_base_url_not_set(monkeypatch):
+    monkeypatch.delenv("KAIANO_API_BASE_URL", raising=False)
+    g = SimpleNamespace()
+
+    with patch.object(process_new_files, "log") as mock_log:
+        process_new_files._ingest_set_to_api(
+            spreadsheet_id="ssid",
+            set_date="2024-01-01",
+            venue="Venue",
+            label="2024-01-01 Venue",
+            g=g,
+        )
+        mock_log.warning.assert_called()
+
+
+def test_ingest_set_to_api_posts_payload(monkeypatch):
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://example.test")
+
+    # Provide fake kaiano.api modules for import inside _ingest_set_to_api.
+    class FakeApiError(Exception):
+        pass
+
+    client = SimpleNamespace(post=MagicMock())
+
+    class FakeClient:
+        @classmethod
+        def from_env(cls):
+            return client
+
+    sys.modules["kaiano.api"] = SimpleNamespace(KaianoApiClient=FakeClient)
+    sys.modules["kaiano.api.errors"] = SimpleNamespace(KaianoApiError=FakeApiError)
+
+    g = SimpleNamespace()
+
+    with (
+        patch.object(process_new_files, "read_tracks_from_sheet") as mock_read_tracks,
+        patch.object(process_new_files, "build_ingest_payload") as mock_build,
+    ):
+        mock_read_tracks.return_value = [
+            {"play_order": 1, "title": "Song", "artist": "Artist", "length": "01:00"}
+        ]
+        mock_build.return_value = {
+            "set_date": "2024-01-01",
+            "venue": "Venue",
+            "source_file": "2024-01-01 Venue",
+            "tracks": [{"play_order": 1, "title": "Song", "artist": "Artist"}],
+        }
+
+        process_new_files._ingest_set_to_api(
+            spreadsheet_id="ssid",
+            set_date="2024-01-01",
+            venue="Venue",
+            label="2024-01-01 Venue",
+            g=g,
+        )
+
+    mock_read_tracks.assert_called_once_with(g, "ssid")
+    mock_build.assert_called_once()
+    client.post.assert_called_once()
+    path, payload = client.post.call_args.args
+    assert path == "/v1/ingest"
+    assert payload["set_date"] == "2024-01-01"
+    assert payload["venue"] == "Venue"
+    assert payload["source_file"] == "2024-01-01 Venue"
+    assert payload["tracks"]
+
+
+def test_ingest_set_to_api_logs_error_on_api_error(monkeypatch):
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://example.test")
+
+    class FakeApiError(Exception):
+        pass
+
+    class FakeClient:
+        @classmethod
+        def from_env(cls):
+            return cls()
+
+        def post(self, *_args, **_kwargs):
+            raise FakeApiError("nope")
+
+    sys.modules["kaiano.api"] = SimpleNamespace(KaianoApiClient=FakeClient)
+    sys.modules["kaiano.api.errors"] = SimpleNamespace(KaianoApiError=FakeApiError)
+
+    g = SimpleNamespace()
+
+    with (
+        patch.object(
+            process_new_files,
+            "read_tracks_from_sheet",
+            return_value=[{"title": "t", "artist": "a"}],
+        ),
+        patch.object(
+            process_new_files,
+            "build_ingest_payload",
+            return_value={"tracks": [{"title": "t", "artist": "a"}]},
+        ),
+        patch.object(process_new_files, "log") as mock_log,
+    ):
+        process_new_files._ingest_set_to_api(
+            spreadsheet_id="ssid",
+            set_date="2024-01-01",
+            venue="Venue",
+            label="label",
+            g=g,
+        )
+
+        mock_log.error.assert_called()

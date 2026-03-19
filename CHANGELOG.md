@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.75] - 2026-03-18
+
+- Moved API ingest step from `update_deejay_set_collection` to `process_new_files`. Now only newly processed CSVs are sent to deejay-marvel-api.
+- Refactored `ingest_to_api.py` to expose `read_tracks_from_sheet` and `build_ingest_payload` as reusable functions.
+
 ## [0.0.74] - 2026-03-18
 
 - Added `ingest_to_api.py` — new pipeline step that sends newly processed sets to deejay-marvel-api via POST `/v1/ingest` after collection update.
