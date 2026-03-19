@@ -1,6 +1,6 @@
 [project]
 name = "deejay-set-processor"
-version = "0.0.73"
+version = "0.0.74"
 description = "Processes DJ set CSV files from Google Drive into Google Sheets and JSON for kaiano-api."
 readme = "README.md"
 license = { text = "MIT" }
