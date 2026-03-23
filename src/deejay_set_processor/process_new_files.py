@@ -44,6 +44,7 @@ def _handle_flow_failure(flow, flow_run, state) -> None:
         evaluate_pipeline_run(
             run_id=run_id,
             repo="deejay-set-processor-dev",
+            flow_name=flow.name,
             sets_imported=0,
             sets_failed=0,
             sets_skipped=0,
@@ -507,6 +508,7 @@ def process_new_csv_files_flow() -> None:
             evaluate_pipeline_run(
                 run_id=run_id,
                 repo="deejay-set-processor-dev",
+                flow_name="process-new-csv-files",
                 sets_imported=stats.sets_imported,
                 sets_failed=stats.sets_failed,
                 sets_skipped=stats.sets_skipped_non_csv,

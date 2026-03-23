@@ -38,6 +38,7 @@ def _handle_flow_failure(flow, flow_run, state) -> None:
         evaluate_pipeline_run(
             run_id=run_id,
             repo="deejay-set-processor-dev",
+            flow_name=flow.name,
             sets_imported=0,
             sets_failed=0,
             sets_skipped=0,
@@ -235,6 +236,7 @@ def generate_dj_set_collection():
             evaluate_pipeline_run(
                 run_id=run_id,
                 repo="deejay-set-processor-dev",
+                flow_name="update-dj-set-collection",
                 sets_imported=0,
                 sets_failed=0,
                 sets_skipped=0,
