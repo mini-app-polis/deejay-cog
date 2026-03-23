@@ -102,7 +102,6 @@ def process_m3u_file(
     g: GoogleAPI,
     m3u_file: dict[str, Any],
     client: Any,
-    owner_id: str,
 ) -> tuple[int, int, bool]:
     """
     Process one .m3u file: parse, POST /v1/live-plays.
@@ -119,6 +118,7 @@ def process_m3u_file(
         lines = g.drive.download_m3u_file_data(m3u_file["id"])
         file_date_str = filename.replace(".m3u", "").strip()
         parsed_entries = m3u_tool.parse.parse_m3u_lines(lines, set(), file_date_str)
+        parsed_entries = parsed_entries[-4:]
 
         payload = build_live_plays_payload(parsed_entries)
         if not payload["plays"]:
@@ -128,8 +128,6 @@ def process_m3u_file(
         logger.info(
             "Sending %d plays from %s to API...", len(payload["plays"]), filename
         )
-        if owner_id:
-            payload["owner_id"] = owner_id
 
         client.post("/v1/live-plays", payload)
         logger.info("✅ Sent %d plays from %s", len(payload["plays"]), filename)
@@ -173,7 +171,7 @@ def ingest_live_history(g: GoogleAPI) -> LiveIngestSummary:
 
     most_recent = m3u_files[0]
     logger.info("Processing most recent file: %s", most_recent.get("name", ""))
-    ps, pf, file_ok = process_m3u_file(g, most_recent, client, owner_id)
+    ps, pf, file_ok = process_m3u_file(g, most_recent, client)
 
     plays_sent = ps
     plays_failed = pf

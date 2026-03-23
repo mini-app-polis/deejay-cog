@@ -103,7 +103,7 @@ def test_ingest_live_history_sends_plays_and_returns_summary(monkeypatch) -> Non
     client.post.assert_called_once()
     path, payload = client.post.call_args.args
     assert path == "/v1/live-plays"
-    assert payload["owner_id"] == "owner-xyz"
+    assert "owner_id" not in payload
     assert "plays" in payload
     assert len(payload["plays"]) == 1
     assert payload["plays"][0]["title"] == "Track One"
@@ -114,3 +114,47 @@ def test_ingest_live_history_sends_plays_and_returns_summary(monkeypatch) -> Non
     assert summary.plays_failed == 0
     assert summary.files_processed == 1
     assert summary.files_failed == 0
+
+
+def test_ingest_live_history_sends_only_last_four_parsed_entries(monkeypatch) -> None:
+    """Parser returns oldest-first; only the last four entries are posted."""
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://example.test")
+    monkeypatch.setenv("KAIANO_API_OWNER_ID", "owner-xyz")
+
+    fake_entries = [
+        SimpleNamespace(
+            dt=f"2024-01-15 {10 + i:02d}:00", title=f"Track{i}", artist=f"Artist{i}"
+        )
+        for i in range(6)
+    ]
+    parse_mock = MagicMock(return_value=fake_entries)
+    m3u_instance = MagicMock()
+    m3u_instance.parse = SimpleNamespace(parse_m3u_lines=parse_mock)
+
+    g = SimpleNamespace()
+    g.drive = SimpleNamespace(
+        get_all_m3u_files=MagicMock(
+            return_value=[{"id": "m3u-1", "name": "2024-01-15.m3u"}]
+        ),
+        download_m3u_file_data=MagicMock(return_value=["#EXTM3U", "line"]),
+    )
+
+    client = SimpleNamespace(post=MagicMock(return_value={"ok": True}))
+
+    with (
+        patch.object(live, "KaianoApiClient", return_value=client),
+        patch.object(live, "M3UToolbox", return_value=m3u_instance),
+        prefect_test_harness(),
+    ):
+        summary = live.ingest_live_history.fn(g)
+
+    _, payload = client.post.call_args.args
+    assert "owner_id" not in payload
+    assert len(payload["plays"]) == 4
+    assert [p["title"] for p in payload["plays"]] == [
+        "Track2",
+        "Track3",
+        "Track4",
+        "Track5",
+    ]
+    assert summary.plays_sent == 4
