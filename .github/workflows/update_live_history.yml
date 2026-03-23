@@ -1,0 +1,37 @@
+name: Update Live History
+run-name: Update Live History (${{ github.event_name }})
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [vdj_history]
+
+concurrency:
+  group: dj-set-collection
+  cancel-in-progress: false
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    env:
+      LOGGING_LEVEL: ${{ vars.LOGGING_LEVEL }}
+      GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+      KAIANO_API_BASE_URL: ${{ vars.KAIANO_API_BASE_URL }}
+      KAIANO_API_OWNER_ID: ${{ vars.KAIANO_API_OWNER_ID }}
+      OWNER_ID: ${{ vars.OWNER_ID }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run ingest_live_history
+        run: uv run python -u src/deejay_set_processor/ingest_live_history.py
