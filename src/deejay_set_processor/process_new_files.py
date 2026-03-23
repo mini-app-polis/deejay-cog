@@ -24,6 +24,41 @@ def _prefect_logger():
         return log
 
 
+def _handle_flow_failure(flow, flow_run, state) -> None:
+    """
+    Prefect failure/crash hook: write a direct evaluation finding.
+    Never raises.
+    """
+    logger = _prefect_logger()
+    try:
+        state_name = str(getattr(state, "name", "FAILED"))
+        state_type = str(getattr(state, "type", "")).upper()
+        severity = (
+            "ERROR" if state_type == "CRASHED" or state_name == "Crashed" else "WARN"
+        )
+        run_id = str(getattr(flow_run, "id", "") or os.environ.get("GITHUB_RUN_ID", ""))
+        if not run_id:
+            run_id = "prefect-unknown-run"
+
+        logger.error("Flow failure hook fired: run_id=%s state=%s", run_id, state_name)
+        evaluate_pipeline_run(
+            run_id=run_id,
+            repo="deejay-set-processor-dev",
+            sets_imported=0,
+            sets_failed=0,
+            sets_skipped=0,
+            total_tracks=0,
+            failed_set_labels=[],
+            api_ingest_success=True,
+            sets_attempted=0,
+            collection_update=False,
+            direct_finding_text=f"Flow entered {state_name} unexpectedly",
+            direct_severity=severity,
+        )
+    except Exception:
+        logger.exception("Flow failure hook failed unexpectedly")
+
+
 @dataclass
 class CsvPipelineStats:
     """Counters for a process_new_files run (used for AI evaluation)."""
@@ -421,6 +456,8 @@ def process_csv_file(
     name="process-new-csv-files",
     description="Normalize new DJ set CSVs, upload to "
     "Google Sheets, archive, and ingest to API.",
+    on_failure=[_handle_flow_failure],
+    on_crashed=[_handle_flow_failure],
 )
 def process_new_csv_files_flow() -> None:
     logger = _prefect_logger()

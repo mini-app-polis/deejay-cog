@@ -12,18 +12,59 @@ from deejay_set_processor.pipeline_evaluator import evaluate_pipeline_run
 log = logger_mod.get_logger()
 
 
+def _prefect_logger():
+    try:
+        return get_run_logger()
+    except Exception:
+        return log
+
+
+def _handle_flow_failure(flow, flow_run, state) -> None:
+    """
+    Prefect failure/crash hook: write a direct evaluation finding.
+    Never raises.
+    """
+    logger = _prefect_logger()
+    try:
+        state_name = str(getattr(state, "name", "FAILED"))
+        state_type = str(getattr(state, "type", "")).upper()
+        severity = (
+            "ERROR" if state_type == "CRASHED" or state_name == "Crashed" else "WARN"
+        )
+        run_id = str(getattr(flow_run, "id", "") or os.environ.get("GITHUB_RUN_ID", ""))
+        if not run_id:
+            run_id = "prefect-unknown-run"
+
+        logger.error("Flow failure hook fired: run_id=%s state=%s", run_id, state_name)
+        evaluate_pipeline_run(
+            run_id=run_id,
+            repo="deejay-set-processor-dev",
+            sets_imported=0,
+            sets_failed=0,
+            sets_skipped=0,
+            total_tracks=0,
+            failed_set_labels=[],
+            api_ingest_success=True,
+            sets_attempted=0,
+            collection_update=True,
+            direct_finding_text=f"Flow entered {state_name} unexpectedly",
+            direct_severity=severity,
+        )
+    except Exception:
+        logger.exception("Flow failure hook failed unexpectedly")
+
+
 @flow(
     name="update-dj-set-collection",
     description="Rebuilds master DJ set collection spreadsheet "
     "and JSON snapshot. Validation layer — will be "
     "deprecated once PostgreSQL is confirmed as "
     "source of truth.",
+    on_failure=[_handle_flow_failure],
+    on_crashed=[_handle_flow_failure],
 )
 def generate_dj_set_collection():
-    try:
-        logger = get_run_logger()
-    except Exception:
-        logger = log
+    logger = _prefect_logger()
 
     logger.info("🚀 Starting generate_dj_set_collection")
     g = GoogleAPI.from_env()

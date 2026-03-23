@@ -168,50 +168,70 @@ def evaluate_pipeline_run(
     collection_update: bool = False,
     unrecognized_filename_skips: int = 0,
     duplicate_csv_count: int = 0,
+    direct_finding_text: str | None = None,
+    direct_severity: str | None = None,
 ) -> None:
     """
     Call Claude, then POST each finding to KAIANO_API_BASE_URL /v1/evaluations.
     Never raises — logs and returns on any failure.
     """
-    if not os.environ.get("ANTHROPIC_API_KEY") or not os.environ.get(
-        "KAIANO_API_BASE_URL"
-    ):
+    if not os.environ.get("KAIANO_API_BASE_URL"):
         return
 
     standards_version = os.environ.get("STANDARDS_VERSION", "6.0")
     model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    findings: list[dict[str, Any]] = []
 
-    try:
-        if collection_update:
-            user_prompt = _build_prompt_collection(
-                run_id=run_id, standards_version=standards_version
-            )
-        else:
-            user_prompt = _build_prompt_csv(
-                run_id=run_id,
-                standards_version=standards_version,
-                sets_imported=sets_imported,
-                sets_failed=sets_failed,
-                sets_skipped=sets_skipped,
-                total_tracks=total_tracks,
-                failed_set_labels=failed_set_labels,
-                api_ingest_success=api_ingest_success,
-                sets_attempted=sets_attempted,
-                unrecognized_filename_skips=unrecognized_filename_skips,
-                duplicate_csv_count=duplicate_csv_count,
-            )
+    # Direct findings are used for failure/crash paths where a deterministic
+    # signal is better than trying to infer context with Claude.
+    if direct_finding_text:
+        sev = str(direct_severity or "WARN").upper()
+        if sev == "WARNING":
+            sev = "WARN"
+        if sev not in {"INFO", "WARN", "ERROR"}:
+            sev = "WARN"
+        findings = [
+            {
+                "dimension": "pipeline_consistency",
+                "severity": sev,
+                "finding": direct_finding_text.strip(),
+                "suggestion": None,
+            }
+        ]
+    else:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return
+        try:
+            if collection_update:
+                user_prompt = _build_prompt_collection(
+                    run_id=run_id, standards_version=standards_version
+                )
+            else:
+                user_prompt = _build_prompt_csv(
+                    run_id=run_id,
+                    standards_version=standards_version,
+                    sets_imported=sets_imported,
+                    sets_failed=sets_failed,
+                    sets_skipped=sets_skipped,
+                    total_tracks=total_tracks,
+                    failed_set_labels=failed_set_labels,
+                    api_ingest_success=api_ingest_success,
+                    sets_attempted=sets_attempted,
+                    unrecognized_filename_skips=unrecognized_filename_skips,
+                    duplicate_csv_count=duplicate_csv_count,
+                )
 
-        claude_text = _anthropic_messages_create(
-            api_key=os.environ["ANTHROPIC_API_KEY"],
-            model=model,
-            max_tokens=4096,
-            user_prompt=user_prompt,
-        )
-        log.debug("Claude raw response: %s", claude_text[:500])
-        findings, _ = _parse_findings_from_claude(claude_text)
-    except Exception:
-        log.exception("pipeline evaluation: Claude request or parse failed")
-        return
+            claude_text = _anthropic_messages_create(
+                api_key=os.environ["ANTHROPIC_API_KEY"],
+                model=model,
+                max_tokens=4096,
+                user_prompt=user_prompt,
+            )
+            log.debug("Claude raw response: %s", claude_text[:500])
+            findings, _ = _parse_findings_from_claude(claude_text)
+        except Exception:
+            log.exception("pipeline evaluation: Claude request or parse failed")
+            return
 
     err_ct = warn_ct = info_ct = 0
 
