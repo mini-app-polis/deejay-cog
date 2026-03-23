@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/kaianolevine/deejay-set-processor-dev/compare/v1.2.0...v1.3.0) (2026-03-23)
+
+
+### Features
+
+* migrating live music history to this repo and api usage ([f121e79](https://github.com/kaianolevine/deejay-set-processor-dev/commit/f121e7900e08c3f38e4c5b3b93d10116e3b81f44))
+
 # [1.2.0](https://github.com/kaianolevine/deejay-set-processor-dev/compare/v1.1.1...v1.2.0) (2026-03-23)
 
 
