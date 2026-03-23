@@ -1,3 +1,15 @@
+# [1.5.0](https://github.com/kaianolevine/deejay-set-processor-dev/compare/v1.4.0...v1.5.0) (2026-03-23)
+
+
+### Bug Fixes
+
+* docs update ([7a56d97](https://github.com/kaianolevine/deejay-set-processor-dev/commit/7a56d97cb7fe4e4e84bec02015918379ba80901d))
+
+
+### Features
+
+* clean up evaluator migration ([79c8c69](https://github.com/kaianolevine/deejay-set-processor-dev/commit/79c8c699b959c81adbecd50e839d6e94b126b70c))
+
 # [1.4.0](https://github.com/kaianolevine/deejay-set-processor-dev/compare/v1.3.2...v1.4.0) (2026-03-23)
 
 
