@@ -1,3 +1,10 @@
+## [1.7.1](https://github.com/kaianolevine/deejay-cog/compare/v1.7.0...v1.7.1) (2026-03-24)
+
+
+### Bug Fixes
+
+* in process mod ([f722a9d](https://github.com/kaianolevine/deejay-cog/commit/f722a9d52c4cf6340f2f5290e6ba5b9b4d1302ad))
+
 # [1.7.0](https://github.com/kaianolevine/deejay-cog/compare/v1.6.0...v1.7.0) (2026-03-24)
 
 
