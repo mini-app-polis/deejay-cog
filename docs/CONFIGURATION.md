@@ -163,6 +163,72 @@ This document lists every environment variable and config value used by **deejay
 
 ---
 
+### SPOTIPY_CLIENT_ID
+
+| | |
+|--|--|
+| **Required** | Yes (all Spotify features) |
+| **Description** | Spotify application client ID from the Spotify Developer Dashboard. |
+| **Source** | GitHub Actions: **secret** `SPOTIPY_CLIENT_ID`. Locally: `.env`. |
+| **Used by** | `spotify_sync.py`, `process_new_files.py` |
+
+---
+
+### SPOTIPY_CLIENT_SECRET
+
+| | |
+|--|--|
+| **Required** | Yes (all Spotify features) |
+| **Description** | Spotify application client secret from the Spotify Developer Dashboard. |
+| **Source** | GitHub Actions: **secret** `SPOTIPY_CLIENT_SECRET`. Locally: `.env`. |
+| **Used by** | `spotify_sync.py`, `process_new_files.py` |
+
+---
+
+### SPOTIPY_REFRESH_TOKEN
+
+| | |
+|--|--|
+| **Required** | Yes (all Spotify features) |
+| **Description** | OAuth refresh token for the Spotify account. Generated once via `get_spotify_refresh_token.py`. |
+| **Source** | GitHub Actions: **secret** `SPOTIPY_REFRESH_TOKEN`. Locally: `.env`. |
+| **Used by** | `spotify_sync.py`, `process_new_files.py` |
+
+---
+
+### SPOTIPY_REDIRECT_URI
+
+| | |
+|--|--|
+| **Required** | No (defaults to `http://127.0.0.1:8888/callback`) |
+| **Description** | OAuth redirect URI — must match what is registered in the Spotify Developer Dashboard. |
+| **Source** | GitHub Actions: **variable** `SPOTIPY_REDIRECT_URI`. Locally: `.env`. |
+| **Used by** | `spotify_sync.py` |
+
+---
+
+### SPOTIFY_RADIO_PLAYLIST_ID
+
+| | |
+|--|--|
+| **Required** | No (radio playlist updates are skipped if unset) |
+| **Description** | Spotify playlist ID for the standing radio playlist that matched tracks are appended to on every sync. |
+| **Source** | GitHub Actions: **variable** `SPOTIFY_RADIO_PLAYLIST_ID`. Locally: `.env`. |
+| **Used by** | `spotify_sync.py`, `process_new_files.py` |
+
+---
+
+### SPOTIFY_PLAYLIST_SNAPSHOT_JSON_PATH
+
+| | |
+|--|--|
+| **Required** | No (defaults to `v1/spotify/spotify_playlists.json`) |
+| **Description** | File path where the full Spotify playlist snapshot JSON is written. Consumed by kaiano-api to render the playlist list on the website. |
+| **Source** | GitHub Actions: **variable** `SPOTIFY_PLAYLIST_SNAPSHOT_JSON_PATH`. Locally: `.env`. |
+| **Used by** | `spotify_sync.py` |
+
+---
+
 ## GitHub-only (workflows)
 
 - **KAIANO_API_REPO_TOKEN**: GitHub secret used by **update_dj_set_collection** to clone and push the **kaiano-api** repo when copying the JSON snapshot. Not used by the Python scripts themselves.
@@ -184,3 +250,9 @@ This document lists every environment variable and config value used by **deejay
 | ALLOWED_HEADERS | Yes (summaries) | kaiano config | generate_summaries |
 | desiredOrder | No | kaiano config | generate_summaries |
 | DEEJAY_SET_COLLECTION_JSON_PATH | No | kaiano config / default | update_deejay_set_collection |
+| SPOTIPY_CLIENT_ID | Yes (Spotify) | GitHub secret / `.env` | spotify_sync, process_new_files |
+| SPOTIPY_CLIENT_SECRET | Yes (Spotify) | GitHub secret / `.env` | spotify_sync, process_new_files |
+| SPOTIPY_REFRESH_TOKEN | Yes (Spotify) | GitHub secret / `.env` | spotify_sync, process_new_files |
+| SPOTIPY_REDIRECT_URI | No | GitHub variable / `.env` | spotify_sync |
+| SPOTIFY_RADIO_PLAYLIST_ID | No | GitHub variable / `.env` | spotify_sync, process_new_files |
+| SPOTIFY_PLAYLIST_SNAPSHOT_JSON_PATH | No | GitHub variable / `.env` | spotify_sync |

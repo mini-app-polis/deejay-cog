@@ -1,25 +1,18 @@
-"""Sync VirtualDJ history (.m3u) files from Drive to Spotify playlists.
+"""Spotify sync for DJ sets sourced from Google Sheets (CSV pipeline).
 
-Writes a JSON snapshot of all account playlists for the website and processes
-new tracks from history files into the radio playlist and per-day playlists.
-
-Sheet / spreadsheet logging (SpreadsheetLogger) is intentionally not ported;
-only playlist and snapshot behavior lives here.
+Updates the radio playlist and per-set playlists from sheet track rows, and
+exposes helpers to write a JSON snapshot of all Spotify playlists for the site.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import tempfile
 from datetime import UTC, datetime
 from typing import Any
 
-import kaiano.config as kaiano_config
 from kaiano import logger as logger_mod
-from kaiano.google import GoogleAPI
 from kaiano.spotify import SpotifyAPI
-from kaiano.vdj.m3u.m3u import M3UToolbox
 
 log = logger_mod.get_logger()
 
@@ -29,7 +22,6 @@ SPOTIFY_PLAYLIST_SNAPSHOT_JSON_PATH = os.getenv(
     "v1/spotify/spotify_playlists.json",
 )
 SPOTIFY_RADIO_PLAYLIST_ID = os.getenv("SPOTIFY_RADIO_PLAYLIST_ID")
-VDJ_HISTORY_FOLDER_ID = os.getenv("VDJ_HISTORY_FOLDER_ID")
 
 DEFAULT_PLAYLIST_DESCRIPTION = (
     "Generated automatically by Deejay Marvel Automation Tools. "
@@ -171,35 +163,6 @@ def write_playlist_snapshot_json(sp: Any) -> str | None:
         return None
 
 
-def extract_date_from_filename(filename: str) -> str:
-    """Extract YYYY-MM-DD prefix from a filename if present."""
-    base = os.path.basename(filename)
-    if len(base) >= 10 and base[4] == "-" and base[7] == "-":
-        return base[:10]
-    return base
-
-
-def process_new_songs(
-    songs: list[tuple[str, str, str]],
-    last_extvdj_line: str | None,
-) -> list[tuple[str, str, str]]:
-    """Return only songs appearing after the last processed EXTVDJ line."""
-    if not songs:
-        return []
-    if not last_extvdj_line:
-        return songs
-
-    try:
-        idx = next(
-            i
-            for i, (_artist, _title, line) in enumerate(songs)
-            if line == last_extvdj_line
-        )
-        return songs[idx + 1 :]
-    except StopIteration:
-        return songs
-
-
 def update_spotify_radio_playlist(
     sp: SpotifyAPI, playlist_id: str | None, found_uris: list[str]
 ) -> None:
@@ -249,66 +212,6 @@ def create_spotify_playlist_for_file(
             exc_info=True,
         )
         return None
-
-
-def process_file(
-    file: dict,
-    processed_map: dict[str, str],
-    g: GoogleAPI,
-    m3u_tool: M3UToolbox,
-    sp: SpotifyAPI,
-    *,
-    radio_playlist_id: str | None,
-) -> None:
-    filename = file["name"]
-    file_id = file["id"]
-    date = extract_date_from_filename(filename)
-
-    temp_path = os.path.join(tempfile.gettempdir(), f"{file_id}_{filename}")
-
-    try:
-        g.drive.download_file(file_id, temp_path)
-
-        # parse_m3u returns (artist, title, extvdj_line). Third arg is unused in kaiano.
-        songs = m3u_tool.parse.parse_m3u(None, temp_path, "")
-
-        last_extvdj_line = processed_map.get(filename)
-        new_songs = process_new_songs(songs, last_extvdj_line)
-
-        if not new_songs:
-            log.info("No new songs found in %s", filename)
-            return
-
-        found_uris: list[str] = []
-        matched_songs: list[tuple[str, str]] = []
-        unfound: list[tuple[str, str, str]] = []
-
-        for artist, title, extvdj_line in new_songs:
-            uri = sp.search_track(artist, title)
-            if uri:
-                found_uris.append(uri)
-                matched_songs.append((artist, title))
-            else:
-                unfound.append((artist, title, extvdj_line))
-
-        log.info(
-            "%s: %d found on Spotify, %d not found",
-            filename,
-            len(matched_songs),
-            len(unfound),
-        )
-
-        update_spotify_radio_playlist(sp, radio_playlist_id, found_uris)
-        create_spotify_playlist_for_file(sp, date, found_uris)
-
-        processed_map[filename] = new_songs[-1][2]
-
-    finally:
-        try:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-        except Exception:
-            pass
 
 
 def get_spotify_client() -> SpotifyAPI | None:
@@ -366,71 +269,3 @@ def sync_set_to_spotify(
     except Exception as e:
         log.error("sync_set_to_spotify failed: %s", e, exc_info=True)
         return None
-
-
-def run_spotify_sync() -> None:
-    global \
-        SPOTIFY_PLAYLIST_SNAPSHOT_JSON_PATH, \
-        SPOTIFY_RADIO_PLAYLIST_ID, \
-        VDJ_HISTORY_FOLDER_ID
-
-    SPOTIFY_PLAYLIST_SNAPSHOT_JSON_PATH = os.getenv(
-        "SPOTIFY_PLAYLIST_SNAPSHOT_JSON_PATH",
-        "v1/spotify/spotify_playlists.json",
-    )
-    SPOTIFY_RADIO_PLAYLIST_ID = os.getenv("SPOTIFY_RADIO_PLAYLIST_ID")
-    VDJ_HISTORY_FOLDER_ID = os.getenv("VDJ_HISTORY_FOLDER_ID")
-
-    if VDJ_HISTORY_FOLDER_ID:
-        kaiano_config.VDJ_HISTORY_FOLDER_ID = VDJ_HISTORY_FOLDER_ID
-    else:
-        log.warning(
-            "VDJ_HISTORY_FOLDER_ID is not set; VirtualDJ M3U listing will be skipped.",
-        )
-        kaiano_config.VDJ_HISTORY_FOLDER_ID = None
-
-    if not SPOTIFY_RADIO_PLAYLIST_ID:
-        log.warning(
-            "SPOTIFY_RADIO_PLAYLIST_ID is not set; radio playlist updates will be skipped.",
-        )
-
-    g = GoogleAPI.from_env()
-    log.info("Google API initialized")
-
-    sp = SpotifyAPI.from_env()
-    log.info("Spotify API initialized")
-
-    snapshot_path = write_playlist_snapshot_json(sp)
-    if snapshot_path:
-        log.info("Wrote Spotify playlist snapshot JSON to: %s", snapshot_path)
-    else:
-        log.warning("Spotify playlist snapshot JSON was not written (see logs above).")
-
-    m3u_tool = M3UToolbox()
-    log.info("M3U toolbox initialized")
-
-    # TODO: persist processed_map across runs (Drive file, DB, etc.) if needed.
-    processed_map: dict[str, str] = {}
-
-    m3u_files = g.drive.get_all_m3u_files()
-    log.info("Found %d .m3u files to process", len(m3u_files))
-    if not m3u_files:
-        log.info("No .m3u files found.")
-        return
-
-    for file in m3u_files:
-        log.info("Processing M3U file: %s", file.get("name"))
-        process_file(
-            file,
-            processed_map,
-            g,
-            m3u_tool,
-            sp,
-            radio_playlist_id=SPOTIFY_RADIO_PLAYLIST_ID,
-        )
-
-    log.info("Spotify history sync complete")
-
-
-if __name__ == "__main__":
-    run_spotify_sync()
