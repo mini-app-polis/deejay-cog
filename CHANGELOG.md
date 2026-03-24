@@ -1,3 +1,10 @@
+# [1.7.0](https://github.com/kaianolevine/deejay-cog/compare/v1.6.0...v1.7.0) (2026-03-24)
+
+
+### Features
+
+* migrating spotify into deejay cog ([74b2b2a](https://github.com/kaianolevine/deejay-cog/commit/74b2b2a447171cceef768d38a8ffafb2cfd3e4cf))
+
 # [1.6.0](https://github.com/kaianolevine/deejay-set-processor-dev/compare/v1.5.0...v1.6.0) (2026-03-23)
 
 
