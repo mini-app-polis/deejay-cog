@@ -308,6 +308,63 @@ def process_file(
             pass
 
 
+def get_spotify_client() -> SpotifyAPI | None:
+    """Return SpotifyAPI.from_env() or None if credentials are missing."""
+    if not os.getenv("SPOTIPY_CLIENT_ID") or not os.getenv("SPOTIPY_REFRESH_TOKEN"):
+        log.warning(
+            "SPOTIPY_CLIENT_ID or SPOTIPY_REFRESH_TOKEN not set; "
+            "Spotify client unavailable.",
+        )
+        return None
+    try:
+        return SpotifyAPI.from_env()
+    except Exception as e:
+        log.error("Failed to initialize Spotify client: %s", e, exc_info=True)
+        return None
+
+
+def sync_set_to_spotify(
+    sp: SpotifyAPI,
+    date_str: str,
+    tracks: list[dict],
+) -> str | None:
+    """Search Spotify for each track and update playlists.
+
+    Returns the per-day playlist ID if one was created/updated, else None.
+    Idempotent — existing playlists are found by name before creating.
+    Never raises.
+    """
+    try:
+        found_uris: list[str] = []
+        matched: list[tuple[str, str]] = []
+        not_found = 0
+
+        for t in tracks:
+            artist = str(t.get("artist") or "").strip()
+            title = str(t.get("title") or "").strip()
+            if not artist or not title:
+                continue
+            uri = sp.search_track(artist, title)
+            if uri:
+                found_uris.append(uri)
+                matched.append((artist, title))
+            else:
+                not_found += 1
+
+        log.info(
+            "%s: %d found on Spotify, %d not found",
+            date_str,
+            len(matched),
+            not_found,
+        )
+
+        update_spotify_radio_playlist(sp, SPOTIFY_RADIO_PLAYLIST_ID, found_uris)
+        return create_spotify_playlist_for_file(sp, date_str, found_uris)
+    except Exception as e:
+        log.error("sync_set_to_spotify failed: %s", e, exc_info=True)
+        return None
+
+
 def run_spotify_sync() -> None:
     global \
         SPOTIFY_PLAYLIST_SNAPSHOT_JSON_PATH, \

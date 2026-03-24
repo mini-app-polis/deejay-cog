@@ -13,6 +13,7 @@ from deejay_set_processor.ingest_to_api import (
     build_ingest_payload,
     read_tracks_from_sheet,
 )
+from deejay_set_processor.spotify_sync import get_spotify_client, sync_set_to_spotify
 
 log = logger_mod.get_logger()
 
@@ -363,6 +364,32 @@ def _ingest_set_to_api(
         logger.error("❌ Unexpected error during API ingest for %s: %s", label, e)
 
 
+@task(name="sync-to-spotify")
+def _sync_set_to_spotify(
+    sheet_id: str,
+    set_date: str,
+    label: str,
+    g: GoogleAPI,
+) -> None:
+    logger = _prefect_logger()
+
+    if not os.environ.get("SPOTIPY_CLIENT_ID"):
+        logger.warning(
+            "SPOTIPY_CLIENT_ID not set — skipping Spotify sync for %s", label
+        )
+        return
+
+    try:
+        sp = get_spotify_client()
+        if sp is None:
+            return
+
+        tracks = read_tracks_from_sheet(g, sheet_id)
+        sync_set_to_spotify(sp, set_date, tracks)
+    except Exception as e:
+        logger.error("❌ Spotify sync failed for %s: %s", label, e)
+
+
 @task(name="process-csv-file")
 def process_csv_file(
     g: GoogleAPI,
@@ -422,6 +449,12 @@ def process_csv_file(
                     label=base_name,
                     g=g,
                     stats=stats,
+                )
+                _sync_set_to_spotify(
+                    sheet_id=sheet_id,
+                    set_date=set_date,
+                    label=base_name,
+                    g=g,
                 )
             else:
                 logger.warning(

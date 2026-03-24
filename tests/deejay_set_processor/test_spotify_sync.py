@@ -272,3 +272,103 @@ def test_run_spotify_sync_integration_smoke(
 
     m_snap.assert_called_once()
     g.drive.get_all_m3u_files.assert_called()
+
+
+def test_get_spotify_client_returns_instance_when_credentials_set(monkeypatch) -> None:
+    monkeypatch.setenv("SPOTIPY_CLIENT_ID", "cid")
+    monkeypatch.setenv("SPOTIPY_REFRESH_TOKEN", "rtok")
+    fake = MagicMock()
+    with patch.object(ss, "SpotifyAPI") as m_api:
+        m_api.from_env.return_value = fake
+        out = ss.get_spotify_client()
+    assert out is fake
+    m_api.from_env.assert_called_once()
+
+
+def test_get_spotify_client_returns_none_when_client_id_missing(monkeypatch) -> None:
+    monkeypatch.delenv("SPOTIPY_CLIENT_ID", raising=False)
+    monkeypatch.setenv("SPOTIPY_REFRESH_TOKEN", "rtok")
+    with patch.object(ss, "SpotifyAPI") as m_api:
+        assert ss.get_spotify_client() is None
+    m_api.from_env.assert_not_called()
+
+
+def test_get_spotify_client_returns_none_when_refresh_token_missing(monkeypatch) -> None:
+    monkeypatch.setenv("SPOTIPY_CLIENT_ID", "cid")
+    monkeypatch.delenv("SPOTIPY_REFRESH_TOKEN", raising=False)
+    with patch.object(ss, "SpotifyAPI") as m_api:
+        assert ss.get_spotify_client() is None
+    m_api.from_env.assert_not_called()
+
+
+def test_get_spotify_client_returns_none_when_from_env_raises(monkeypatch) -> None:
+    monkeypatch.setenv("SPOTIPY_CLIENT_ID", "cid")
+    monkeypatch.setenv("SPOTIPY_REFRESH_TOKEN", "rtok")
+    with patch.object(ss, "SpotifyAPI") as m_api:
+        m_api.from_env.side_effect = RuntimeError("oauth broken")
+        assert ss.get_spotify_client() is None
+
+
+def test_sync_set_to_spotify_searches_and_updates_playlists(monkeypatch) -> None:
+    monkeypatch.setattr(ss, "SPOTIFY_RADIO_PLAYLIST_ID", "radio")
+    sp = MagicMock()
+    sp.search_track.side_effect = ["uri1", None, "uri2"]
+    tracks = [
+        {"artist": "A", "title": "T1"},
+        {"artist": "B", "title": "T2"},
+        {"artist": "C", "title": "T3"},
+    ]
+    with (
+        patch.object(ss, "update_spotify_radio_playlist") as m_radio,
+        patch.object(
+            ss, "create_spotify_playlist_for_file", return_value="pl-day"
+        ) as m_create,
+    ):
+        pid = ss.sync_set_to_spotify(sp, "2024-01-01", tracks)
+    assert pid == "pl-day"
+    assert sp.search_track.call_count == 3
+    m_radio.assert_called_once_with(sp, "radio", ["uri1", "uri2"])
+    m_create.assert_called_once_with(sp, "2024-01-01", ["uri1", "uri2"])
+
+
+def test_sync_set_to_spotify_skips_tracks_missing_artist_or_title(monkeypatch) -> None:
+    monkeypatch.setattr(ss, "SPOTIFY_RADIO_PLAYLIST_ID", "radio")
+    sp = MagicMock()
+    sp.search_track.return_value = "u1"
+    tracks = [
+        {"artist": "", "title": "T"},
+        {"artist": "A", "title": ""},
+        {"artist": "A", "title": "T"},
+    ]
+    with (
+        patch.object(ss, "update_spotify_radio_playlist") as m_radio,
+        patch.object(ss, "create_spotify_playlist_for_file", return_value="x") as m_create,
+    ):
+        ss.sync_set_to_spotify(sp, "2024-01-01", tracks)
+    sp.search_track.assert_called_once_with("A", "T")
+    m_radio.assert_called_once_with(sp, "radio", ["u1"])
+    m_create.assert_called_once_with(sp, "2024-01-01", ["u1"])
+
+
+def test_sync_set_to_spotify_returns_none_when_no_spotify_matches(monkeypatch) -> None:
+    monkeypatch.setattr(ss, "SPOTIFY_RADIO_PLAYLIST_ID", "radio")
+    sp = MagicMock()
+    sp.search_track.return_value = None
+    tracks = [{"artist": "A", "title": "T"}]
+    with (
+        patch.object(ss, "update_spotify_radio_playlist") as m_radio,
+        patch.object(
+            ss, "create_spotify_playlist_for_file", return_value=None
+        ) as m_create,
+    ):
+        assert ss.sync_set_to_spotify(sp, "2024-01-01", tracks) is None
+    m_radio.assert_called_once_with(sp, "radio", [])
+    m_create.assert_called_once_with(sp, "2024-01-01", [])
+
+
+def test_sync_set_to_spotify_returns_none_when_internal_error(monkeypatch) -> None:
+    monkeypatch.setattr(ss, "SPOTIFY_RADIO_PLAYLIST_ID", "radio")
+    sp = MagicMock()
+    sp.search_track.side_effect = RuntimeError("api down")
+    tracks = [{"artist": "A", "title": "T"}]
+    assert ss.sync_set_to_spotify(sp, "2024-01-01", tracks) is None
