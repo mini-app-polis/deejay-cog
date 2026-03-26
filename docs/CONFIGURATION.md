@@ -34,11 +34,11 @@ This document lists every environment variable and config value used by **deejay
 
 | | |
 |--|--|
-| **Required** | No (required for post-pipeline AI evaluation) |
-| **Description** | Anthropic API key used by `pipeline_evaluator.py` to call Claude. |
+| **Required** | No |
+| **Description** | Anthropic API key used by `pipeline_evaluator.evaluator.evaluate_pipeline_run` (from **evaluator-cog**) to call Claude. **Required for Claude-based post-run pipeline evaluation** on all four flows — `process_new_files.py`, `update_deejay_set_collection.py`, `generate_summaries.py`, and `ingest_live_history.py` — when set together with `KAIANO_API_BASE_URL`. If unset, that evaluation path is skipped. |
 | **Example** | `sk-antropic-...` |
 | **Source** | GitHub Actions: **secret** `ANTHROPIC_API_KEY` |
-| **Used by** | `update_deejay_set_collection.py` (Phase 3 Step 8). |
+| **Used by** | `process_new_files.py`, `update_deejay_set_collection.py`, `generate_summaries.py`, `ingest_live_history.py` (post-run evaluation). |
 
 ---
 
@@ -167,11 +167,11 @@ This document lists every environment variable and config value used by **deejay
 
 | | |
 |--|--|
-| **Required** | No (API ingest skipped if unset) |
-| **Description** | Base URL for the deejay-marvel-api instance. Used to POST new sets and live history plays. |
+| **Required** | No — API ingest and pipeline evaluation are both skipped if unset. |
+| **Description** | Base URL for the deejay-marvel-api instance. Used to POST new sets and live history plays. Also gates post-run pipeline evaluation: all four pipeline scripts check `KAIANO_API_BASE_URL` before calling `evaluate_pipeline_run` (with `ANTHROPIC_API_KEY` for Claude-backed runs). |
 | **Example** | `https://your-api.railway.app` |
 | **Source** | GitHub Actions: **variable** `KAIANO_API_BASE_URL`. Locally: `.env`. |
-| **Used by** | `process_new_files.py`, `ingest_live_history.py` |
+| **Used by** | `process_new_files.py`, `update_deejay_set_collection.py`, `generate_summaries.py`, `ingest_live_history.py` (API ingest and evaluation gating). |
 
 ---
 
@@ -330,6 +330,7 @@ This document lists every environment variable and config value used by **deejay
 |----------|----------|------------------|--------|
 | GOOGLE_CREDENTIALS_JSON | Yes | GitHub secret / env | All |
 | LOGGING_LEVEL | No | GitHub variable / env | All |
+| ANTHROPIC_API_KEY | No | GitHub secret / env | process_new_files, update_deejay_set_collection, generate_summaries, ingest_live_history (evaluation) |
 | CSV_SOURCE_FOLDER_ID | Yes (ingestion) | kaiano config | process_new_files |
 | DJ_SETS_FOLDER_ID | Yes | kaiano config | process_new_files, update_deejay_set_collection, generate_summaries |
 | OUTPUT_NAME | Yes (collection) | kaiano config | update_deejay_set_collection |
@@ -339,7 +340,7 @@ This document lists every environment variable and config value used by **deejay
 | ALLOWED_HEADERS | Yes (summaries) | kaiano config | generate_summaries |
 | desiredOrder | No | kaiano config | generate_summaries |
 | DEEJAY_SET_COLLECTION_JSON_PATH | No | kaiano config / default | update_deejay_set_collection |
-| KAIANO_API_BASE_URL | No | GitHub variable / `.env` | process_new_files, ingest_live_history |
+| KAIANO_API_BASE_URL | No | GitHub variable / `.env` | process_new_files, update_deejay_set_collection, generate_summaries, ingest_live_history (API ingest + evaluation gating) |
 | KAIANO_API_OWNER_ID | No | GitHub variable / `.env` | process_new_files, ingest_live_history |
 | OWNER_ID | No | GitHub variable / `.env` | process_new_files, ingest_live_history |
 | SPOTIPY_CLIENT_ID | Yes (Spotify) | GitHub secret / `.env` | spotify_sync, process_new_files |

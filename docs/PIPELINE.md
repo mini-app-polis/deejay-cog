@@ -39,16 +39,23 @@ This document describes the full pipeline from CSV drop to JSON output and where
 
 ## Orchestration
 
-`process_new_csv_files` is orchestrated by Prefect. Each run is visible in Prefect Cloud with task-level logs and retry tracking.
+All four pipeline entrypoints are Prefect flows. Each run is visible in Prefect Cloud with flow- and task-level logs (where tasks exist) and retry tracking. All four flows register **`on_failure`** and **`on_crashed`** hooks that post a **direct finding** to the evaluator API when the flow fails or crashes before completion.
 
-- **Flow:** `process-new-csv-files`
-- **Tasks:**
-  - `process-csv-file` (per CSV: download → normalize → upload → archive → ingest)
-  - `normalize-csv`
-  - `upload-to-sheets`
-  - `ingest-to-api` (retries: 2, delay: 30s)
+- **`process-new-csv-files`** (`process_new_files.py`) — **Tasks:** `process-csv-file` (per CSV: download → normalize → upload → archive → ingest / Spotify); `normalize-csv`; `upload-to-sheets`; `ingest-to-api` (retries: 2, delay: 30s); `sync-to-spotify`.
+- **`update-dj-set-collection`** (`update_deejay_set_collection.py`) — No named tasks; single flow body.
+- **`generate-summaries`** (`generate_summaries.py`) — No named tasks; single flow body.
+- **`ingest-live-history`** (`ingest_live_history.py`) — **Tasks:** `process-m3u-file`.
 
 View runs: [app.prefect.cloud](https://app.prefect.cloud)
+
+---
+
+## Observability
+
+- **Post-run evaluation:** At the end of each successful run, all four flows call `pipeline_evaluator.evaluator.evaluate_pipeline_run` (from **evaluator-cog**) to post an evaluation to the deejay-marvel-api evaluations endpoint. Counters and context are flow-specific (CSV stats, collection/summary metrics, live ingest summary, etc.).
+- **Prefect hooks:** All four flows have **`on_failure`** and **`on_crashed`** hooks that post an immediate error/warn finding if the flow exits in a failed or crashed state before normal completion.
+- **GitHub Actions failure step:** All four pipeline workflows include a **Report failure to evaluator** step (`if: failure()`) that runs a **`curl` POST** to the same evaluations API. It runs even when earlier steps fail (for example **`uv sync`** or checkout), so infra failures are reported without relying on Python or a virtualenv.
+- **Gating:** End-of-run evaluation is performed only when both **`ANTHROPIC_API_KEY`** and **`KAIANO_API_BASE_URL`** are set (see [CONFIGURATION.md](CONFIGURATION.md)).
 
 ---
 
@@ -77,6 +84,7 @@ The following workflows are validation-layer only and will be removed once Postg
 | `new_csv_dj_sets` | New CSV/files in the source folder (e.g. from Apps Script) | **process_new_csv_files** |
 | `updated_dj_sets` | Request to refresh the collection and push JSON to kaiano-api | **update_dj_set_collection** |
 | `generate-summary` | Request to (re)generate per-year summary sheets | **generate_summaries** |
+| `vdj_history` | Request to ingest VirtualDJ live history (`.m3u`) into the API | **update_live_history** |
 
 ---
 
@@ -85,3 +93,4 @@ The following workflows are validation-layer only and will be removed once Postg
 - **FAILED_ prefix**: If uploading/formatting a CSV fails, the processor renames the source file to `FAILED_<original_name>` so it can be inspected and retried (e.g. after fixing or re-running prefix normalization).
 - **possible_duplicate_ prefix**: If a file with the same base name already exists in the target year folder, the newly processed file is renamed to `possible_duplicate_<original_name>` (and the existing file is left as-is). Summary generation skips years that still contain `FAILED_` or `_Cleaned` set files.
 - **Archive subfolder**: After a CSV is successfully uploaded as a Sheet, the original file is moved into the year folder’s `Archive` subfolder so the source folder can be refilled without name clashes.
+- **Spotify sync**: Sync runs only when **all three** of **`SPOTIPY_CLIENT_ID`**, **`SPOTIPY_CLIENT_SECRET`**, and **`SPOTIPY_REFRESH_TOKEN`** are set. If any are missing, Spotify sync is **skipped** with a warning (not treated as a hard error); the rest of the CSV pipeline continues.

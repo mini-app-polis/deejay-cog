@@ -33,10 +33,10 @@ This repository is the backend processor for a Drive-based DJ set pipeline. It r
 |--------|--------|
 | **process_new_files.py** | Lists the CSV source folder, normalizes status prefixes on filenames, and processes each file: extracts year from filename, uploads CSVs as Sheets into the correct year folder (with formatting), moves originals to Archive, and handles duplicates/failures (e.g. `FAILED_`, `possible_duplicate_`). |
 | **update_deejay_set_collection.py** | Scans the DJ Sets folder (year subfolders + Summary), builds/updates the master collection spreadsheet (tabs per year + Summary), and writes the JSON snapshot to the path given by `DEEJAY_SET_COLLECTION_JSON_PATH`. |
-| **generate_summaries.py** | For each year folder, finds or creates the “{Year} Summary” sheet in the Summary folder, aggregating and filtering columns from that year’s set sheets (using `ALLOWED_HEADERS` and `desiredOrder`), then runs deduplication on the summary sheet. |
+| **generate_summaries.py** | Prefect flow (`generate-summaries`) with evaluation hooks: for each year folder, finds or creates the “{Year} Summary” sheet in the Summary folder, aggregating and filtering columns from that year’s set sheets (using `ALLOWED_HEADERS` and `desiredOrder`), then runs deduplication on the summary sheet. |
 | **deduplicate_summary.py** | CLI to deduplicate one or more summary spreadsheets in-place (merge duplicate rows, sum Count column). Used by `generate_summaries.py` and can be run standalone with spreadsheet IDs. |
 | **spotify_sync.py** | Provides Spotify sync helpers used by `process_new_files.py`: searches Spotify for tracks from a processed set, updates the radio playlist, and creates/rebuilds a per-set history playlist. |
-| **ingest_live_history.py** | Reads the most recent VirtualDJ `.m3u` history file from Drive and POSTs the parsed plays to the deejay-marvel-api `/v1/live-plays` endpoint. |
+| **ingest_live_history.py** | Prefect flow (`ingest-live-history`) with evaluation hooks: reads the most recent VirtualDJ `.m3u` history file from Drive and POSTs the parsed plays to the deejay-marvel-api `/v1/live-plays` endpoint. |
 
 ---
 
@@ -78,7 +78,8 @@ API and Prefect:
 
 | Variable | Description |
 |----------|-------------|
-| **KAIANO_API_BASE_URL** | Base URL for deejay-marvel-api. API ingest skipped if unset. |
+| **ANTHROPIC_API_KEY** | Anthropic API key — required for post-run pipeline evaluation across all four flows (together with `KAIANO_API_BASE_URL`). |
+| **KAIANO_API_BASE_URL** | Base URL for deejay-marvel-api. If unset, API ingest and post-run pipeline evaluation are both skipped. |
 | **KAIANO_API_OWNER_ID** | Owner ID sent with API requests. Falls back to `OWNER_ID`. |
 | **OWNER_ID** | Fallback owner ID if `KAIANO_API_OWNER_ID` is not set. |
 | **PREFECT_API_KEY** | Prefect Cloud API key. |
