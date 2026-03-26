@@ -1,3 +1,10 @@
+## [1.8.1](https://github.com/kaianolevine/deejay-cog/compare/v1.8.0...v1.8.1) (2026-03-26)
+
+
+### Bug Fixes
+
+* updating workflows for full observability ([79b0bb7](https://github.com/kaianolevine/deejay-cog/commit/79b0bb7935f93ace4cecf22ee4272f92dca5612d))
+
 # [1.8.0](https://github.com/kaianolevine/deejay-cog/compare/v1.7.3...v1.8.0) (2026-03-26)
 
 
