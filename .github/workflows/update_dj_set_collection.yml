@@ -48,28 +48,3 @@ jobs:
 
       - name: Run create_dj_set_collection
         run: uv run python -u src/deejay_set_processor/update_deejay_set_collection.py
-
-      - name: Checkout kaiano-api repo
-        uses: actions/checkout@v4
-        with:
-          repository: kaianolevine/kaiano-api
-          path: website
-          token: ${{ secrets.KAIANO_API_REPO_TOKEN }}
-
-      - name: Copy JSON snapshot into website repo
-        run: |
-          mkdir -p website/src/json-site-data/deejay-sets
-          cp -f v1/deejay-sets/deejay_set_collection.json website/src/json-site-data/deejay-sets/deejay_set_collection.json
-
-      - name: Commit and push website repo (if changed)
-        run: |
-          cd website
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add src/json-site-data/deejay-sets/deejay_set_collection.json
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-          git commit -m "Update DJ set collection JSON"
-          git push
