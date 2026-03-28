@@ -117,6 +117,7 @@ The **google-app-script-trigger** repo sends `repository_dispatch` events to thi
 git clone git@github.com:mini-app-polis/deejay-cog.git
 cd deejay-cog
 uv sync --all-extras
+uv run pre-commit install
 uv run python -u src/deejay_cog/process_new_files.py   # or update_deejay_set_collection.py, generate_summaries.py
 ```
 
@@ -140,6 +141,20 @@ With coverage:
 ```bash
 uv run pytest --cov=src --cov-report=term-missing
 ```
+
+## Running pre-commit
+
+Install hooks (once, after cloning):
+```bash
+uv run pre-commit install
+```
+
+Run manually against all files at any time:
+```bash
+uv run pre-commit run --all-files
+```
+
+Hooks run automatically on `git commit`. Pre-commit runs ruff (lint + format) and pygrep checks. The same checks run in CI — fixing locally before pushing avoids a round-trip.
 
 ---
 
