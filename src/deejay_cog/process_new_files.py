@@ -21,6 +21,8 @@ from deejay_cog.spotify_sync import (
 
 log = logger_mod.get_logger()
 
+os.environ.setdefault("CSV_SOURCE_FOLDER_ID", "1t4d_8lMC3ZJfSyainbpwInoDta7n69hC")
+os.environ.setdefault("DJ_SETS_FOLDER_ID", "1A0tKQ2DBXI1Bt9h--olFwnBNne3am-rL")
 
 def _prefect_logger():
     try:
