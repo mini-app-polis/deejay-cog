@@ -307,14 +307,15 @@ def test_extract_year_from_filename_returns_none_for_empty_string():
 
 
 def test_extract_date_and_venue_parses_standard_name():
-    date, venue = process_new_files._extract_date_and_venue("2024-01-15_MADjam WCS.csv")
+    date, venue = process_new_files._extract_date_and_venue("2024-01-15 MADjam WCS")
     assert date == "2024-01-15"
-    assert "MADjam" in venue
+    assert venue == "MADjam WCS"
 
 
-def test_extract_date_and_venue_returns_empty_strings_when_no_date():
-    date, venue = process_new_files._extract_date_and_venue("No Date.csv")
-    assert date == ""
+def test_extract_date_and_venue_returns_none_when_no_date():
+    date, venue = process_new_files._extract_date_and_venue("No Date")
+    assert date is None
+    assert venue is None
 
 
 # -- rename_file_as_duplicate --------------------------------------------------
@@ -336,11 +337,15 @@ def test_process_non_csv_file_moves_to_year_folder():
     mock_drive = SimpleNamespace(
         ensure_folder=MagicMock(return_value="year-folder-id"),
         move_file=MagicMock(),
+        list_files=MagicMock(return_value=[]),
     )
     g = SimpleNamespace(drive=mock_drive)
     file_meta = {"id": "file-1", "name": "2024-01-15_flyer.pdf"}
 
-    process_new_files.process_non_csv_file(g, file_meta, "2024", "dj-sets-folder")
+    with patch.object(process_new_files, "config") as mock_cfg:
+        mock_cfg.DJ_SETS_FOLDER_ID = "dj-sets-folder"
+        process_new_files.process_non_csv_file(g, file_meta, "2024")
 
-    mock_drive.ensure_folder.assert_called_once()
-    mock_drive.move_file.assert_called_once_with("file-1", "year-folder-id")
+    mock_drive.move_file.assert_called_once_with(
+        "file-1", new_parent_id="year-folder-id", remove_from_parents=True
+    )
