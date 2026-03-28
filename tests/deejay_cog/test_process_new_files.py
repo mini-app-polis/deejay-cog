@@ -284,3 +284,63 @@ def test_ingest_set_to_api_logs_error_on_api_error(monkeypatch):
             )
 
         mock_log.error.assert_called()
+
+
+# -- _extract_year_from_filename ----------------------------------------------
+
+
+def test_extract_year_from_filename_returns_year_from_valid_name():
+    assert (
+        process_new_files._extract_year_from_filename("2024-01-15_My Set.csv") == "2024"
+    )
+
+
+def test_extract_year_from_filename_returns_none_when_no_year():
+    assert process_new_files._extract_year_from_filename("My Set.csv") is None
+
+
+def test_extract_year_from_filename_returns_none_for_empty_string():
+    assert process_new_files._extract_year_from_filename("") is None
+
+
+# -- _extract_date_and_venue ---------------------------------------------------
+
+
+def test_extract_date_and_venue_parses_standard_name():
+    date, venue = process_new_files._extract_date_and_venue("2024-01-15_MADjam WCS.csv")
+    assert date == "2024-01-15"
+    assert "MADjam" in venue
+
+
+def test_extract_date_and_venue_returns_empty_strings_when_no_date():
+    date, venue = process_new_files._extract_date_and_venue("No Date.csv")
+    assert date == ""
+
+
+# -- rename_file_as_duplicate --------------------------------------------------
+
+
+def test_rename_file_as_duplicate_calls_drive_rename():
+    mock_drive = SimpleNamespace(rename_file=MagicMock())
+    g = SimpleNamespace(drive=mock_drive)
+    process_new_files.rename_file_as_duplicate(g, "file-id", "2024-01-01_Set.csv")
+    mock_drive.rename_file.assert_called_once_with(
+        "file-id", "possible_duplicate_2024-01-01_Set.csv"
+    )
+
+
+# -- process_non_csv_file ------------------------------------------------------
+
+
+def test_process_non_csv_file_moves_to_year_folder():
+    mock_drive = SimpleNamespace(
+        ensure_folder=MagicMock(return_value="year-folder-id"),
+        move_file=MagicMock(),
+    )
+    g = SimpleNamespace(drive=mock_drive)
+    file_meta = {"id": "file-1", "name": "2024-01-15_flyer.pdf"}
+
+    process_new_files.process_non_csv_file(g, file_meta, "2024", "dj-sets-folder")
+
+    mock_drive.ensure_folder.assert_called_once()
+    mock_drive.move_file.assert_called_once_with("file-1", "year-folder-id")
