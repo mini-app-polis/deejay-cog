@@ -1,6 +1,6 @@
 # Drive ingestion pipeline
 
-This document describes the full pipeline from CSV drop to JSON output and where **deejay-set-processor** fits in.
+This document describes the full pipeline from CSV drop to JSON output and where **deejay-cog** fits in.
 
 ---
 
@@ -72,7 +72,7 @@ The following workflows are validation-layer only and will be removed once Postg
 
 ## Where this processor fits
 
-- **deejay-set-processor** is the backend that performs steps 3–5: ingest CSVs into Sheets, maintain the collection sheet and JSON, and build summary sheets.
+- **deejay-cog** is the backend that performs steps 3–5: ingest CSVs into Sheets, maintain the collection sheet and JSON, and build summary sheets.
 - **google-app-script-trigger** (or equivalent) is responsible for detecting Drive events and triggering the right workflow via `repository_dispatch`.
 
 ---

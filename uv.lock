@@ -462,7 +462,7 @@ wheels = [
 [[package]]
 name = "common-python-utils"
 version = "2.1.0"
-source = { git = "ssh://git@github.com/mini-app-polis/common-python-utils.git?rev=main#e871b0141746a2b9b356169c2e8422ea81cd71d5" }
+source = { git = "https://github.com/mini-app-polis/common-python-utils.git?rev=main#e871b0141746a2b9b356169c2e8422ea81cd71d5" }
 dependencies = [
     { name = "google-api-python-client" },
     { name = "google-auth" },
@@ -679,7 +679,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "common-python-utils", git = "ssh://git@github.com/mini-app-polis/common-python-utils.git?rev=main" },
+    { name = "common-python-utils", git = "https://github.com/mini-app-polis/common-python-utils.git?rev=main" },
     { name = "evaluator-cog", git = "https://github.com/kaianolevine/evaluator-cog.git?rev=main" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.2" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.8.0" },

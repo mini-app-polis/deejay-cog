@@ -6,7 +6,7 @@ Processes DJ set CSV files from Google Drive into Google Sheets (organized by ye
 
 ## What this processor does
 
-This repository is the backend processor for a Drive-based DJ set pipeline. It reads CSV files (and optionally other files) from a configured Google Drive source folder, normalizes and uploads them as Google Sheets into year-based folders, maintains a master “DJ Set Collection” spreadsheet and a JSON snapshot of that collection, generates per-year summary sheets with deduplication, and can push the JSON snapshot to the kaiano-api repo. It is intended to be triggered by GitHub Actions (via `repository_dispatch` from the **google-app-script-trigger** repo or manually via `workflow_dispatch`).
+This repository is the backend cog for a Drive-based DJ set pipeline. It reads CSV files (and optionally other files) from a configured Google Drive source folder, normalizes and uploads them as Google Sheets into year-based folders, maintains a master "DJ Set Collection" spreadsheet and a JSON snapshot of that collection, generates per-year summary sheets with deduplication, and can push the JSON snapshot to the api-kaianolevine-com repo. It is triggered by watcher-cog via Prefect, or manually via `workflow_dispatch`.
 
 ---
 
@@ -14,7 +14,7 @@ This repository is the backend processor for a Drive-based DJ set pipeline. It r
 
 - **Source location**: A single Google Drive folder (ID set by `CSV_SOURCE_FOLDER_ID`). This is the “drop zone” for files to process.
 - **File format**: CSVs exported from DJ software (e.g. Rekordbox), with filenames starting with a four-digit year (e.g. `2024-01-15_My_Set.csv`). Non-CSV files that start with a year are also supported (moved into the year folder without conversion).
-- **Origin**: Files are typically placed in this folder by Google Apps Script (from **google-app-script-trigger**), which then triggers the processor via GitHub Actions.
+- **Origin**: Files are placed in this folder by Google Apps Script. **watcher-cog** detects new files and fires the Prefect flow run.
 
 ---
 
@@ -23,7 +23,7 @@ This repository is the backend processor for a Drive-based DJ set pipeline. It r
 - **Google Sheets in year folders**: Each processed CSV is uploaded as a Google Sheet into a year subfolder (e.g. `2024`) under `DJ_SETS_FOLDER_ID`. The original file is moved into an `Archive` subfolder under that year.
 - **Master collection**: A single Google Sheet (name from `OUTPUT_NAME`) in the DJ Sets folder, with one tab per year and a Summary tab, listing all sets with Date, Name, and Link. Built/updated by `update_deejay_set_collection.py`.
 - **Summary sheet**: Per-year “{Year} Summary” sheets in the Summary subfolder, aggregating and deduplicating track data from that year’s set sheets. Built by `generate_summaries.py` (which uses `deduplicate_summary.py`).
-- **JSON snapshot**: A JSON file (path from `DEEJAY_SET_COLLECTION_JSON_PATH`, default `v1/deejay-sets/deejay_set_collection.json`) describing the collection. The **update_dj_set_collection** workflow copies this file into the **kaiano-api** repo at `website/src/json-site-data/deejay-sets/deejay_set_collection.json` and commits/pushes.
+- **JSON snapshot**: A JSON file (path from `DEEJAY_SET_COLLECTION_JSON_PATH`, default `v1/deejay-sets/deejay_set_collection.json`) describing the collection. The **update_dj_set_collection** workflow copies this file into the **api-kaianolevine-com** repo and commits/pushes.
 
 ---
 
@@ -36,7 +36,7 @@ This repository is the backend processor for a Drive-based DJ set pipeline. It r
 | **generate_summaries.py** | Prefect flow (`generate-summaries`) with evaluation hooks: for each year folder, finds or creates the “{Year} Summary” sheet in the Summary folder, aggregating and filtering columns from that year’s set sheets (using `ALLOWED_HEADERS` and `desiredOrder`), then runs deduplication on the summary sheet. |
 | **deduplicate_summary.py** | CLI to deduplicate one or more summary spreadsheets in-place (merge duplicate rows, sum Count column). Used by `generate_summaries.py` and can be run standalone with spreadsheet IDs. |
 | **spotify_sync.py** | Provides Spotify sync helpers used by `process_new_files.py`: searches Spotify for tracks from a processed set, updates the radio playlist, and creates/rebuilds a per-set history playlist. |
-| **ingest_live_history.py** | Prefect flow (`ingest-live-history`) with evaluation hooks: reads the most recent VirtualDJ `.m3u` history file from Drive and POSTs the parsed plays to the deejay-marvel-api `/v1/live-plays` endpoint. |
+| **ingest_live_history.py** | Prefect flow (`ingest-live-history`) with evaluation hooks: reads the most recent VirtualDJ `.m3u` history file from Drive and POSTs the parsed plays to the api-kaianolevine-com `/v1/live-plays` endpoint. |
 
 ---
 
@@ -49,7 +49,7 @@ Required for Drive/Sheets and logging:
 | **GOOGLE_CREDENTIALS_JSON** | Full JSON content of the Google service account (or user) credentials used for Drive and Sheets API. |
 | **LOGGING_LEVEL** | Log level (e.g. `DEBUG`, `INFO`). |
 
-Drive/Sheets layout (from **kaiano-common-utils** config):
+Drive/Sheets layout (from **common-python-utils** config):
 
 | Variable | Description |
 |----------|-------------|
@@ -90,7 +90,7 @@ API and Prefect:
 
 For one-time Spotify OAuth setup and obtaining a refresh token, see [docs/SPOTIFY_SETUP.md](docs/SPOTIFY_SETUP.md).
 
-In GitHub Actions, `GOOGLE_CREDENTIALS_JSON` is typically a **secret** and `LOGGING_LEVEL` a **variable**; other values are usually set in the **kaiano-common-utils** config (env or repo variables) used by this processor.
+In GitHub Actions, `GOOGLE_CREDENTIALS_JSON` is typically a **secret** and `LOGGING_LEVEL` a **variable**; other values are usually set in the **common-python-utils** config (env or repo variables) used by this cog.
 
 ---
 
@@ -98,9 +98,9 @@ In GitHub Actions, `GOOGLE_CREDENTIALS_JSON` is typically a **secret** and `LOGG
 
 | Workflow | Trigger | Purpose |
 |----------|--------|--------|
-| **process_new_csv_files** | `repository_dispatch` (`new_csv_dj_sets`), `workflow_dispatch` | Runs `process_new_files.py` to ingest new files, syncs matched tracks to Spotify, and copies the Spotify playlist snapshot JSON to kaiano-api. |
+| **process_new_csv_files** | `repository_dispatch` (`new_csv_dj_sets`), `workflow_dispatch` | Runs `process_new_files.py` to ingest new files, syncs matched tracks to Spotify, and copies the Spotify playlist snapshot JSON to api-kaianolevine-com. |
 | **update_live_history** | `repository_dispatch` (`vdj_history`), `workflow_dispatch` | Runs `ingest_live_history.py` to read the most recent VDJ `.m3u` file and POST plays to deejay-marvel-api. |
-| **update_dj_set_collection** | `repository_dispatch` (`updated_dj_sets`), `workflow_dispatch` | Runs `update_deejay_set_collection.py`, then copies the JSON snapshot into **kaiano-api** and pushes. |
+| **update_dj_set_collection** | `repository_dispatch` (`updated_dj_sets`), `workflow_dispatch` | Runs `update_deejay_set_collection.py`, then copies the JSON snapshot into **api-kaianolevine-com** and pushes. |
 | **generate_summaries** | `repository_dispatch` (`generate-summary`), `workflow_dispatch` | Runs `generate_summaries.py` to (re)build missing per-year summary sheets. |
 | **CI** | Push and pull request to `main` | Runs ruff and pytest with coverage on every PR/push; on push to `main`, runs **semantic-release** to version, update `CHANGELOG.md`, tag, and create GitHub releases. |
 
@@ -114,7 +114,7 @@ The **google-app-script-trigger** repo sends `repository_dispatch` events to thi
 - **Install and run**:
 
 ```bash
-git clone git@github.com:kaianolevine/deejay-cog.git
+git clone git@github.com:mini-app-polis/deejay-cog.git
 cd deejay-cog
 uv sync --all-extras
 uv run python -u src/deejay_cog/process_new_files.py   # or update_deejay_set_collection.py, generate_summaries.py
@@ -162,7 +162,7 @@ Both are managed automatically on merge to `main`.
 
 ## Dependencies
 
-- **common-python-utils** ([GitHub main branch](https://github.com/kaianolevine/common-python-utils)): Shared config, logging, and Google Drive/Sheets helpers. Declared in `pyproject.toml` and installed by `uv sync`.
+- **common-python-utils** ([GitHub main branch](https://github.com/mini-app-polis/common-python-utils)): Shared config, logging, and Google Drive/Sheets helpers. Declared in `pyproject.toml` and installed by `uv sync`.
 
 ---
 

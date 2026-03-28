@@ -220,7 +220,7 @@ def process_m3u_file(
 
 @flow(
     name="ingest-live-history",
-    description="Read VDJ .m3u history files from Drive and send plays to deejay-marvel-api.",
+    description="Read VDJ .m3u history files from Drive and send plays to api-kaianolevine-com.",
     on_failure=[_handle_flow_failure],
     on_crashed=[_handle_flow_failure],
 )

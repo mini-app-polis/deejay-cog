@@ -46,7 +46,7 @@ jobs:
             --key ${{ secrets.PREFECT_API_KEY }} \
             --workspace ${{ vars.PREFECT_ACCOUNT_SLUG }}/${{ vars.PREFECT_WORKSPACE_SLUG }}
 
-      - name: Run create_dj_set_collection
+      - name: Run update_dj_set_collection
         run: uv run python -u src/deejay_cog/update_deejay_set_collection.py
 
       - name: Report failure to evaluator
