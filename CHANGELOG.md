@@ -1,3 +1,11 @@
+## [1.9.1](https://github.com/mini-app-polis/deejay-cog/compare/v1.9.0...v1.9.1) (2026-03-28)
+
+
+### Bug Fixes
+
+* testing updates ([fe8154c](https://github.com/mini-app-polis/deejay-cog/commit/fe8154c76c044e875fe3856460786d10f33e6fc7))
+* vuild and standard alignment ([7fe1a75](https://github.com/mini-app-polis/deejay-cog/commit/7fe1a75040d91fe2aca8afdd362f760307baafa9))
+
 # [1.9.0](https://github.com/kaianolevine/deejay-cog/compare/v1.8.1...v1.9.0) (2026-03-28)
 
 
