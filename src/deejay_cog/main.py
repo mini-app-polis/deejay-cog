@@ -31,7 +31,9 @@ def main() -> None:
     load_dotenv()
     sentry_sdk.init(dsn=os.getenv("SENTRY_DSN"), environment="production")
 
-    src_path = str(Path(__file__).parent.parent.parent)
+    src_path = os.environ.get(
+        "APP_SOURCE_PATH", str(Path(__file__).parent.parent.parent)
+    )
 
     process_new = prefect_flow.from_source(
         source=src_path,
