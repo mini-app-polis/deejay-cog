@@ -1,3 +1,10 @@
+## [1.11.4](https://github.com/mini-app-polis/deejay-cog/compare/v1.11.3...v1.11.4) (2026-03-29)
+
+
+### Bug Fixes
+
+* build ([2e0e5b5](https://github.com/mini-app-polis/deejay-cog/commit/2e0e5b537e063c3789acab1f1068fa2520f96080))
+
 ## [1.11.3](https://github.com/mini-app-polis/deejay-cog/compare/v1.11.2...v1.11.3) (2026-03-29)
 
 
