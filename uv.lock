@@ -660,12 +660,14 @@ wheels = [
 
 [[package]]
 name = "deejay-cog"
-version = "1.10.11"
+version = "1.10.14"
 source = { editable = "." }
 dependencies = [
     { name = "common-python-utils" },
     { name = "evaluator-cog" },
     { name = "prefect" },
+    { name = "python-dotenv" },
+    { name = "sentry-sdk" },
 ]
 
 [package.optional-dependencies]
@@ -686,7 +688,9 @@ requires-dist = [
     { name = "prefect", specifier = ">=3.0,<4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.2" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
+    { name = "python-dotenv" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
+    { name = "sentry-sdk" },
 ]
 provides-extras = ["dev"]
 

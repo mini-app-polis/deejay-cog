@@ -32,22 +32,42 @@ pip install prefect
 prefect cloud login
 ```
 
-## Flow runs
+## Railway deployment
 
-View all runs at: app.prefect.cloud
+deejay-cog runs on Railway as an always-on worker service.
 
-Each run shows: task-level logs, duration, success/failure
+**Railway start command:** `python -m deejay_cog.main`
+
+This registers all four flows as Prefect Cloud deployments and starts
+a runner loop that polls for scheduled or manually triggered runs.
+All environment variables from Railway are available to flows at runtime.
+
+### First-time Railway setup
+
+1. Create a new Railway service from the `deejay-cog` GitHub repo
+2. Set all environment variables from `.env.example` in the Railway dashboard
+3. Set the start command to `python -m deejay_cog.main`
+4. Deploy — the service will start and register all four deployments with Prefect Cloud
+5. Go to Prefect Cloud UI → Deployments and grab the new UUIDs
+6. Update `watcher-cog`'s WATCHERS config with the new deployment UUIDs
+7. Redeploy `watcher-cog`
+
+### Triggering flows
+
+Each flow is independently triggerable via:
+- Prefect Cloud UI — manual "Quick Run" per deployment
+- Prefect CLI — `prefect deployment run deejay-cog/process-new-files`
+- watcher-cog — calls `run_deployment()` with the deployment UUID
+- Prefect REST API — any HTTP client
 
 ## Evaluation
 
-Pipeline evaluation logic lives in the standalone **evaluator-cog** repo:  
-https://github.com/kaianolevine/evaluator-cog  
+Pipeline evaluation logic lives in the standalone **evaluator-cog** repo:
+https://github.com/mini-app-polis/evaluator-cog
 
-For automation setup instructions see:  
-https://github.com/kaianolevine/evaluator-cog/blob/main/docs/PREFECT_AUTOMATION.md  
+All four flows wire `on_failure` and `on_crashed` hooks that call
+`evaluate_pipeline_run` with a direct finding when a run fails or crashes.
+Crash detection does not depend on a Prefect automation being configured.
 
-**All four** Prefect flows (`process-new-csv-files`, `update-dj-set-collection`, `generate-summaries`, `ingest-live-history`) wire **`on_failure`** and **`on_crashed`** hooks that call `evaluate_pipeline_run` with a direct finding when a run fails or crashes, so crash detection does not depend on a Prefect automation being configured.
-
-At **end of run**, each flow also calls `evaluate_pipeline_run` with **flow-specific counters** (CSV pipeline stats, collection/summary metrics, live ingest summary, etc.), gated on **`ANTHROPIC_API_KEY`** and **`KAIANO_API_BASE_URL`**.
-
-Additionally, **all four** GitHub Actions pipeline workflows include a **Report failure to evaluator** step that runs on `if: failure()` and uses a **`curl` POST** to the evaluations API. That step runs even if the Python script never starts (for example when **`uv sync`** fails), so infra failures are still reported without a working virtualenv.
+At end of run, each flow also calls `evaluate_pipeline_run` with
+flow-specific counters, gated on `ANTHROPIC_API_KEY` and `KAIANO_API_BASE_URL`.
