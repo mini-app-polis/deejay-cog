@@ -1,3 +1,10 @@
+# [1.11.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.10.14...v1.11.0) (2026-03-29)
+
+
+### Features
+
+* moving to railway deploy and prefect serve ([36f01e5](https://github.com/mini-app-polis/deejay-cog/commit/36f01e53e53355cba5a7dd441639b637d70febda))
+
 ## [1.10.14](https://github.com/mini-app-polis/deejay-cog/compare/v1.10.13...v1.10.14) (2026-03-28)
 
 
