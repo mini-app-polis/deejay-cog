@@ -1,3 +1,10 @@
+## [1.11.7](https://github.com/mini-app-polis/deejay-cog/compare/v1.11.6...v1.11.7) (2026-04-02)
+
+
+### Bug Fixes
+
+* uv lock ([2ac387d](https://github.com/mini-app-polis/deejay-cog/commit/2ac387d0ba45140f78a1fd8b141f54ea50f3bf21))
+
 ## [1.11.6](https://github.com/mini-app-polis/deejay-cog/compare/v1.11.5...v1.11.6) (2026-04-02)
 
 
