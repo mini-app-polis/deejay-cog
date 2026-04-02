@@ -48,19 +48,21 @@ def test_build_live_plays_payload_skips_missing_title_or_artist(monkeypatch) -> 
 
 def test_ingest_live_history_skips_when_no_api_url(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "")
-    g = SimpleNamespace()
-    g.drive = SimpleNamespace(
+    mock_drive = SimpleNamespace(
         get_all_m3u_files=MagicMock(),
         download_m3u_file_data=MagicMock(),
     )
+    fake_g = SimpleNamespace(drive=mock_drive)
     client = SimpleNamespace(post=MagicMock())
 
-    with patch.object(live, "KaianoApiClient", return_value=client) as mock_client:
-        # .fn() avoids Prefect parameter validation (SimpleNamespace is not a GoogleAPI).
-        summary = live.ingest_live_history.fn(g)
+    with (
+        patch.object(live.GoogleAPI, "from_env", return_value=fake_g),
+        patch.object(live, "KaianoApiClient", return_value=client) as mock_client,
+    ):
+        summary = live.ingest_live_history.fn()
 
     mock_client.assert_not_called()
-    g.drive.get_all_m3u_files.assert_not_called()
+    mock_drive.get_all_m3u_files.assert_not_called()
     client.post.assert_not_called()
     assert summary.plays_sent == 0
     assert summary.plays_failed == 0
@@ -79,22 +81,24 @@ def test_ingest_live_history_sends_plays_and_returns_summary(monkeypatch) -> Non
     m3u_instance = MagicMock()
     m3u_instance.parse = SimpleNamespace(parse_m3u_lines=parse_mock)
 
-    g = SimpleNamespace()
-    g.drive = SimpleNamespace(
-        get_all_m3u_files=MagicMock(
-            return_value=[{"id": "m3u-1", "name": "2024-01-15.m3u"}]
-        ),
-        download_m3u_file_data=MagicMock(return_value=["#EXTM3U", "line"]),
+    fake_g = SimpleNamespace(
+        drive=SimpleNamespace(
+            get_all_m3u_files=MagicMock(
+                return_value=[{"id": "m3u-1", "name": "2024-01-15.m3u"}]
+            ),
+            download_m3u_file_data=MagicMock(return_value=["#EXTM3U", "line"]),
+        )
     )
 
     client = SimpleNamespace(post=MagicMock(return_value={"ok": True}))
 
     with (
+        patch.object(live.GoogleAPI, "from_env", return_value=fake_g),
         patch.object(live, "KaianoApiClient", return_value=client) as mock_client_cls,
         patch.object(live, "M3UToolbox", return_value=m3u_instance),
         prefect_test_harness(),
     ):
-        summary = live.ingest_live_history.fn(g)
+        summary = live.ingest_live_history.fn()
 
     mock_client_cls.assert_called_once_with(
         base_url="https://example.test", owner_id="owner-xyz"
@@ -131,22 +135,24 @@ def test_ingest_live_history_sends_only_last_four_parsed_entries(monkeypatch) ->
     m3u_instance = MagicMock()
     m3u_instance.parse = SimpleNamespace(parse_m3u_lines=parse_mock)
 
-    g = SimpleNamespace()
-    g.drive = SimpleNamespace(
-        get_all_m3u_files=MagicMock(
-            return_value=[{"id": "m3u-1", "name": "2024-01-15.m3u"}]
-        ),
-        download_m3u_file_data=MagicMock(return_value=["#EXTM3U", "line"]),
+    fake_g = SimpleNamespace(
+        drive=SimpleNamespace(
+            get_all_m3u_files=MagicMock(
+                return_value=[{"id": "m3u-1", "name": "2024-01-15.m3u"}]
+            ),
+            download_m3u_file_data=MagicMock(return_value=["#EXTM3U", "line"]),
+        )
     )
 
     client = SimpleNamespace(post=MagicMock(return_value={"ok": True}))
 
     with (
+        patch.object(live.GoogleAPI, "from_env", return_value=fake_g),
         patch.object(live, "KaianoApiClient", return_value=client),
         patch.object(live, "M3UToolbox", return_value=m3u_instance),
         prefect_test_harness(),
     ):
-        summary = live.ingest_live_history.fn(g)
+        summary = live.ingest_live_history.fn()
 
     _, payload = client.post.call_args.args
     assert "owner_id" not in payload

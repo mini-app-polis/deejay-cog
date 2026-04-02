@@ -225,11 +225,12 @@ def process_m3u_file(
     on_failure=[_handle_flow_failure],
     on_crashed=[_handle_flow_failure],
 )
-def ingest_live_history(g: GoogleAPI) -> LiveIngestSummary:
+def ingest_live_history() -> LiveIngestSummary:
     """
     Read all .m3u files from Drive, parse them, and send plays to POST /v1/live-plays.
     """
     logger = _prefect_logger()
+    g = GoogleAPI.from_env()
     base_url = os.getenv("KAIANO_API_BASE_URL", "").strip()
     owner_id = (os.getenv("KAIANO_API_OWNER_ID") or os.getenv("OWNER_ID") or "").strip()
 
@@ -279,5 +280,4 @@ def ingest_live_history(g: GoogleAPI) -> LiveIngestSummary:
 
 
 if __name__ == "__main__":
-    g = GoogleAPI.from_env()
-    ingest_live_history(g)
+    ingest_live_history()
