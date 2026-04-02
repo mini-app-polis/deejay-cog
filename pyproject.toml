@@ -1,6 +1,6 @@
 [project]
 name = "deejay-cog"
-version = "1.11.4"
+version = "1.11.5"
 description = "DJ set CSV processor. Normalizes, validates, and ingests DJ set data into Google Sheets and api-kaianolevine-com."
 readme = "README.md"
 license = { text = "MIT" }
