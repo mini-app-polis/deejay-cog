@@ -39,14 +39,14 @@ def main() -> None:
         source=src_path,
         entrypoint="src/deejay_cog/process_new_files.py:process_new_csv_files_flow",
     )
-    generate_summaries = prefect_flow.from_source(
-        source=src_path,
-        entrypoint="src/deejay_cog/generate_summaries.py:generate_summaries_flow",
-    )
-    update_collection = prefect_flow.from_source(
-        source=src_path,
-        entrypoint="src/deejay_cog/update_deejay_set_collection.py:generate_dj_set_collection",
-    )
+    # generate_summaries = prefect_flow.from_source(
+    #    source=src_path,
+    #    entrypoint="src/deejay_cog/generate_summaries.py:generate_summaries_flow",
+    # )
+    # update_collection = prefect_flow.from_source(
+    #    source=src_path,
+    #    entrypoint="src/deejay_cog/update_deejay_set_collection.py:generate_dj_set_collection",
+    # )
     ingest_history = prefect_flow.from_source(
         source=src_path,
         entrypoint="src/deejay_cog/ingest_live_history.py:ingest_live_history",
@@ -54,8 +54,8 @@ def main() -> None:
 
     serve(
         process_new.to_deployment(name="process-new-files"),
-        generate_summaries.to_deployment(name="generate-summaries"),
-        update_collection.to_deployment(name="update-deejay-set-collection"),
+        # generate_summaries.to_deployment(name="generate-summaries"),
+        # update_collection.to_deployment(name="update-deejay-set-collection"),
         ingest_history.to_deployment(name="ingest-live-history"),
     )
 
