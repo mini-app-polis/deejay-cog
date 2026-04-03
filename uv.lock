@@ -660,7 +660,7 @@ wheels = [
 
 [[package]]
 name = "deejay-cog"
-version = "1.11.9"
+version = "1.11.10"
 source = { editable = "." }
 dependencies = [
     { name = "common-python-utils" },

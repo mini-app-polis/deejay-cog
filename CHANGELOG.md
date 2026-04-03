@@ -1,3 +1,10 @@
+## [1.11.10](https://github.com/mini-app-polis/deejay-cog/compare/v1.11.9...v1.11.10) (2026-04-03)
+
+
+### Bug Fixes
+
+* removing 2 deployments for prefect tier limit ([3956734](https://github.com/mini-app-polis/deejay-cog/commit/3956734e46fa7bc2d7a1568b2ac82fd69905f7f7))
+
 ## [1.11.9](https://github.com/mini-app-polis/deejay-cog/compare/v1.11.8...v1.11.9) (2026-04-02)
 
 
