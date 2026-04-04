@@ -1,3 +1,10 @@
+## [1.12.1](https://github.com/mini-app-polis/deejay-cog/compare/v1.12.0...v1.12.1) (2026-04-04)
+
+
+### Bug Fixes
+
+* moving migration script ([78252ac](https://github.com/mini-app-polis/deejay-cog/commit/78252ac30080081d146307309e8a1253fdadedaa))
+
 # [1.12.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.11.10...v1.12.0) (2026-04-04)
 
 
