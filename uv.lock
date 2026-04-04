@@ -665,7 +665,10 @@ source = { editable = "." }
 dependencies = [
     { name = "common-python-utils" },
     { name = "evaluator-cog" },
+    { name = "music-tag" },
+    { name = "musicbrainzngs" },
     { name = "prefect" },
+    { name = "pyacoustid" },
     { name = "python-dotenv" },
     { name = "sentry-sdk" },
 ]
@@ -683,9 +686,12 @@ dev = [
 requires-dist = [
     { name = "common-python-utils", git = "https://github.com/mini-app-polis/common-python-utils.git?rev=main" },
     { name = "evaluator-cog", git = "https://github.com/mini-app-polis/evaluator-cog.git?rev=main" },
+    { name = "music-tag", specifier = ">=0.4.3" },
+    { name = "musicbrainzngs", specifier = ">=0.7.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.2" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.8.0" },
     { name = "prefect", specifier = ">=3.0,<4.0" },
+    { name = "pyacoustid", specifier = ">=1.2.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.2" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
     { name = "python-dotenv" },

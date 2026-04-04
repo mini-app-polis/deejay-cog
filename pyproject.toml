@@ -11,6 +11,9 @@ dependencies = [
     "python-dotenv",
     "sentry-sdk",
     "evaluator-cog",
+    "music-tag>=0.4.3",
+    "pyacoustid>=1.2.2",
+    "musicbrainzngs>=0.7.1",
 ]
 
 [project.optional-dependencies]
