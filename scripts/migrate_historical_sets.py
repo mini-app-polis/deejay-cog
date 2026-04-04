@@ -1,10 +1,8 @@
-# Migration log
-# 2026-04-04 — Initial clean import from DJ_Sets_V3.zip
-#              440 sets imported, 3 empty (skipped), 0 failures
-#              13,590 tracks, 2,005 catalog entries
-#              Owner ID: kaiano_admin_01J9K2X7M4N8P3Q6R5T0V2W8Y1
-
+# ruff: noqa: E402
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 """
 Historical DJ set migration script.
 
@@ -22,7 +20,42 @@ Optional:
     DRY_RUN=1             parse and report without posting
 """
 
-from __future__ import annotations
+# Local migration script — not part of the deployed service.
+# Run manually: uv run python scripts/migrate_historical_sets.py
+# Not included in CI or pipeline execution.
+
+"""
+========================================================
+HISTORICAL MIGRATION REPORT
+========================================================
+SUMMARY
+  Total sets in source:            443
+  Sets imported this run:          440
+  Sets skipped (empty):              3
+  Sets failed:                       0
+  Total tracks sent this run:    13590
+
+BY YEAR
+  Year   | Expected | Imported | Skipped | Failed | Tracks
+  -------+----------+----------+---------+--------+-------
+  2016   |       64 |       64 |       0 |      0 |   1221
+  2017   |       40 |       40 |       0 |      0 |    915
+  2018   |       37 |       37 |       0 |      0 |    870
+  2019   |       50 |       50 |       0 |      0 |   1363
+  2020   |        8 |        8 |       0 |      0 |    212
+  2021   |       28 |       28 |       0 |      0 |   1062
+  2022   |       77 |       75 |       2 |      0 |   2705
+  2023   |       49 |       48 |       1 |      0 |   1994
+  2024   |       42 |       42 |       0 |      0 |   1519
+  2025   |       35 |       35 |       0 |      0 |   1234
+  2026   |       13 |       13 |       0 |      0 |    495
+
+FAILURES
+  None
+
+========================================================
+04/04/2026
+"""
 
 import argparse
 import datetime
@@ -75,17 +108,31 @@ RETRY_DELAY = 5  # seconds
 
 
 def _parse_length_secs(value) -> int | None:
-    """Accept 'MM:SS', 'HH:MM:SS' strings or datetime.time objects."""
+    """Accept MM:SS / HH:MM:SS strings, datetime.time, or timedelta objects.
+
+    openpyxl returns duration cells as:
+      - datetime.timedelta  (e.g. 2021 era) — already total seconds
+      - datetime.time(MM, SS) (e.g. 2026 era) — hour=minutes, minute=seconds
+      - str '00:2:52'       (e.g. 2020 era) — HH:MM:SS with loose padding
+    """
     if value is None:
         return None
+    # timedelta — already in seconds
+    if isinstance(value, datetime.timedelta):
+        return int(value.total_seconds())
+    # datetime.time — openpyxl reads MM:SS duration cells as time(MM, SS, 0)
+    # hour=minutes, minute=seconds (NOT a wall-clock time)
     if isinstance(value, datetime.time):
-        return value.hour * 3600 + value.minute * 60 + value.second
+        return value.hour * 60 + value.minute
     s = str(value).strip()
     if not s:
         return None
-    m = re.match(r"^(\d{1,2}):(\d{2}):(\d{2})$", s)
+    # HH:MM:SS or H:M:SS (e.g. '00:2:52')
+    m = re.match(r"^(\d{1,2}):(\d{1,2}):(\d{2})$", s)
     if m:
-        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+        hh, mm, ss = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return hh * 3600 + mm * 60 + ss
+    # MM:SS
     m = re.match(r"^(\d{1,3}):(\d{2})$", s)
     if m:
         mm, ss = int(m.group(1)), int(m.group(2))
