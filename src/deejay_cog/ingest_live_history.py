@@ -174,7 +174,7 @@ def build_live_plays_payload(entries: list) -> dict[str, Any]:
     return {"plays": plays}
 
 
-@task(name="process-m3u-file")
+@task(name="process-m3u-file", retries=2, retry_delay_seconds=10)
 def process_m3u_file(
     g: GoogleAPI,
     m3u_file: dict[str, Any],

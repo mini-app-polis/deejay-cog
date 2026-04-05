@@ -168,7 +168,7 @@ class RetagSummary:
     skipped: int = field(default=0)
 
 
-@task(name="retag-music-file")
+@task(name="retag-music-file", retries=2, retry_delay_seconds=15)
 def retag_music_file(
     g: GoogleAPI,
     file: Any,
