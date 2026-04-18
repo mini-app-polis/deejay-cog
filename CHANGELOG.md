@@ -1,3 +1,10 @@
+# [1.17.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.16.0...v1.17.0) (2026-04-18)
+
+
+### Features
+
+* bump common-python-utils ([ec1ec46](https://github.com/mini-app-polis/deejay-cog/commit/ec1ec4606a25c633385ac30c37b9df5388e8ec8a))
+
 # [1.16.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.15.0...v1.16.0) (2026-04-17)
 
 
