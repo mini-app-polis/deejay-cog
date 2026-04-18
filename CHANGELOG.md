@@ -1,3 +1,10 @@
+# [1.18.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.17.0...v1.18.0) (2026-04-18)
+
+
+### Features
+
+* resolving new common and api requirements for auth ([cd532c1](https://github.com/mini-app-polis/deejay-cog/commit/cd532c13af5c1a880ef98473b953fb698e8b9bdb))
+
 # [1.17.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.16.0...v1.17.0) (2026-04-18)
 
 
