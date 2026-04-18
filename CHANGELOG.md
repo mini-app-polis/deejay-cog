@@ -1,3 +1,10 @@
+## [1.18.1](https://github.com/mini-app-polis/deejay-cog/compare/v1.18.0...v1.18.1) (2026-04-18)
+
+
+### Bug Fixes
+
+* removing song limit from reading m3u ([1acbff7](https://github.com/mini-app-polis/deejay-cog/commit/1acbff7c24957379a1ad69123e855bf9152196d5))
+
 # [1.18.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.17.0...v1.18.0) (2026-04-18)
 
 
