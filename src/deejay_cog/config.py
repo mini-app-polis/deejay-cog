@@ -5,9 +5,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Google Drive folder IDs
-CSV_SOURCE_FOLDER_ID = os.getenv("CSV_SOURCE_FOLDER_ID", "1t4d_8lMC3ZJfSyainbpwInoDta7n69hC")
+CSV_SOURCE_FOLDER_ID = os.getenv(
+    "CSV_SOURCE_FOLDER_ID", "1t4d_8lMC3ZJfSyainbpwInoDta7n69hC"
+)
 DJ_SETS_FOLDER_ID = os.getenv("DJ_SETS_FOLDER_ID", "1A0tKQ2DBXI1Bt9h--olFwnBNne3am-rL")
-VDJ_HISTORY_FOLDER_ID = os.getenv("VDJ_HISTORY_FOLDER_ID", "1HGxEr5ocY9JLtXcJqDRIOD95rXU6QLUW")
+VDJ_HISTORY_FOLDER_ID = os.getenv(
+    "VDJ_HISTORY_FOLDER_ID", "1HGxEr5ocY9JLtXcJqDRIOD95rXU6QLUW"
+)
 LIVE_HISTORY_SPREADSHEET_ID = os.getenv(
     "LIVE_HISTORY_SPREADSHEET_ID",
     "1DpUCQWK3vGGdzUC5JmXVeojqsM_hp7U2DcSEGq6cF-U",

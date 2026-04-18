@@ -1,51 +1,54 @@
 # Drive ingestion pipeline
 
-This document describes the full pipeline from CSV drop to JSON output and where **deejay-cog** fits in.
+This document describes how **deejay-cog** fits into the Drive → Prefect → API pipeline.
 
 ---
 
-## End-to-end flow
+## Flow tiers
 
-1. **CSV drop**  
-   CSV files (and optionally other files) are placed into a designated Google Drive folder (the “CSV source folder”). Filenames must start with a four-digit year (e.g. `2024-01-15_My_Set.csv`).
+### Production (served via `prefect.serve()` on Railway)
 
-2. **Trigger**  
-   The **google-app-script-trigger** repo (or similar) detects new files or a request to refresh and sends a `repository_dispatch` event to this repo’s GitHub Actions.
+| Flow | Module | Role |
+|------|--------|------|
+| **process-new-csv-files** | `process_new_files.py` | Triggered by **watcher-cog** when new CSVs appear in the source folder: normalize, upload to Sheets, archive, ingest to API, Spotify sync. |
+| **ingest-live-history** | `ingest_live_history.py` | Triggered by **watcher-cog** when new VirtualDJ `.m3u` files appear in the VDJ history folder; reads Drive, parses plays, and POSTs to `/v1/live-plays`. **Processes only the most recent `.m3u` file**, not the full history list. |
 
-3. **Process new files** (this repo)  
-   The **process_new_csv_files** workflow runs `process_new_files.py` (Prefect flow `process-new-csv-files`), which:
-   - Normalizes status prefixes on filenames in the source folder (`FAILED_`, `possible_duplicate_`, `Copy of `).
-   - For each file, extracts the year from the filename.
-   - For CSVs: downloads, normalizes (e.g. strip `sep=`, empty lines), uploads as a Google Sheet into the corresponding year folder under the DJ Sets folder, applies formatting, moves the original file into that year’s `Archive` subfolder.
-   - For non-CSV files that start with a year: moves them into the year folder (or renames with `possible_duplicate_` if a file with the same base name already exists).
-   - On upload/processing failure: renames the source file with a `FAILED_` prefix.
-   - On duplicate base name in the year folder: renames the source file with a `possible_duplicate_` prefix.
+### Local-only (not served; retained for manual validation during the PostgreSQL cutover)
 
-4. **Update collection** (this repo)  
-   The **update_dj_set_collection** workflow runs `update_deejay_set_collection.py`, which:
-   - Builds or updates the master “DJ Set Collection” Google Sheet (tabs per year + Summary).
-   - Writes the JSON snapshot to the path configured by `DEEJAY_SET_COLLECTION_JSON_PATH`.
-   - The workflow then copies that JSON into the **kaiano-api** repo and commits/pushes.
+| Flow | Module | Role |
+|------|--------|------|
+| **update-dj-set-collection** | `update_deejay_set_collection.py` | Rebuilds the master DJ set collection spreadsheet and JSON snapshot. |
+| **generate-summaries** | `generate_summaries.py` | Builds or refreshes per-year summary sheets and deduplication. |
 
-5. **Generate summaries** (this repo)  
-   The **generate_summaries** workflow runs `generate_summaries.py`, which:
-   - For each year folder, ensures a “{Year} Summary” sheet exists in the Summary folder.
-   - Aggregates and filters columns from that year’s set sheets, then runs `deduplicate_summary` on the summary sheet.
+### Work in progress (not served; system-dependency blockers)
 
-6. **JSON output**  
-   The JSON snapshot is consumed by **kaiano-api** (e.g. for the site’s DJ sets data).
+| Flow | Module | Role |
+|------|--------|------|
+| **retag-music** | `retag_music.py` | Drive → AcoustID/MusicBrainz tagging pipeline. Requires `ffmpeg` and `fpcalc` on the host; not deployed on Railway today. |
+
+---
+
+## Trigger architecture
+
+**watcher-cog** polls Google Drive (or receives push notifications, depending on deployment). When new files match configured rules, it calls the **Prefect Cloud API** to create a flow run for the appropriate deployment. The **Prefect worker** on Railway runs `python -m deejay_cog.main`, which serves the production flows in-process.
+
+Per **PIPE-008** in ecosystem-standards, **watcher-cog → Prefect → cog** is the canonical trigger pattern (not GitHub Actions as orchestrator).
+
+---
+
+## End-to-end data path (production CSV flow)
+
+1. **CSV drop** — Files land in the CSV source folder (`CSV_SOURCE_FOLDER_ID`). CSV names must start with a four-digit year (e.g. `2024-01-15_My_Set.csv`).
+2. **Prefect run** — watcher-cog schedules **process-new-csv-files**.
+3. **Processing** — Prefix normalization, per-file year detection, CSV → Sheet upload, archive moves, API ingest, optional Spotify playlist push.
+
+Live history follows the same pattern for `.m3u` files and **ingest-live-history**.
 
 ---
 
 ## Orchestration
 
-All five pipeline entrypoints are Prefect flows. Each run is visible in Prefect Cloud with flow- and task-level logs (where tasks exist) and retry tracking. All five flows register **`on_failure`** and **`on_crashed`** hooks that post a **direct finding** to the evaluator API when the flow fails or crashes before completion.
-
-- **`process-new-csv-files`** (`process_new_files.py`) — **Tasks:** `process-csv-file` (per CSV: download → normalize → upload → archive → ingest / Spotify); `normalize-csv`; `upload-to-sheets`; `ingest-to-api` (retries: 2, delay: 30s); `sync-to-spotify`.
-- **`update-dj-set-collection`** (`update_deejay_set_collection.py`) — No named tasks; single flow body.
-- **`generate-summaries`** (`generate_summaries.py`) — No named tasks; single flow body.
-- **`ingest-live-history`** (`ingest_live_history.py`) — **Tasks:** `process-m3u-file`.
-- **`retag-music`** (`retag_music.py`) — **Tasks:** `retag-music-file`. Requires runtime system binaries `ffmpeg` and `fpcalc` (from `libchromaprint-tools`); these are specific to this flow.
+All five entrypoints are Prefect `@flow` functions. Production flows register **`on_failure`** / **`on_crashed`** hooks via `deejay_cog._pipeline_eval.make_failure_hook`, which log locally and may post a **direct finding** (WARN vs ERROR) when gated.
 
 View runs: [app.prefect.cloud](https://app.prefect.cloud)
 
@@ -53,45 +56,24 @@ View runs: [app.prefect.cloud](https://app.prefect.cloud)
 
 ## Observability
 
-- **Post-run evaluation:** At the end of each successful run, all four flows call `pipeline_evaluator.evaluator.evaluate_pipeline_run` (from **evaluator-cog**) to post an evaluation to the deejay-marvel-api evaluations endpoint. Counters and context are flow-specific (CSV stats, collection/summary metrics, live ingest summary, etc.).
-- **Prefect hooks:** All four flows have **`on_failure`** and **`on_crashed`** hooks that post an immediate error/warn finding if the flow exits in a failed or crashed state before normal completion.
-- **GitHub Actions failure step:** All four pipeline workflows include a **Report failure to evaluator** step (`if: failure()`) that runs a **`curl` POST** to the same evaluations API. It runs even when earlier steps fail (for example **`uv sync`** or checkout), so infra failures are reported without relying on Python or a virtualenv.
-- **Gating:** End-of-run evaluation is performed only when both **`ANTHROPIC_API_KEY`** and **`KAIANO_API_BASE_URL`** are set (see [CONFIGURATION.md](CONFIGURATION.md)).
+- **Pipeline evaluation** — Production flows call `deejay_cog._pipeline_eval.post_run_finding` at normal completion: **exactly one** finding per run, with `direct_severity` mapped to the evaluator (SUCCESS intent is sent as **INFO** to match evaluator-cog’s allowed direct severities). Severity is **SUCCESS** (stored as INFO) for clean completion including intentional skips (e.g. API URL unset); **WARN** when the run finished but real-issue counters are non-zero; **ERROR** only from the failure/crash hook.
+- **Local-only and WIP flows** use `production_only=False`: hooks still log, but **no** HTTP posts to `pipeline_evaluations`, regardless of environment variables.
+- **Gating for production posts** — `post_run_finding` posts only when `production_only=True` **and** both **`KAIANO_API_BASE_URL`** and **`ANTHROPIC_API_KEY`** are set (see [CONFIGURATION.md](CONFIGURATION.md)).
 
 ---
 
-## Deprecation Plan
+## Deprecation plan
 
-The following workflows are validation-layer only and will be removed once PostgreSQL is confirmed as the source of truth for all DJ set data:
+**update-dj-set-collection** and **generate-summaries** are validation-layer utilities. They will be **retired when PostgreSQL is confirmed as the source of truth** for DJ set data — not on a GitHub workflow removal timeline, because Actions are no longer the orchestrator for this cog.
 
-- **update-dj-set-collection**: Rebuilds Google Sheets master collection and JSON snapshot. Kept for cross-validation against PostgreSQL data.
-- **generate-summaries**: Generates per-year summary sheets. Kept for cross-validation against PostgreSQL data.
-
-**process-new-csv-files** is permanent and will be extended with additional functionality in future phases.
-
----
-
-## Where this processor fits
-
-- **deejay-cog** is the backend that performs steps 3–5: ingest CSVs into Sheets, maintain the collection sheet and JSON, and build summary sheets.
-- **google-app-script-trigger** (or equivalent) is responsible for detecting Drive events and triggering the right workflow via `repository_dispatch`.
-
----
-
-## Repository dispatch events
-
-| Event type | Triggered by | Workflow run |
-|------------|--------------|--------------|
-| `new_csv_dj_sets` | New CSV/files in the source folder (e.g. from Apps Script) | **process_new_csv_files** |
-| `updated_dj_sets` | Request to refresh the collection and push JSON to kaiano-api | **update_dj_set_collection** |
-| `generate-summary` | Request to (re)generate per-year summary sheets | **generate_summaries** |
-| `vdj_history` | Request to ingest VirtualDJ live history (`.m3u`) into the API | **update_live_history** |
+**process-new-csv-files** and **ingest-live-history** remain the long-lived production paths.
 
 ---
 
 ## Error handling behavior
 
-- **FAILED_ prefix**: If uploading/formatting a CSV fails, the processor renames the source file to `FAILED_<original_name>` so it can be inspected and retried (e.g. after fixing or re-running prefix normalization).
-- **possible_duplicate_ prefix**: If a file with the same base name already exists in the target year folder, the newly processed file is renamed to `possible_duplicate_<original_name>` (and the existing file is left as-is). Summary generation skips years that still contain `FAILED_` or `_Cleaned` set files.
-- **Archive subfolder**: After a CSV is successfully uploaded as a Sheet, the original file is moved into the year folder’s `Archive` subfolder so the source folder can be refilled without name clashes.
-- **Spotify sync**: Sync runs only when **all three** of **`SPOTIPY_CLIENT_ID`**, **`SPOTIPY_CLIENT_SECRET`**, and **`SPOTIPY_REFRESH_TOKEN`** are set. If any are missing, Spotify sync is **skipped** with a warning (not treated as a hard error); the rest of the CSV pipeline continues.
+- **FAILED_ prefix** — Failed CSV processing renames the source file to `FAILED_<original_name>` for inspection and retry.
+- **possible_duplicate_ prefix** — When a basename collision occurs in the year folder, the new file is renamed with this prefix.
+- **Summary generation** — Skips years that still contain `FAILED_` or `_Cleaned` set files until cleaned up.
+- **Archive subfolder** — After a successful Sheet upload, the original CSV is moved under that year’s `Archive` folder.
+- **Spotify sync** — Runs only when **SPOTIPY_CLIENT_ID**, **SPOTIPY_CLIENT_SECRET**, and **SPOTIPY_REFRESH_TOKEN** are all set; otherwise it is skipped (not a hard error for the rest of the CSV pipeline).

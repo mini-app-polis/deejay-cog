@@ -1,57 +1,30 @@
-import os
+"""
+generate_summaries — LOCAL ONLY
 
-from evaluator_cog.flows.pipeline_eval import evaluate_pipeline_run
+Not served by main.py in production. Retained for ad-hoc local runs
+during the PostgreSQL-as-source-of-truth transition. Will be retired
+when that cutover completes.
+
+Run locally: uv run python -m deejay_cog.generate_summaries
+
+Findings from this module are never posted to pipeline_evaluations.
+The failure hook fires and logs locally, but the production_only=False
+flag passed to the pipeline_eval helpers prevents any API call.
+"""
+
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.google import GoogleAPI
-from prefect import flow, get_run_logger
+from prefect import flow
 
 import deejay_cog.config as config
 import deejay_cog.deduplicate_summary as deduplication
+from deejay_cog._pipeline_eval import (
+    get_prefect_logger,
+    make_failure_hook,
+    post_run_finding,
+)
 
 log = logger_mod.get_logger()
-
-
-def _prefect_logger():
-    try:
-        return get_run_logger()
-    except Exception:
-        return log
-
-
-def _handle_flow_failure(flow, flow_run, state) -> None:
-    """
-    Prefect failure/crash hook: write a direct evaluation finding.
-    Never raises.
-    """
-    logger = _prefect_logger()
-    try:
-        state_name = str(getattr(state, "name", "FAILED"))
-        state_type = str(getattr(state, "type", "")).upper()
-        severity = (
-            "ERROR" if state_type == "CRASHED" or state_name == "Crashed" else "WARN"
-        )
-        run_id = str(getattr(flow_run, "id", "") or os.environ.get("GITHUB_RUN_ID", ""))
-        if not run_id:
-            run_id = "prefect-unknown-run"
-
-        logger.error("Flow failure hook fired: run_id=%s state=%s", run_id, state_name)
-        evaluate_pipeline_run(
-            run_id=run_id,
-            repo="deejay-cog",
-            flow_name=flow.name,
-            sets_imported=0,
-            sets_failed=0,
-            sets_skipped=0,
-            total_tracks=0,
-            failed_set_labels=[],
-            api_ingest_success=True,
-            sets_attempted=0,
-            collection_update=False,
-            direct_finding_text=f"Flow entered {state_name} unexpectedly",
-            direct_severity=severity,
-        )
-    except Exception:
-        logger.exception("Flow failure hook failed unexpectedly")
 
 
 @flow(
@@ -59,12 +32,12 @@ def _handle_flow_failure(flow, flow_run, state) -> None:
     description="Generates per-year summary sheets. "
     "Validation layer — will be deprecated once "
     "PostgreSQL is confirmed as source of truth.",
-    on_failure=[_handle_flow_failure],
-    on_crashed=[_handle_flow_failure],
+    on_failure=[make_failure_hook("generate-summaries", production_only=False)],
+    on_crashed=[make_failure_hook("generate-summaries", production_only=False)],
 )
 def generate_summaries_flow() -> None:
     """Generate the next missing summary for a year."""
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
 
     logger.info("🚀 Starting generate_next_missing_summary()")
     g = GoogleAPI.from_env()
@@ -147,34 +120,15 @@ def generate_summaries_flow() -> None:
         if generate_summary_for_folder(g, files, summary_folder_id, year):
             summaries_generated += 1
 
-    run_id = os.environ.get("GITHUB_RUN_ID", "local-run")
-    if os.environ.get("ANTHROPIC_API_KEY") and os.environ.get("KAIANO_API_BASE_URL"):
-        try:
-            evaluate_pipeline_run(
-                run_id=run_id,
-                repo="deejay-cog",
-                flow_name="generate-summaries",
-                sets_imported=0,
-                sets_failed=0,
-                sets_skipped=0,
-                total_tracks=0,
-                failed_set_labels=[],
-                api_ingest_success=True,
-                sets_attempted=0,
-                collection_update=False,
-                direct_finding_text=(
-                    "Summary pipeline: "
-                    f"years_processed={years_processed}, "
-                    f"summaries_generated={summaries_generated}, "
-                    f"summaries_skipped_no_canonical_match={summaries_skipped_no_canonical}, "
-                    f"dedup_runs={dedup_runs}"
-                ),
-                direct_severity="INFO",
-            )
-        except Exception:
-            logger.exception(
-                "Summary pipeline evaluation raised unexpectedly (should be best-effort)"
-            )
+    post_run_finding(
+        flow_name="generate-summaries",
+        severity="SUCCESS",
+        production_only=False,
+        years_processed=years_processed,
+        summaries_generated=summaries_generated,
+        summaries_skipped_no_canonical_match=summaries_skipped_no_canonical,
+        dedup_runs=dedup_runs,
+    )
 
 
 # Backwards-compatible name for callers and tests

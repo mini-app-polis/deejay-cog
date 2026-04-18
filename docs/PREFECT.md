@@ -38,8 +38,9 @@ deejay-cog runs on Railway as an always-on worker service.
 
 **Railway start command:** `python -m deejay_cog.main`
 
-This registers all four flows as Prefect Cloud deployments and starts
-a runner loop that polls for scheduled or manually triggered runs.
+This registers the **production** flows (`process-new-files`, `ingest-live-history`)
+as Prefect Cloud deployments and starts a runner loop that polls for scheduled
+or manually triggered runs. Other flows remain importable for local use only.
 All environment variables from Railway are available to flows at runtime.
 
 ### First-time Railway setup
@@ -47,7 +48,7 @@ All environment variables from Railway are available to flows at runtime.
 1. Create a new Railway service from the `deejay-cog` GitHub repo
 2. Set all environment variables from `.env.example` in the Railway dashboard
 3. Set the start command to `python -m deejay_cog.main`
-4. Deploy — the service will start and register all four deployments with Prefect Cloud
+4. Deploy — the service will start and register the served deployments with Prefect Cloud
 5. Go to Prefect Cloud UI → Deployments and grab the new UUIDs
 6. Update `watcher-cog`'s WATCHERS config with the new deployment UUIDs
 7. Redeploy `watcher-cog`
@@ -62,12 +63,11 @@ Each flow is independently triggerable via:
 
 ## Evaluation
 
-Pipeline evaluation logic lives in the standalone **evaluator-cog** repo:
+Pipeline evaluation logic lives in **evaluator-cog**:
 https://github.com/mini-app-polis/evaluator-cog
 
-All four flows wire `on_failure` and `on_crashed` hooks that call
-`evaluate_pipeline_run` with a direct finding when a run fails or crashes.
-Crash detection does not depend on a Prefect automation being configured.
-
-At end of run, each flow also calls `evaluate_pipeline_run` with
-flow-specific counters, gated on `ANTHROPIC_API_KEY` and `KAIANO_API_BASE_URL`.
+`deejay_cog._pipeline_eval` centralizes Prefect logging, run IDs, failure hooks,
+and a single end-of-run `post_run_finding` call per flow. Hooks and success posts
+invoke `evaluate_pipeline_run` when `production_only=True` and both
+`KAIANO_API_BASE_URL` and `ANTHROPIC_API_KEY` are set. Local-only and WIP flows
+pass `production_only=False` so they never POST findings, regardless of env.

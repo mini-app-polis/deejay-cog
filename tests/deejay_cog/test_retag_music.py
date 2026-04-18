@@ -337,14 +337,14 @@ def test_retag_music_flow_skips_when_no_acoustid_key(monkeypatch) -> None:
     monkeypatch.delenv("ACOUSTID_API_KEY", raising=False)
 
     with (
-        patch.object(retag, "evaluate_pipeline_run") as mock_eval,
+        patch.object(retag, "post_run_finding") as mock_post,
         prefect_test_harness(),
     ):
         summary = retag.retag_music_flow.fn()
 
     assert summary.scanned == 0
     assert summary.uploaded == 0
-    mock_eval.assert_called_once()
+    mock_post.assert_called_once()
 
 
 def test_retag_music_flow_processes_files_and_returns_summary(
@@ -378,7 +378,7 @@ def test_retag_music_flow_processes_files_and_returns_summary(
         patch.object(retag, "Mp3Identifier") as mock_identifier_cls,
         patch.object(retag, "Mp3Tagger", return_value=tagger),
         patch.object(retag, "Mp3Renamer", return_value=renamer),
-        patch.object(retag, "evaluate_pipeline_run") as mock_eval,
+        patch.object(retag, "post_run_finding") as mock_post,
         patch.object(retag, "_list_music_files", return_value=[file_a, file_b]),
         patch("deejay_cog.retag_music.tempfile.gettempdir", return_value=str(tmp_path)),
         prefect_test_harness(),
@@ -393,7 +393,7 @@ def test_retag_music_flow_processes_files_and_returns_summary(
     assert summary.uploaded == 2
     assert summary.deleted == 2
     assert summary.failed == 0
-    mock_eval.assert_called_once()
+    mock_post.assert_called_once()
 
 
 def test_retag_music_flow_respects_max_uploads_per_run(monkeypatch, tmp_path) -> None:
@@ -425,7 +425,7 @@ def test_retag_music_flow_respects_max_uploads_per_run(monkeypatch, tmp_path) ->
         patch.object(retag, "Mp3Identifier") as mock_identifier_cls,
         patch.object(retag, "Mp3Tagger", return_value=tagger),
         patch.object(retag, "Mp3Renamer", return_value=renamer),
-        patch.object(retag, "evaluate_pipeline_run"),
+        patch.object(retag, "post_run_finding"),
         patch.object(retag, "_list_music_files", return_value=files),
         patch("deejay_cog.retag_music.tempfile.gettempdir", return_value=str(tmp_path)),
         prefect_test_harness(),

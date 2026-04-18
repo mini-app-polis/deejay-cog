@@ -8,10 +8,11 @@ from prefect.testing.utilities import prefect_test_harness
 import deejay_cog.process_new_files as process_new_files
 
 
-def test_main_calls_evaluate_when_llm_and_api_configured(monkeypatch) -> None:
+def test_main_posts_single_success_finding_when_llm_and_api_configured(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic")
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    monkeypatch.setenv("GITHUB_RUN_ID", "42")
 
     fake_file = SimpleNamespace(id="f1", name="2024-01-02_My Venue.csv")
     drive = SimpleNamespace(list_files=MagicMock(return_value=[fake_file]))
@@ -30,16 +31,18 @@ def test_main_calls_evaluate_when_llm_and_api_configured(monkeypatch) -> None:
             "process_csv_file",
             side_effect=_fake_process_csv,
         ),
-        patch.object(process_new_files, "evaluate_pipeline_run") as mock_eval,
+        patch.object(process_new_files, "post_run_finding") as mock_post,
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
         with prefect_test_harness():
             process_new_files.main()
 
-    mock_eval.assert_called_once()
-    kw = mock_eval.call_args.kwargs
-    assert kw["run_id"] == "42"
+    mock_post.assert_called_once()
+    kw = mock_post.call_args.kwargs
+    assert kw["flow_name"] == "process-new-csv-files"
+    assert kw["severity"] == "SUCCESS"
+    assert kw["production_only"] is True
     assert kw["sets_attempted"] == 1
     assert kw["sets_imported"] == 1
     assert kw["total_tracks"] == 11
@@ -56,14 +59,47 @@ def test_main_skips_evaluate_without_anthropic(monkeypatch) -> None:
     with (
         patch.object(process_new_files.GoogleAPI, "from_env", return_value=g),
         patch.object(process_new_files, "normalize_prefixes_in_source"),
-        patch.object(process_new_files, "evaluate_pipeline_run") as mock_eval,
+        patch.object(process_new_files, "post_run_finding") as mock_post,
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
         with prefect_test_harness():
             process_new_files.main()
 
-    mock_eval.assert_not_called()
+    mock_post.assert_called_once()
+
+
+def test_main_posts_single_warn_finding_when_sets_failed(monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic")
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
+
+    fake_file = SimpleNamespace(id="f1", name="2024-01-02_My Venue.csv")
+    drive = SimpleNamespace(list_files=MagicMock(return_value=[fake_file]))
+    g = SimpleNamespace(drive=drive)
+
+    def _fake_process_csv(g_api, meta, year, stats):
+        stats.sets_imported += 1
+        stats.sets_failed += 1
+        return "imported"
+
+    with (
+        patch.object(process_new_files.GoogleAPI, "from_env", return_value=g),
+        patch.object(process_new_files, "normalize_prefixes_in_source"),
+        patch.object(
+            process_new_files,
+            "process_csv_file",
+            side_effect=_fake_process_csv,
+        ),
+        patch.object(process_new_files, "post_run_finding") as mock_post,
+        patch.object(process_new_files, "config") as mock_cfg,
+    ):
+        mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
+        with prefect_test_harness():
+            process_new_files.main()
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["severity"] == "WARN"
+    assert "sets_failed=1" in mock_post.call_args.kwargs["text"]
 
 
 # --- Normalization tests -----------------------------------------------------
@@ -175,7 +211,7 @@ def test_ingest_set_to_api_skips_when_base_url_not_set(monkeypatch):
     g = SimpleNamespace()
 
     mock_log = MagicMock()
-    with patch.object(process_new_files, "_prefect_logger", return_value=mock_log):
+    with patch.object(process_new_files, "get_prefect_logger", return_value=mock_log):
         process_new_files._ingest_set_to_api.fn(
             spreadsheet_id="ssid",
             set_date="2024-01-01",
@@ -274,7 +310,9 @@ def test_ingest_set_to_api_logs_error_on_api_error(monkeypatch):
         ),
     ):
         mock_log = MagicMock()
-        with patch.object(process_new_files, "_prefect_logger", return_value=mock_log):
+        with patch.object(
+            process_new_files, "get_prefect_logger", return_value=mock_log
+        ):
             process_new_files._ingest_set_to_api.fn(
                 spreadsheet_id="ssid",
                 set_date="2024-01-01",

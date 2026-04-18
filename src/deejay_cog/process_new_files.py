@@ -3,12 +3,16 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from evaluator_cog.flows.pipeline_eval import evaluate_pipeline_run
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.google import GoogleAPI
-from prefect import flow, get_run_logger, task
+from prefect import flow, task
 
 import deejay_cog.config as config
+from deejay_cog._pipeline_eval import (
+    get_prefect_logger,
+    make_failure_hook,
+    post_run_finding,
+)
 from deejay_cog.ingest_to_api import (
     build_ingest_payload,
     read_tracks_from_sheet,
@@ -23,49 +27,6 @@ log = logger_mod.get_logger()
 
 os.environ.setdefault("CSV_SOURCE_FOLDER_ID", "1t4d_8lMC3ZJfSyainbpwInoDta7n69hC")
 os.environ.setdefault("DJ_SETS_FOLDER_ID", "1A0tKQ2DBXI1Bt9h--olFwnBNne3am-rL")
-
-
-def _prefect_logger():
-    try:
-        return get_run_logger()
-    except Exception:
-        return log
-
-
-def _handle_flow_failure(flow, flow_run, state) -> None:
-    """
-    Prefect failure/crash hook: write a direct evaluation finding.
-    Never raises.
-    """
-    logger = _prefect_logger()
-    try:
-        state_name = str(getattr(state, "name", "FAILED"))
-        state_type = str(getattr(state, "type", "")).upper()
-        severity = (
-            "ERROR" if state_type == "CRASHED" or state_name == "Crashed" else "WARN"
-        )
-        run_id = str(getattr(flow_run, "id", "") or os.environ.get("GITHUB_RUN_ID", ""))
-        if not run_id:
-            run_id = "prefect-unknown-run"
-
-        logger.error("Flow failure hook fired: run_id=%s state=%s", run_id, state_name)
-        evaluate_pipeline_run(
-            run_id=run_id,
-            repo="deejay-cog",
-            flow_name=flow.name,
-            sets_imported=0,
-            sets_failed=0,
-            sets_skipped=0,
-            total_tracks=0,
-            failed_set_labels=[],
-            api_ingest_success=True,
-            sets_attempted=0,
-            collection_update=False,
-            direct_finding_text=f"Flow entered {state_name} unexpectedly",
-            direct_severity=severity,
-        )
-    except Exception:
-        logger.exception("Flow failure hook failed unexpectedly")
 
 
 @dataclass
@@ -266,7 +227,7 @@ def _normalize_csv(file_path: str) -> None:
 
     NOTE: This does NOT parse CSV structure.
     """
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
     logger.debug(f"normalize_csv called with file_path: {file_path} - reading file")
 
     with open(file_path) as f:
@@ -306,7 +267,7 @@ def _upload_csv_to_sheets(
     filename: str,
 ) -> str:
     """Upload normalized CSV as a Google Sheet, apply formatting, invalidate summary."""
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
     sheet_id = g.drive.upload_csv_as_google_sheet(temp_path, parent_id=year_folder_id)
     logger.debug("Uploaded sheet ID: %s", sheet_id)
     g.sheets.formatter.apply_formatting_to_sheet(sheet_id)
@@ -335,7 +296,7 @@ def _ingest_set_to_api(
     """
     import os as _os
 
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
 
     if not _os.environ.get("KAIANO_API_BASE_URL"):
         logger.warning(
@@ -392,7 +353,7 @@ def _sync_set_to_spotify(
     g: GoogleAPI,
     stats: CsvPipelineStats | None = None,
 ) -> None:
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
 
     spotify_env_ok = all(
         os.environ.get(name)
@@ -432,7 +393,7 @@ def process_csv_file(
     stats: CsvPipelineStats | None = None,
 ) -> str:
     """Process one CSV. Returns imported | failed | duplicate."""
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
     filename = file_metadata["name"]
     file_id = file_metadata["id"]
     logger.info(f"\n🚧 Processing: {filename}")
@@ -529,11 +490,11 @@ def process_csv_file(
     name="process-new-csv-files",
     description="Normalize new DJ set CSVs, upload to "
     "Google Sheets, archive, and ingest to API.",
-    on_failure=[_handle_flow_failure],
-    on_crashed=[_handle_flow_failure],
+    on_failure=[make_failure_hook("process-new-csv-files")],
+    on_crashed=[make_failure_hook("process-new-csv-files")],
 )
 def process_new_csv_files_flow() -> None:
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
     logger.info("Starting main process")
     g = GoogleAPI.from_env()
 
@@ -604,61 +565,60 @@ def process_new_csv_files_flow() -> None:
             logger.error("❌ Spotify playlist sync failed: %s", e)
             stats.spotify_failed += 1
 
-    if os.environ.get("ANTHROPIC_API_KEY") and os.environ.get("KAIANO_API_BASE_URL"):
-        run_id = os.environ.get("GITHUB_RUN_ID", "local-run")
-        try:
-            evaluate_pipeline_run(
-                run_id=run_id,
-                repo="deejay-cog",
-                flow_name="process-new-csv-files",
-                sets_imported=stats.sets_imported,
-                sets_failed=stats.sets_failed,
-                sets_skipped=stats.sets_skipped_non_csv,
-                total_tracks=stats.total_tracks,
-                failed_set_labels=list(stats.failed_set_labels),
-                api_ingest_success=(stats.ingest_failed == 0),
-                sets_attempted=stats.sets_attempted,
-                collection_update=False,
-                unrecognized_filename_skips=stats.skipped_bad_filename,
-                duplicate_csv_count=stats.duplicate_csv,
-            )
-            aux_parts: list[str] = []
-            if stats.spotify_failed:
-                aux_parts.append(f"spotify_failed={stats.spotify_failed}")
-            if stats.bad_filename_in_file:
-                aux_parts.append(f"bad_filename_in_file={stats.bad_filename_in_file}")
-            if stats.ingest_skipped_no_tracks:
-                aux_parts.append(
-                    f"ingest_skipped_no_tracks={stats.ingest_skipped_no_tracks}"
-                )
-            if stats.ingest_skipped_env_missing:
-                aux_parts.append(
-                    f"ingest_skipped_env_missing={stats.ingest_skipped_env_missing}"
-                )
-            if stats.track_read_failed:
-                aux_parts.append(f"track_read_failed={stats.track_read_failed}")
-            if aux_parts:
-                evaluate_pipeline_run(
-                    run_id=run_id,
-                    repo="deejay-cog",
-                    flow_name="process-new-csv-files",
-                    sets_imported=0,
-                    sets_failed=0,
-                    sets_skipped=0,
-                    total_tracks=0,
-                    failed_set_labels=[],
-                    api_ingest_success=True,
-                    sets_attempted=0,
-                    collection_update=False,
-                    direct_finding_text=(
-                        "CSV pipeline auxiliary signals: " + "; ".join(aux_parts)
-                    ),
-                    direct_severity="WARN",
-                )
-        except Exception:
-            logger.exception(
-                "Pipeline evaluation raised unexpectedly (should be best-effort)"
-            )
+    real_issue = (
+        stats.sets_failed > 0
+        or stats.ingest_failed > 0
+        or stats.spotify_failed > 0
+        or stats.bad_filename_in_file > 0
+        or stats.track_read_failed > 0
+    )
+    warn_parts: list[str] = []
+    if stats.sets_failed:
+        warn_parts.append(f"sets_failed={stats.sets_failed}")
+    if stats.ingest_failed:
+        warn_parts.append(f"ingest_failed={stats.ingest_failed}")
+    if stats.spotify_failed:
+        warn_parts.append(f"spotify_failed={stats.spotify_failed}")
+    if stats.bad_filename_in_file:
+        warn_parts.append(f"bad_filename_in_file={stats.bad_filename_in_file}")
+    if stats.track_read_failed:
+        warn_parts.append(f"track_read_failed={stats.track_read_failed}")
+
+    common_eval = {
+        "sets_imported": stats.sets_imported,
+        "sets_failed": stats.sets_failed,
+        "sets_skipped": stats.sets_skipped_non_csv,
+        "total_tracks": stats.total_tracks,
+        "failed_set_labels": list(stats.failed_set_labels),
+        "api_ingest_success": (stats.ingest_failed == 0),
+        "sets_attempted": stats.sets_attempted,
+        "collection_update": False,
+        "unrecognized_filename_skips": stats.skipped_bad_filename,
+        "duplicate_csv_count": stats.duplicate_csv,
+        "ingest_skipped_no_tracks": stats.ingest_skipped_no_tracks,
+        "ingest_skipped_env_missing": stats.ingest_skipped_env_missing,
+        "ingest_attempted": stats.ingest_attempted,
+        "ingest_failed": stats.ingest_failed,
+        "spotify_failed": stats.spotify_failed,
+        "bad_filename_in_file": stats.bad_filename_in_file,
+        "track_read_failed": stats.track_read_failed,
+    }
+
+    if real_issue:
+        post_run_finding(
+            flow_name="process-new-csv-files",
+            severity="WARN",
+            text="Completed with issues: " + "; ".join(warn_parts),
+            production_only=True,
+            **common_eval,
+        )
+    else:
+        post_run_finding(
+            flow_name="process-new-csv-files",
+            severity="SUCCESS",
+            production_only=True,
+            **common_eval,
+        )
 
 
 # Backwards-compatible alias for tests and callers that import main

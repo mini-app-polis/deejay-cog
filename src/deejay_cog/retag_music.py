@@ -1,4 +1,19 @@
 """
+retag_music — WORK IN PROGRESS, LOCAL ONLY
+
+Not served by main.py. Blocked on system dependencies (ffmpeg, fpcalc
+from libchromaprint-tools) which are not currently available in the
+Railway deploy environment. See module body docstring for details.
+
+Run locally: uv run python -m deejay_cog.retag_music
+(requires ffmpeg and fpcalc binaries on PATH)
+
+Findings from this module are never posted to pipeline_evaluations.
+The failure hook fires and logs locally, but the production_only=False
+flag passed to the pipeline_eval helpers prevents any API call.
+
+---
+
 Prefect flow: retag-music
 
 Downloads audio files from a source Google Drive folder, identifies them via
@@ -30,15 +45,19 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
-from evaluator_cog.flows.pipeline_eval import evaluate_pipeline_run
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.mp3.identify import IdentificationPolicy, Mp3Identifier
 from mini_app_polis.mp3.rename import Mp3Renamer
 from mini_app_polis.mp3.tag import Mp3Tagger
-from prefect import flow, get_run_logger, task
+from prefect import flow, task
 
 import deejay_cog.config as config
+from deejay_cog._pipeline_eval import (
+    get_prefect_logger,
+    make_failure_hook,
+    post_run_finding,
+)
 
 log = logger_mod.get_logger()
 
@@ -46,43 +65,6 @@ log = logger_mod.get_logger()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _prefect_logger():
-    try:
-        return get_run_logger()
-    except Exception:
-        return log
-
-
-def _handle_flow_failure(flow, flow_run, state) -> None:
-    """Prefect failure/crash hook: write a direct evaluation finding. Never raises."""
-    logger = _prefect_logger()
-    try:
-        state_name = str(getattr(state, "name", "FAILED"))
-        state_type = str(getattr(state, "type", "")).upper()
-        severity = (
-            "ERROR" if state_type == "CRASHED" or state_name == "Crashed" else "WARN"
-        )
-        run_id = str(getattr(flow_run, "id", "") or os.environ.get("GITHUB_RUN_ID", ""))
-        if not run_id:
-            run_id = "prefect-unknown-run"
-
-        logger.error("Flow failure hook fired: run_id=%s state=%s", run_id, state_name)
-        evaluate_pipeline_run(
-            run_id=run_id,
-            repo="deejay-cog",
-            flow_name=flow.name,
-            sets_imported=0,
-            sets_failed=0,
-            sets_skipped=0,
-            total_tracks=0,
-            failed_set_labels=[],
-            severity=severity,
-            notes=f"Flow ended with state={state_name}",
-        )
-    except Exception as exc:
-        logger.error("Error in flow failure hook: %s", exc)
 
 
 def _print_all_tags(logger, tagger: Mp3Tagger, path: str) -> None:
@@ -185,7 +167,7 @@ def retag_music_file(
 
     Returns a delta dict compatible with RetagSummary fields.
     """
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
     delta = {
         "downloaded": 0,
         "identified": 0,
@@ -309,38 +291,11 @@ def retag_music_file(
 # ---------------------------------------------------------------------------
 
 
-def _evaluate_retag_run(summary: RetagSummary) -> None:
-    try:
-        run_id = (
-            os.environ.get("PREFECT_FLOW_RUN_ID")
-            or os.environ.get("GITHUB_RUN_ID")
-            or "prefect-unknown-run"
-        )
-        evaluate_pipeline_run(
-            run_id=run_id,
-            repo="deejay-cog",
-            flow_name="retag-music",
-            sets_imported=summary.uploaded,
-            sets_failed=summary.failed,
-            sets_skipped=summary.skipped,
-            total_tracks=summary.scanned,
-            failed_set_labels=[],
-            severity="INFO",
-            notes=(
-                f"scanned={summary.scanned} downloaded={summary.downloaded} "
-                f"identified={summary.identified} tagged={summary.tagged} "
-                f"uploaded={summary.uploaded} deleted={summary.deleted} failed={summary.failed}"
-            ),
-        )
-    except Exception as exc:
-        log.error("evaluate_pipeline_run failed: %s", exc)
-
-
 @flow(
     name="retag-music",
     description="Download audio files from Drive, identify via AcoustID/MusicBrainz, write tags, and upload.",
-    on_failure=[_handle_flow_failure],
-    on_crashed=[_handle_flow_failure],
+    on_failure=[make_failure_hook("retag-music", production_only=False)],
+    on_crashed=[make_failure_hook("retag-music", production_only=False)],
 )
 def retag_music_flow() -> RetagSummary:
     """
@@ -351,13 +306,28 @@ def retag_music_flow() -> RetagSummary:
       - update in place on low/no confidence
     IMPORTANT: This flow requires system binaries `ffmpeg` and `fpcalc`; see module docstring.
     """
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
 
     acoustid_api_key = os.getenv("ACOUSTID_API_KEY", "").strip()
     if not acoustid_api_key:
         logger.warning("ACOUSTID_API_KEY not set — skipping retag run")
         summary = RetagSummary()
-        _evaluate_retag_run(summary)
+        post_run_finding(
+            flow_name="retag-music",
+            severity="SUCCESS",
+            production_only=False,
+            sets_imported=summary.uploaded,
+            sets_failed=summary.failed,
+            sets_skipped=summary.skipped,
+            total_tracks=summary.scanned,
+            scanned=summary.scanned,
+            downloaded=summary.downloaded,
+            identified=summary.identified,
+            tagged=summary.tagged,
+            uploaded=summary.uploaded,
+            deleted=summary.deleted,
+            failed=summary.failed,
+        )
         return summary
 
     source_folder_id = config.MUSIC_UPLOAD_SOURCE_FOLDER_ID
@@ -424,7 +394,22 @@ def retag_music_flow() -> RetagSummary:
         summary.failed,
     )
 
-    _evaluate_retag_run(summary)
+    post_run_finding(
+        flow_name="retag-music",
+        severity="SUCCESS",
+        production_only=False,
+        sets_imported=summary.uploaded,
+        sets_failed=summary.failed,
+        sets_skipped=summary.skipped,
+        total_tracks=summary.scanned,
+        scanned=summary.scanned,
+        downloaded=summary.downloaded,
+        identified=summary.identified,
+        tagged=summary.tagged,
+        uploaded=summary.uploaded,
+        deleted=summary.deleted,
+        failed=summary.failed,
+    )
     return summary
 
 

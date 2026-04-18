@@ -1,14 +1,31 @@
+"""
+update_deejay_set_collection — LOCAL ONLY
+
+Not served by main.py in production. Retained for ad-hoc local runs
+during the PostgreSQL-as-source-of-truth transition. Will be retired
+when that cutover completes.
+
+Run locally: uv run python -m deejay_cog.update_deejay_set_collection
+
+Findings from this module are never posted to pipeline_evaluations.
+The failure hook fires and logs locally, but the production_only=False
+flag passed to the pipeline_eval helpers prevents any API call.
+"""
+
 import json
-import os
 import pathlib
 import re
 
-from evaluator_cog.flows.pipeline_eval import evaluate_pipeline_run
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.google import GoogleAPI
-from prefect import flow, get_run_logger
+from prefect import flow
 
 import deejay_cog.config as config
+from deejay_cog._pipeline_eval import (
+    get_prefect_logger,
+    make_failure_hook,
+    post_run_finding,
+)
 
 log = logger_mod.get_logger()
 
@@ -25,60 +42,17 @@ def _write_json_snapshot(data: dict, path: str) -> None:
     out.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def _prefect_logger():
-    try:
-        return get_run_logger()
-    except Exception:
-        return log
-
-
-def _handle_flow_failure(flow, flow_run, state) -> None:
-    """
-    Prefect failure/crash hook: write a direct evaluation finding.
-    Never raises.
-    """
-    logger = _prefect_logger()
-    try:
-        state_name = str(getattr(state, "name", "FAILED"))
-        state_type = str(getattr(state, "type", "")).upper()
-        severity = (
-            "ERROR" if state_type == "CRASHED" or state_name == "Crashed" else "WARN"
-        )
-        run_id = str(getattr(flow_run, "id", "") or os.environ.get("GITHUB_RUN_ID", ""))
-        if not run_id:
-            run_id = "prefect-unknown-run"
-
-        logger.error("Flow failure hook fired: run_id=%s state=%s", run_id, state_name)
-        evaluate_pipeline_run(
-            run_id=run_id,
-            repo="deejay-cog",
-            flow_name=flow.name,
-            sets_imported=0,
-            sets_failed=0,
-            sets_skipped=0,
-            total_tracks=0,
-            failed_set_labels=[],
-            api_ingest_success=True,
-            sets_attempted=0,
-            collection_update=True,
-            direct_finding_text=f"Flow entered {state_name} unexpectedly",
-            direct_severity=severity,
-        )
-    except Exception:
-        logger.exception("Flow failure hook failed unexpectedly")
-
-
 @flow(
     name="update-dj-set-collection",
     description="Rebuilds master DJ set collection spreadsheet "
     "and JSON snapshot. Validation layer — will be "
     "deprecated once PostgreSQL is confirmed as "
     "source of truth.",
-    on_failure=[_handle_flow_failure],
-    on_crashed=[_handle_flow_failure],
+    on_failure=[make_failure_hook("update-dj-set-collection", production_only=False)],
+    on_crashed=[make_failure_hook("update-dj-set-collection", production_only=False)],
 )
 def generate_dj_set_collection():
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
 
     logger.info("🚀 Starting generate_dj_set_collection")
     g = GoogleAPI.from_env()
@@ -244,35 +218,21 @@ def generate_dj_set_collection():
     logger.info("Completed reordering sheets")
     logger.info("✅ Finished generate_dj_set_collection")
 
-    run_id = os.environ.get("GITHUB_RUN_ID", "local-run")
-    if os.environ.get("ANTHROPIC_API_KEY") and os.environ.get("KAIANO_API_BASE_URL"):
-        try:
-            evaluate_pipeline_run(
-                run_id=run_id,
-                repo="deejay-cog",
-                flow_name="update-dj-set-collection",
-                sets_imported=0,
-                sets_failed=0,
-                sets_skipped=0,
-                total_tracks=0,
-                failed_set_labels=[],
-                api_ingest_success=True,
-                sets_attempted=0,
-                collection_update=True,
-                folders_processed=len(subfolders),
-                tabs_written=len(tabs_to_add),
-                total_sets=sum(
-                    len(fs["items"])
-                    for fs in collection_snapshot["folders"]
-                    if fs["name"].lower() != "summary"
-                ),
-                json_snapshot_written=json_snapshot_written,
-                folder_names=[f.name for f in subfolders],
-            )
-        except Exception:
-            logger.exception(
-                "Collection pipeline evaluation raised unexpectedly (should be best-effort)"
-            )
+    post_run_finding(
+        flow_name="update-dj-set-collection",
+        severity="SUCCESS",
+        production_only=False,
+        collection_update=True,
+        folders_processed=len(subfolders),
+        tabs_written=len(tabs_to_add),
+        total_sets=sum(
+            len(fs["items"])
+            for fs in collection_snapshot["folders"]
+            if fs["name"].lower() != "summary"
+        ),
+        json_snapshot_written=json_snapshot_written,
+        folder_names=[f.name for f in subfolders],
+    )
 
 
 def _extract_date_and_title(file_name: str) -> tuple[str, str]:

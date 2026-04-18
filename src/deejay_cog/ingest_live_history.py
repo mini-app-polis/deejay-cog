@@ -2,96 +2,24 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
-import json
 import os
-import urllib.error
-import urllib.request
 from typing import Any
 
 import pytz
-from evaluator_cog.flows.pipeline_eval import evaluate_pipeline_run
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.api import KaianoApiClient, KaianoApiError
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.vdj.m3u import M3UToolbox
-from prefect import flow, get_run_logger, task
+from prefect import flow, task
 
 import deejay_cog.config as config
+from deejay_cog._pipeline_eval import (
+    get_prefect_logger,
+    make_failure_hook,
+    post_run_finding,
+)
 
 log = logger_mod.get_logger()
-
-try:
-    from mini_app_polis.api import KaianoApiClient, KaianoApiError  # type: ignore
-except Exception:  # pragma: no cover
-
-    class KaianoApiError(Exception):
-        pass
-
-    class KaianoApiClient:
-        def __init__(self, base_url: str):
-            self.base_url = base_url
-
-        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-            url = f"{self.base_url.rstrip('/')}{path}"
-            body = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                url,
-                data=body,
-                method="POST",
-                headers={"Content-Type": "application/json"},
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    data = resp.read().decode("utf-8") if resp else ""
-                    return json.loads(data) if data else {}
-            except urllib.error.HTTPError as e:
-                raise KaianoApiError(
-                    f"HTTP {e.code}: {e.read().decode('utf-8')}"
-                ) from e
-            except Exception as e:
-                raise KaianoApiError(str(e)) from e
-
-
-def _prefect_logger():
-    try:
-        return get_run_logger()
-    except Exception:
-        return log
-
-
-def _handle_flow_failure(flow, flow_run, state) -> None:
-    """
-    Prefect failure/crash hook: write a direct evaluation finding.
-    Never raises.
-    """
-    logger = _prefect_logger()
-    try:
-        state_name = str(getattr(state, "name", "FAILED"))
-        state_type = str(getattr(state, "type", "")).upper()
-        severity = (
-            "ERROR" if state_type == "CRASHED" or state_name == "Crashed" else "WARN"
-        )
-        run_id = str(getattr(flow_run, "id", "") or os.environ.get("GITHUB_RUN_ID", ""))
-        if not run_id:
-            run_id = "prefect-unknown-run"
-
-        logger.error("Flow failure hook fired: run_id=%s state=%s", run_id, state_name)
-        evaluate_pipeline_run(
-            run_id=run_id,
-            repo="deejay-cog",
-            flow_name=flow.name,
-            sets_imported=0,
-            sets_failed=0,
-            sets_skipped=0,
-            total_tracks=0,
-            failed_set_labels=[],
-            api_ingest_success=True,
-            sets_attempted=0,
-            collection_update=False,
-            direct_finding_text=f"Flow entered {state_name} unexpectedly",
-            direct_severity=severity,
-        )
-    except Exception:
-        logger.exception("Flow failure hook failed unexpectedly")
 
 
 @dataclasses.dataclass
@@ -102,43 +30,17 @@ class LiveIngestSummary:
     files_failed: int
 
 
-def _evaluate_live_ingest_run(summary: LiveIngestSummary) -> None:
-    """Best-effort post-run evaluation for live history ingest."""
-    logger = _prefect_logger()
-    if not os.environ.get("ANTHROPIC_API_KEY") or not os.environ.get(
-        "KAIANO_API_BASE_URL"
-    ):
-        return
-    run_id = os.environ.get("GITHUB_RUN_ID", "local-run")
-    try:
-        sev = (
-            "INFO"
-            if summary.plays_failed == 0 and summary.files_failed == 0
-            else "WARN"
-        )
-        evaluate_pipeline_run(
-            run_id=run_id,
-            repo="deejay-cog",
-            flow_name="ingest-live-history",
-            sets_imported=0,
-            sets_failed=0,
-            sets_skipped=0,
-            total_tracks=0,
-            failed_set_labels=[],
-            api_ingest_success=True,
-            sets_attempted=0,
-            collection_update=False,
-            direct_finding_text=(
-                "Live history ingest: "
-                f"plays_sent={summary.plays_sent}, plays_failed={summary.plays_failed}, "
-                f"files_processed={summary.files_processed}, files_failed={summary.files_failed}"
-            ),
-            direct_severity=sev,
-        )
-    except Exception:
-        logger.exception(
-            "Live history pipeline evaluation raised unexpectedly (should be best-effort)"
-        )
+def _success_text(
+    summary: LiveIngestSummary,
+    *,
+    base_url_set: bool,
+    had_files: bool,
+) -> str:
+    if not base_url_set:
+        return "Run completed successfully. Skipped (KAIANO_API_BASE_URL not set)."
+    if not had_files:
+        return "Run completed successfully. No .m3u files found."
+    return "Run completed successfully."
 
 
 def build_live_plays_payload(entries: list) -> dict[str, Any]:
@@ -185,7 +87,7 @@ def process_m3u_file(
     Returns (plays_sent, plays_failed, file_ok).
     file_ok is False on API or unexpected errors; True on success or empty skip.
     """
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
     m3u_tool = M3UToolbox()
     filename = m3u_file.get("name", "")
     logger.info("Processing: %s", filename)
@@ -220,59 +122,83 @@ def process_m3u_file(
 @flow(
     name="ingest-live-history",
     description="Read VDJ .m3u history files from Drive and send plays to api-kaianolevine-com.",
-    on_failure=[_handle_flow_failure],
-    on_crashed=[_handle_flow_failure],
+    on_failure=[make_failure_hook("ingest-live-history")],
+    on_crashed=[make_failure_hook("ingest-live-history")],
 )
 def ingest_live_history() -> LiveIngestSummary:
     """
-    Read all .m3u files from Drive, parse them, and send plays to POST /v1/live-plays.
+    Read .m3u files from Drive, parse them, and send plays to POST /v1/live-plays.
+
+    Processes only the most-recent .m3u file, not all files.
     """
-    logger = _prefect_logger()
+    logger = get_prefect_logger()
     g = GoogleAPI.from_env()
     base_url = os.getenv("KAIANO_API_BASE_URL", "").strip()
+    m3u_files: list[dict[str, Any]] = []
 
     if not base_url:
         logger.warning("KAIANO_API_BASE_URL not set — skipping live history ingest")
         summary = LiveIngestSummary(
             plays_sent=0, plays_failed=0, files_processed=0, files_failed=0
         )
-        _evaluate_live_ingest_run(summary)
-        return summary
+    else:
+        client = KaianoApiClient(base_url=base_url)
+        m3u_files = list(g.drive.get_all_m3u_files() or [])
+        if not m3u_files:
+            logger.info("No .m3u files found. Nothing to ingest.")
+            summary = LiveIngestSummary(
+                plays_sent=0, plays_failed=0, files_processed=0, files_failed=0
+            )
+        else:
+            most_recent = m3u_files[0]
+            logger.info("Processing most recent file: %s", most_recent.get("name", ""))
+            ps, pf, file_ok = process_m3u_file(g, most_recent, client)
+            plays_sent = ps
+            plays_failed = pf
+            files_processed = 1 if file_ok else 0
+            files_failed = 0 if file_ok else 1
+            logger.info(
+                "Live history ingest complete. plays_sent=%d plays_failed=%d files_processed=%d files_failed=%d",
+                plays_sent,
+                plays_failed,
+                files_processed,
+                files_failed,
+            )
+            summary = LiveIngestSummary(
+                plays_sent=plays_sent,
+                plays_failed=plays_failed,
+                files_processed=files_processed,
+                files_failed=files_failed,
+            )
 
-    client = KaianoApiClient(base_url=base_url)
-
-    m3u_files = list(g.drive.get_all_m3u_files() or [])
-    if not m3u_files:
-        logger.info("No .m3u files found. Nothing to ingest.")
-        summary = LiveIngestSummary(
-            plays_sent=0, plays_failed=0, files_processed=0, files_failed=0
+    if summary.plays_failed == 0 and summary.files_failed == 0:
+        post_run_finding(
+            flow_name="ingest-live-history",
+            severity="SUCCESS",
+            text=_success_text(
+                summary, base_url_set=bool(base_url), had_files=bool(m3u_files)
+            ),
+            plays_sent=summary.plays_sent,
+            plays_failed=0,
+            files_processed=summary.files_processed,
+            files_failed=0,
         )
-        _evaluate_live_ingest_run(summary)
-        return summary
+    else:
+        post_run_finding(
+            flow_name="ingest-live-history",
+            severity="WARN",
+            text=(
+                "Completed with issues: "
+                f"plays_failed={summary.plays_failed}, "
+                f"files_failed={summary.files_failed}. "
+                "Check the most recent .m3u file for parse or upload errors."
+            ),
+            plays_sent=summary.plays_sent,
+            plays_failed=summary.plays_failed,
+            files_processed=summary.files_processed,
+            files_failed=summary.files_failed,
+        )
 
-    most_recent = m3u_files[0]
-    logger.info("Processing most recent file: %s", most_recent.get("name", ""))
-    ps, pf, file_ok = process_m3u_file(g, most_recent, client)
-
-    plays_sent = ps
-    plays_failed = pf
-    files_processed = 1 if file_ok else 0
-    files_failed = 0 if file_ok else 1
-
-    logger.info(
-        "Live history ingest complete. plays_sent=%d plays_failed=%d files_processed=%d files_failed=%d",
-        plays_sent,
-        plays_failed,
-        files_processed,
-        files_failed,
-    )
-    summary = LiveIngestSummary(
-        plays_sent=plays_sent,
-        plays_failed=plays_failed,
-        files_processed=files_processed,
-        files_failed=files_failed,
-    )
-    _evaluate_live_ingest_run(summary)
     return summary
 
 
