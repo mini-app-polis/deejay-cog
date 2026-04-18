@@ -53,7 +53,6 @@ _EVALUATOR_KWARGS = frozenset(
         "total_sets",
         "json_snapshot_written",
         "folder_names",
-        "source",
     }
 )
 
@@ -139,6 +138,7 @@ def post_run_finding(
     text: str | None = None,
     *,
     production_only: bool = True,
+    source: str = "flow_inline",
     **raw_counters: Any,
 ) -> None:
     """
@@ -158,6 +158,11 @@ def post_run_finding(
     ANTHROPIC_API_KEY are both set.
 
     Best-effort: exceptions in the API layer are logged, never raised.
+
+    source: identifies where in the flow lifecycle this finding was emitted.
+    "flow_inline" (default) for end-of-flow task calls, "flow_hook" for
+    Prefect on_failure/on_crashed hook calls. The evaluator-cog side
+    uses this to render distinct card types in Pipeline Health.
 
     Counters whose names match evaluate_pipeline_run parameters are passed
     through; remaining keyword arguments are appended to the finding text
@@ -203,7 +208,6 @@ def post_run_finding(
             "total_sets": 0,
             "json_snapshot_written": False,
             "folder_names": None,
-            "source": "flow_inline",
         }
         merged.update(eval_kw)
 
@@ -213,6 +217,7 @@ def post_run_finding(
             flow_name=flow_name,
             direct_finding_text=text_final,
             direct_severity=_direct_severity_for_eval(severity),
+            source=source,
             **merged,
         )
     except Exception:
@@ -261,6 +266,7 @@ def make_failure_hook(
                 severity=severity,
                 text=f"Flow entered {state_name} unexpectedly",
                 production_only=production_only,
+                source="flow_hook",
             )
         except Exception:
             logger.exception("Flow failure hook failed unexpectedly")

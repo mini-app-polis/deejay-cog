@@ -72,6 +72,22 @@ def test_post_run_finding_production_posts_when_env_set(monkeypatch) -> None:
     assert kw["sets_imported"] == 2
 
 
+def test_post_run_finding_default_source_is_flow_inline(monkeypatch) -> None:
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    with patch("evaluator_cog.flows.pipeline_eval.evaluate_pipeline_run") as ev:
+        pe.post_run_finding("f", "SUCCESS", production_only=True)
+    assert ev.call_args.kwargs["source"] == "flow_inline"
+
+
+def test_post_run_finding_explicit_source_is_forwarded(monkeypatch) -> None:
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    with patch("evaluator_cog.flows.pipeline_eval.evaluate_pipeline_run") as ev:
+        pe.post_run_finding("f", "WARN", production_only=True, source="flow_hook")
+    assert ev.call_args.kwargs["source"] == "flow_hook"
+
+
 def test_post_run_finding_success_default_text(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
@@ -111,6 +127,16 @@ def test_make_failure_hook_failed_posts_warn(monkeypatch) -> None:
     assert ev.call_args.kwargs["direct_severity"] == "WARN"
 
 
+def test_make_failure_hook_posts_source_flow_hook(monkeypatch) -> None:
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    hook = pe.make_failure_hook("fl", production_only=True)
+    state = SimpleNamespace(name="Failed", type="FAILED")
+    with patch("evaluator_cog.flows.pipeline_eval.evaluate_pipeline_run") as ev:
+        hook(None, None, state)
+    assert ev.call_args.kwargs["source"] == "flow_hook"
+
+
 def test_make_failure_hook_production_only_false_no_post(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
@@ -133,3 +159,20 @@ def test_make_failure_hook_swallows_post_run_finding_exception(monkeypatch) -> N
     ):
         hook(None, None, state)
     mock_log.exception.assert_called()
+
+
+def test_post_run_finding_source_in_counters_does_not_raise(monkeypatch) -> None:
+    """If a caller mistakenly passes source= via **counters, no TypeError is raised.
+
+    source is a first-class parameter and no longer in passthrough kwargs.
+    """
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    with patch("evaluator_cog.flows.pipeline_eval.evaluate_pipeline_run") as ev:
+        pe.post_run_finding(
+            "f",
+            "SUCCESS",
+            production_only=True,
+            source="flow_hook",
+        )
+    assert ev.call_args.kwargs["source"] == "flow_hook"
