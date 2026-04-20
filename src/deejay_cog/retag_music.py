@@ -140,6 +140,7 @@ def _format_metadata_summary(metadata: Any) -> str:
 
 @dataclass
 class RetagSummary:
+    """TODO: describe this class."""
     scanned: int = 0
     downloaded: int = 0
     identified: int = 0

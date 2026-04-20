@@ -141,6 +141,7 @@ def generate_summary_for_folder(
     summary_folder_id: str,
     year: str,
 ) -> bool:
+    """TODO: describe this function."""
     log.debug(
         f"Starting generate_summary_for_folder for year {year} with {len(files)} files"
     )

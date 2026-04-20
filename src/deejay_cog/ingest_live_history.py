@@ -24,6 +24,7 @@ log = logger_mod.get_logger()
 
 @dataclasses.dataclass
 class LiveIngestSummary:
+    """TODO: describe this class."""
     plays_sent: int
     plays_failed: int
     files_processed: int

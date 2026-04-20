@@ -18,13 +18,16 @@ try:
 except Exception:  # pragma: no cover
 
     class KaianoApiError(Exception):
+        """TODO: describe this class."""
         pass
 
     class KaianoApiClient:  # minimal fallback
+        """TODO: describe this class."""
         def __init__(self, base_url: str):
             self.base_url = base_url
 
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            """TODO: describe this function."""
             url = f"{self.base_url.rstrip('/')}{path}"
             body = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(
@@ -47,6 +50,7 @@ except Exception:  # pragma: no cover
 
 @dataclasses.dataclass
 class IngestSummary:
+    """TODO: describe this class."""
     sets_sent: int
     sets_failed: int
     total_tracks: int

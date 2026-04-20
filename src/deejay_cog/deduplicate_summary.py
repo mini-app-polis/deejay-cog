@@ -9,6 +9,7 @@ log = logger_mod.get_logger()
 
 
 def deduplicate_summary(spreadsheet_id: str, g: GoogleAPI | None = None) -> None:
+    """TODO: describe this function."""
     log.info(f"🚀 Starting deduplicate_summary for spreadsheet: {spreadsheet_id}")
     if g is None:
         g = GoogleAPI.from_env()

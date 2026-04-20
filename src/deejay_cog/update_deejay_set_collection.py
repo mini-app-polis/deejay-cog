@@ -52,6 +52,7 @@ def _write_json_snapshot(data: dict, path: str) -> None:
     on_crashed=[make_failure_hook("update-dj-set-collection", production_only=False)],
 )
 def generate_dj_set_collection():
+    """TODO: describe this function."""
     logger = get_prefect_logger()
 
     logger.info("🚀 Starting generate_dj_set_collection")
