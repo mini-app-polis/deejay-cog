@@ -1,3 +1,10 @@
+## [1.21.1](https://github.com/mini-app-polis/deejay-cog/compare/v1.21.0...v1.21.1) (2026-04-20)
+
+
+### Bug Fixes
+
+* downgrade API-client-missing log to warning (CD-008) ([b02b34c](https://github.com/mini-app-polis/deejay-cog/commit/b02b34ced8a2cf698721de50ab92e2368a0032f9))
+
 # [1.21.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.20.0...v1.21.0) (2026-04-18)
 
 
