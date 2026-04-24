@@ -1,3 +1,4 @@
+import dataclasses
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -44,6 +45,53 @@ def test_build_live_plays_payload_skips_missing_title_or_artist(monkeypatch) -> 
     payload = live.build_live_plays_payload(entries)
     assert len(payload["plays"]) == 1
     assert payload["plays"][0]["title"] == "Ok"
+
+
+def test_build_live_plays_payload_shape(monkeypatch) -> None:
+    """TEST-004: assert the full key-set of the payload and of each play
+    dict. A regression that adds or drops a field would pass the per-
+    field tests silently — this test fails loudly."""
+    monkeypatch.setattr(live.config, "TIMEZONE", "America/Chicago")
+    entries = [
+        SimpleNamespace(dt="2024-06-01 14:30", title="Song A", artist="Artist A"),
+    ]
+
+    payload = live.build_live_plays_payload(entries)
+
+    assert set(payload.keys()) == {"plays"}
+    assert isinstance(payload["plays"], list)
+    assert len(payload["plays"]) == 1
+
+    play = payload["plays"][0]
+    assert set(play.keys()) == {"played_at", "title", "artist"}
+    assert isinstance(play["played_at"], str)
+    assert isinstance(play["title"], str)
+    assert isinstance(play["artist"], str)
+
+
+def test_build_live_plays_payload_empty_entries_shape(monkeypatch) -> None:
+    """Shape assertion holds even when all entries are filtered out."""
+    monkeypatch.setattr(live.config, "TIMEZONE", "America/Chicago")
+
+    payload = live.build_live_plays_payload([])
+
+    assert set(payload.keys()) == {"plays"}
+    assert payload["plays"] == []
+
+
+def test_live_ingest_summary_dataclass_fields() -> None:
+    """TEST-004: assert LiveIngestSummary exposes exactly the expected
+    field set. Prevents silent field additions/removals."""
+    fields = {f.name for f in dataclasses.fields(live.LiveIngestSummary)}
+    assert fields == {"plays_sent", "plays_failed", "files_processed", "files_failed"}
+
+    summary = live.LiveIngestSummary(
+        plays_sent=1, plays_failed=2, files_processed=3, files_failed=4
+    )
+    assert summary.plays_sent == 1
+    assert summary.plays_failed == 2
+    assert summary.files_processed == 3
+    assert summary.files_failed == 4
 
 
 def test_ingest_live_history_skips_when_no_api_url(monkeypatch) -> None:
