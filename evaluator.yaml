@@ -15,3 +15,20 @@ exemptions:
 
   - rule: CD-010
     reason: "on-demand cog with no expected cadence — flows run only when Kaiano triggers DJ event processing (roughly monthly). Healthchecks.io's liveness model assumes a regular cadence and doesn't apply here. Per-flow success/failure is observable via Prefect run state."
+
+  - rule: PIPE-005
+    reason: >
+      The flagged call (g.drive.delete_file in
+      src/deejay_cog/process_new_files.py inside
+      remove_summary_file_for_year) deletes a *derivative summary
+      sheet*, not an upstream input. The summary sheet is created by
+      this same cog in generate_summaries.py (via
+      g.drive.create_spreadsheet_in_folder) and is regenerated from
+      scratch on every generate-summaries run. The deletion runs
+      immediately before regeneration to prevent stale duplicates
+      from accumulating in the Summary folder. PIPE-005's intent is
+      to protect raw inputs (CSVs, transcripts) from accidental
+      deletion; that intent does not apply here. The deterministic
+      checker's pattern match on delete_file(...) is too broad to
+      distinguish derivative artifacts from upstream inputs —
+      tracked as a future tightening of the PIPE-005 detector.
