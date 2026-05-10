@@ -50,20 +50,18 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           KAIANO_API_BASE_URL: ${{ vars.KAIANO_API_BASE_URL }}
         run: |
+          # Payload must exactly match api-kaianolevine-com's
+          # PipelineEvaluationCreate schema (extra="forbid"). Any unknown
+          # field returns 422. Keep this in sync with the schema in
+          # api-kaianolevine-com/src/kaianolevine_api/routers/evaluations.py.
           curl -sf -X POST "${KAIANO_API_BASE_URL}/v1/evaluations" \
             -H "Content-Type: application/json" \
             -d "{
               \"run_id\": \"${{ github.run_id }}\",
               \"repo\": \"deejay-cog\",
               \"flow_name\": \"${{ github.workflow }}\",
-              \"sets_imported\": 0,
-              \"sets_failed\": 0,
-              \"sets_skipped\": 0,
-              \"total_tracks\": 0,
-              \"failed_set_labels\": [],
-              \"api_ingest_success\": true,
-              \"sets_attempted\": 0,
-              \"collection_update\": false,
-              \"direct_finding_text\": \"GitHub Actions step failed in: ${{ github.workflow }} (run ${{ github.run_id }})\",
-              \"direct_severity\": \"ERROR\"
+              \"dimension\": \"pipeline_consistency\",
+              \"severity\": \"ERROR\",
+              \"finding\": \"GitHub Actions step failed in: ${{ github.workflow }} (run ${{ github.run_id }})\",
+              \"source\": \"flow_hook\"
             }" || true
