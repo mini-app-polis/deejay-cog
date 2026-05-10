@@ -1,3 +1,10 @@
+## [1.21.4](https://github.com/mini-app-polis/deejay-cog/compare/v1.21.3...v1.21.4) (2026-05-10)
+
+
+### Bug Fixes
+
+* pipeline evals ([bfc9104](https://github.com/mini-app-polis/deejay-cog/commit/bfc9104049f995114827e4ed26ef1098733ce7a6))
+
 ## [1.21.3](https://github.com/mini-app-polis/deejay-cog/compare/v1.21.2...v1.21.3) (2026-04-24)
 
 
