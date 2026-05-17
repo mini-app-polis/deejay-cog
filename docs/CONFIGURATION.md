@@ -52,22 +52,10 @@ These dependencies are specific to `retag-music` and must be explicitly provisio
 | | |
 |--|--|
 | **Required** | No |
-| **Description** | Anthropic API key (via **evaluator-cog**). Together with **`KAIANO_API_BASE_URL`**, it gates **production** `deejay_cog._pipeline_eval.post_run_finding` posts for **`process_new_files.py`** and **`ingest_live_history.py`**. Local-only flows (`generate_summaries.py`, `update_deejay_set_collection.py`, `retag_music.py`) never post findings regardless of this key. |
+| **Description** | Anthropic API key. Reserved for the LLM-backed paths in **evaluator-cog**. Self-reported `pipeline_consistency` findings from `deejay_cog._pipeline_eval.post_run_finding` POST directly to `/v1/evaluations` and do **not** consult this key. |
 | **Example** | `sk-antropic-...` |
 | **Source** | GitHub Actions: **secret** `ANTHROPIC_API_KEY` |
-| **Used by** | `deejay_cog._pipeline_eval` (production flows only, for gated evaluation posts). |
-
----
-
-### STANDARDS_VERSION
-
-| | |
-|--|--|
-| **Required** | No (defaults to `6.0`) |
-| **Description** | Version of the standards document being evaluated against. |
-| **Example** | `6.0` |
-| **Source** | GitHub Actions: environment variable `STANDARDS_VERSION` |
-| **Used by** | `pipeline_evaluator.py` |
+| **Used by** | `evaluator-cog` LLM paths only. |
 
 ---
 
@@ -185,7 +173,7 @@ These dependencies are specific to `retag-music` and must be explicitly provisio
 | | |
 |--|--|
 | **Required** | No — API ingest and pipeline evaluation are both skipped if unset. |
-| **Description** | Base URL for the deejay-marvel-api instance. Used to POST new sets, live history plays, and the full Spotify playlist catalog (`POST /v1/spotify/playlists` from `spotify_sync.push_playlists_to_api` after CSV Spotify sync). Also gates **production** pipeline evaluation posts in `deejay_cog._pipeline_eval` (requires **`ANTHROPIC_API_KEY`** as well). |
+| **Description** | Base URL for the deejay-marvel-api instance. Used to POST new sets, live history plays, the full Spotify playlist catalog (`POST /v1/spotify/playlists` from `spotify_sync.push_playlists_to_api` after CSV Spotify sync), and self-reported pipeline evaluations (`POST /v1/evaluations` from `deejay_cog._pipeline_eval`). |
 | **Example** | `https://your-api.railway.app` |
 | **Source** | GitHub Actions: **variable** `KAIANO_API_BASE_URL`. Locally: `.env`. |
 | **Used by** | `process_new_files.py`, `ingest_live_history.py`, `ingest_to_api.py`, `spotify_sync.py`, and `deejay_cog._pipeline_eval` (production evaluation gating). |

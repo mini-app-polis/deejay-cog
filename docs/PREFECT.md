@@ -70,11 +70,13 @@ The single `deejay` deployment is triggerable via:
 
 ## Evaluation
 
-Pipeline evaluation logic lives in **evaluator-cog**:
+LLM-backed pipeline evaluation lives in **evaluator-cog**:
 https://github.com/mini-app-polis/evaluator-cog
 
 `deejay_cog._pipeline_eval` centralizes Prefect logging, run IDs, failure hooks,
-and a single end-of-run `post_run_finding` call per flow. Hooks and success posts
-invoke `evaluate_pipeline_run` when `production_only=True` and both
-`KAIANO_API_BASE_URL` and `ANTHROPIC_API_KEY` are set. Local-only and WIP flows
-pass `production_only=False` so they never POST findings, regardless of env.
+and a single end-of-run `post_run_finding` call per flow. Findings on the
+`pipeline_consistency` dimension are *self-reported*: the helper POSTs directly
+to `/v1/evaluations` (with severity preserved, including SUCCESS) when
+`production_only=True` and `KAIANO_API_BASE_URL` is set. Local-only and WIP
+flows pass `production_only=False` so they never POST findings, regardless of
+env. `ANTHROPIC_API_KEY` is not required for this self-reported path.

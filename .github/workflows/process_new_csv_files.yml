@@ -20,7 +20,6 @@ jobs:
       KAIANO_API_OWNER_ID: ${{ vars.KAIANO_API_OWNER_ID }}
       OWNER_ID: ${{ vars.OWNER_ID }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      STANDARDS_VERSION: "6.0"
       PREFECT_API_KEY: ${{ secrets.PREFECT_API_KEY }}
       PREFECT_API_URL: ${{ vars.PREFECT_API_URL }}
       SPOTIPY_CLIENT_ID: ${{ secrets.SPOTIPY_CLIENT_ID }}

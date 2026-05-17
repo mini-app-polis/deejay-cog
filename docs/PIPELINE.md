@@ -60,9 +60,9 @@ View runs: [app.prefect.cloud](https://app.prefect.cloud)
 
 ## Observability
 
-- **Pipeline evaluation** — Production flows call `deejay_cog._pipeline_eval.post_run_finding` at normal completion: **exactly one** finding per run, with `direct_severity` mapped to the evaluator (SUCCESS intent is sent as **INFO** to match evaluator-cog’s allowed direct severities). Severity is **SUCCESS** (stored as INFO) for clean completion including intentional skips (e.g. API URL unset); **WARN** when the run finished but real-issue counters are non-zero; **ERROR** only from the failure/crash hook.
+- **Pipeline evaluation** — Production flows call `deejay_cog._pipeline_eval.post_run_finding` at normal completion: **exactly one** self-reported `pipeline_consistency` finding per run, POSTed directly to `/v1/evaluations` with severity preserved verbatim. Severity is **SUCCESS** for clean completion (including intentional skips like API URL unset), **WARN** when the run finished but real-issue counters are non-zero, **ERROR** only from the failure/crash hook.
 - **Local-only and WIP flows** use `production_only=False`: hooks still log, but **no** HTTP posts to `pipeline_evaluations`, regardless of environment variables.
-- **Gating for production posts** — `post_run_finding` posts only when `production_only=True` **and** both **`KAIANO_API_BASE_URL`** and **`ANTHROPIC_API_KEY`** are set (see [CONFIGURATION.md](CONFIGURATION.md)).
+- **Gating for production posts** — `post_run_finding` posts only when `production_only=True` **and** **`KAIANO_API_BASE_URL`** is set (see [CONFIGURATION.md](CONFIGURATION.md)). `ANTHROPIC_API_KEY` is no longer required for self-reported findings.
 
 ---
 
