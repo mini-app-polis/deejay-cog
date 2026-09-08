@@ -1,3 +1,15 @@
+# [1.28.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.27.5...v1.28.0) (2026-09-08)
+
+
+### Bug Fixes
+
+* dependency ([99551c5](https://github.com/mini-app-polis/deejay-cog/commit/99551c5714370907b5a662ded657b3fd3ae7303d))
+
+
+### Features
+
+* utilizing common and notification at the cog level ([79a0b9f](https://github.com/mini-app-polis/deejay-cog/commit/79a0b9f20aec31c820d54127526fc9c94305813f))
+
 ## [1.27.5](https://github.com/mini-app-polis/deejay-cog/compare/v1.27.4...v1.27.5) (2026-09-07)
 
 
