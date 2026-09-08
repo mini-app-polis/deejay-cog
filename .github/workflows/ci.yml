@@ -32,6 +32,13 @@ jobs:
       - name: Set up Python
         run: uv python install 3.11
 
+      # CD-020. `uv sync` without --locked silently re-resolves when the
+      # lockfile and pyproject.toml disagree, so a stale lock passes CI and
+      # then fails the deploy, where `uv sync --locked` refuses the drift.
+      # Checked here because this is where the failure is cheap to fix.
+      - name: Verify the lockfile matches pyproject
+        run: uv lock --check
+
       - name: Install dependencies
         run: uv sync --all-extras
 

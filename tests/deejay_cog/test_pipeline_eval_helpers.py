@@ -179,11 +179,19 @@ def test_make_failure_hook_production_only_false_no_post(monkeypatch) -> None:
 
 
 def test_post_run_finding_swallows_underlying_exceptions(monkeypatch) -> None:
-    """The library is best-effort; the shim must not regress on that."""
+    """The library is best-effort; the shim must not regress on that.
+
+    Returning normally is the assertion that nothing propagated — a raise
+    would surface as this test erroring. The report is checked too, so
+    "swallowed it" cannot be confused with "never tried".
+    """
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    with patch.object(ps, "_deliver", side_effect=RuntimeError("boom")):
-        # Must not raise.
-        pe.post_run_finding("f", "SUCCESS", production_only=True, notable=True)
+    with patch.object(ps, "_deliver", side_effect=RuntimeError("boom")) as deliver:
+        result = pe.post_run_finding("f", "SUCCESS", production_only=True, notable=True)
+
+    assert result.failed == 1
+    assert result.sent == 0
+    deliver.assert_called_once()
 
 
 def test_make_failure_hook_swallows_post_exception(monkeypatch) -> None:
