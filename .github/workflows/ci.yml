@@ -13,7 +13,7 @@ jobs:
   # mini-app-polis/.github so the pinned tool versions and the gating
   # decisions are in one place; see that repo's README for the inputs.
   security:
-    uses: mini-app-polis/.github/.github/workflows/security.yml@v1
+    uses: mini-app-polis/.github/.github/workflows/security.yml@v2
     with:
       language: python
       package-manager: uv
