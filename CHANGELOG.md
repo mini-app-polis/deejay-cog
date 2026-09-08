@@ -1,3 +1,10 @@
+## [1.28.1](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.0...v1.28.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* ci verification ([983a4a6](https://github.com/mini-app-polis/deejay-cog/commit/983a4a6e92f5f535592fecd6c590243033afbc14))
+
 # [1.28.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.27.5...v1.28.0) (2026-09-08)
 
 
