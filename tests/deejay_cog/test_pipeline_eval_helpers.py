@@ -29,9 +29,12 @@ def test_reexports_library_helpers() -> None:
 
 def test_post_run_finding_binds_repo(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    with patch.object(ps, "_post_evaluation") as post:
-        pe.post_run_finding("my-flow", "SUCCESS", production_only=True)
-    payload = post.call_args.args[0]
+    with (
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
+        pe.post_run_finding("my-flow", "SUCCESS", production_only=True, notable=True)
+    payload = post.call_args.kwargs
     assert payload["repo"] == "deejay-cog"
     assert payload["flow_name"] == "my-flow"
     assert payload["severity"] == "SUCCESS"
@@ -41,22 +44,26 @@ def test_post_run_finding_binds_repo(monkeypatch) -> None:
     # is the library's contract (tested in common-python-utils); this
     # shim's contract is the repo/flow/severity binding and the default
     # success text. Don't couple the two.
-    assert "Run completed successfully." in payload["finding"]
+    assert "Run completed successfully." in payload["text"]
 
 
 def test_post_run_finding_drops_absorbed_kwargs_from_text(monkeypatch) -> None:
     """sets_imported, total_tracks etc. must not surface in the finding text."""
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    with patch.object(ps, "_post_evaluation") as post:
+    with (
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
         pe.post_run_finding(
             "my-flow",
             "SUCCESS",
             production_only=True,
+            notable=True,
             sets_imported=3,
             total_tracks=42,
             ingest_attempted=1,
         )
-    finding = post.call_args.args[0]["finding"]
+    finding = post.call_args.kwargs["text"]
     assert "sets_imported" not in finding
     assert "total_tracks" not in finding
     # Non-absorbed counter does surface
@@ -65,7 +72,10 @@ def test_post_run_finding_drops_absorbed_kwargs_from_text(monkeypatch) -> None:
 
 def test_post_run_finding_production_only_false_no_post(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    with patch.object(ps, "_post_evaluation") as post:
+    with (
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
         pe.post_run_finding("f", "SUCCESS", production_only=False)
     post.assert_not_called()
 
@@ -73,32 +83,50 @@ def test_post_run_finding_production_only_false_no_post(monkeypatch) -> None:
 def test_post_run_finding_preserves_success_severity(monkeypatch) -> None:
     """Regression: SUCCESS must not be downgraded."""
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    with patch.object(ps, "_post_evaluation") as post:
-        pe.post_run_finding("f", "SUCCESS", production_only=True)
-    assert post.call_args.args[0]["severity"] == "SUCCESS"
+    with (
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
+        pe.post_run_finding("f", "SUCCESS", production_only=True, notable=True)
+    assert post.call_args.kwargs["severity"] == "SUCCESS"
 
 
-def test_post_run_finding_omits_standards_version(monkeypatch) -> None:
-    """Regression: standards_version must not appear in self-reported posts."""
+def test_post_run_finding_goes_to_notify_not_evaluations(monkeypatch) -> None:
+    """Regression: run status is a notification, not a finding.
+
+    deejay-cog's runs are not graded against the standards catalog, so
+    they must not land in the evaluations table — that conflation is why
+    the API had to null out standards_version on those rows.
+    """
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    monkeypatch.setenv("STANDARDS_VERSION", "6.0")
-    with patch.object(ps, "_post_evaluation") as post:
-        pe.post_run_finding("f", "SUCCESS", production_only=True)
-    assert "standards_version" not in post.call_args.args[0]
+    client = MagicMock()
+    with patch(
+        "mini_app_polis.api.KaianoApiClient.from_env", return_value=client
+    ) as from_env:
+        pe.post_run_finding("f", "SUCCESS", production_only=True, notable=True)
+    from_env.assert_called_once_with(machine_name="deejay-cog")
+    client.notify.assert_called_once()
+    client.post.assert_not_called()
 
 
 def test_post_run_finding_explicit_source_is_forwarded(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    with patch.object(ps, "_post_evaluation") as post:
+    with (
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
         pe.post_run_finding(
             "f", "WARN", text="bad", production_only=True, source="flow_hook"
         )
-    assert post.call_args.args[0]["source"] == "flow_hook"
+    assert post.call_args.kwargs["source"] == "flow_hook"
 
 
 def test_post_run_finding_warn_includes_extras(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    with patch.object(ps, "_post_evaluation") as post:
+    with (
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
         pe.post_run_finding(
             "f",
             "WARN",
@@ -108,16 +136,19 @@ def test_post_run_finding_warn_includes_extras(monkeypatch) -> None:
         )
     # ``in`` rather than ``==`` — the library appends
     # ``(processor=X.Y.Z)`` when the cog distribution is installed.
-    assert "Completed with issues spotify_failed=2" in post.call_args.args[0]["finding"]
+    assert "Completed with issues spotify_failed=2" in post.call_args.kwargs["text"]
 
 
 def test_make_failure_hook_binds_repo_and_emits_warn(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
     hook = pe.make_failure_hook("fl", production_only=True)
     state = SimpleNamespace(name="Failed", type="FAILED")
-    with patch.object(ps, "_post_evaluation") as post:
+    with (
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
         hook(None, None, state)
-    payload = post.call_args.args[0]
+    payload = post.call_args.kwargs
     assert payload["repo"] == "deejay-cog"
     assert payload["severity"] == "WARN"
     assert payload["source"] == "flow_hook"
@@ -127,16 +158,22 @@ def test_make_failure_hook_crashed_emits_error(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
     hook = pe.make_failure_hook("fl", production_only=True)
     state = SimpleNamespace(name="Crashed", type="CRASHED")
-    with patch.object(ps, "_post_evaluation") as post:
+    with (
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
         hook(None, None, state)
-    assert post.call_args.args[0]["severity"] == "ERROR"
+    assert post.call_args.kwargs["severity"] == "ERROR"
 
 
 def test_make_failure_hook_production_only_false_no_post(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
     hook = pe.make_failure_hook("fl", production_only=False)
     state = SimpleNamespace(name="Failed", type="FAILED")
-    with patch.object(ps, "_post_evaluation") as post:
+    with (
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
         hook(None, None, state)
     post.assert_not_called()
 
@@ -144,9 +181,9 @@ def test_make_failure_hook_production_only_false_no_post(monkeypatch) -> None:
 def test_post_run_finding_swallows_underlying_exceptions(monkeypatch) -> None:
     """The library is best-effort; the shim must not regress on that."""
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    with patch.object(ps, "_post_evaluation", side_effect=RuntimeError("boom")):
+    with patch.object(ps, "_deliver", side_effect=RuntimeError("boom")):
         # Must not raise.
-        pe.post_run_finding("f", "SUCCESS", production_only=True)
+        pe.post_run_finding("f", "SUCCESS", production_only=True, notable=True)
 
 
 def test_make_failure_hook_swallows_post_exception(monkeypatch) -> None:
@@ -165,9 +202,14 @@ def test_make_failure_hook_swallows_post_exception(monkeypatch) -> None:
 def test_post_run_finding_source_in_kwargs_does_not_raise(monkeypatch) -> None:
     """Passing source=... as a kwarg is fine — it's a first-class param."""
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    with patch.object(ps, "_post_evaluation") as post:
-        pe.post_run_finding("f", "SUCCESS", production_only=True, source="flow_hook")
-    assert post.call_args.args[0]["source"] == "flow_hook"
+    with (
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
+        pe.post_run_finding(
+            "f", "SUCCESS", production_only=True, notable=True, source="flow_hook"
+        )
+    assert post.call_args.kwargs["source"] == "flow_hook"
 
 
 def test_get_run_id_local_run_when_no_runtime_or_env(monkeypatch) -> None:

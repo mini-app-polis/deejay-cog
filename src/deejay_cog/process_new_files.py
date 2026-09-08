@@ -646,6 +646,17 @@ def process_new_csv_files_flow() -> None:
         "track_read_failed": stats.track_read_failed,
     }
 
+    # Whether this run had anything in front of it at all. A scheduled
+    # sweep over an empty folder is an idle tick; a sweep that saw files
+    # reports even when every one of them was skipped, because "there were
+    # four files and nothing was imported" is the case that hides a bug.
+    saw_input = bool(
+        stats.sets_attempted
+        or stats.sets_skipped_non_csv
+        or stats.skipped_bad_filename
+        or stats.duplicate_csv
+    )
+
     if real_issue:
         post_run_finding(
             flow_name="process-new-csv-files",
@@ -658,7 +669,15 @@ def process_new_csv_files_flow() -> None:
         post_run_finding(
             flow_name="process-new-csv-files",
             severity="SUCCESS",
+            # Spelled out here because the counters below are absorbed by
+            # the cog shim and never reach the message text.
+            text=(
+                f"Imported {stats.sets_imported} set(s) from "
+                f"{stats.sets_attempted} file(s); "
+                f"{stats.total_tracks} track(s)"
+            ),
             production_only=True,
+            notable=saw_input,
             **common_eval,
         )
 

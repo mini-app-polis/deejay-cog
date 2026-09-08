@@ -33,6 +33,7 @@ from collections.abc import Callable
 from typing import Any
 
 from mini_app_polis.pipeline_status import (
+    DeliveryReport,
     Severity,
     get_prefect_logger,
     get_run_id,
@@ -80,8 +81,9 @@ def post_run_finding(
     *,
     production_only: bool = True,
     source: str = "flow_inline",
+    notable: bool = False,
     **raw_counters: Any,
-) -> None:
+) -> DeliveryReport:
     """Emit exactly one self-reported finding for this deejay-cog run.
 
     Signature is identical to
@@ -89,15 +91,22 @@ def post_run_finding(
     ``repo`` is pre-bound to ``"deejay-cog"`` and counters in
     :data:`_DEEJAY_ABSORBED_KWARGS` are dropped before being forwarded
     (so they don't clutter the human-readable text suffix).
+
+    Note that a SUCCESS report is logged rather than sent unless the
+    caller passes ``notable=True``. Because the absorbed counters never
+    reach the message, a notable SUCCESS call should also pass its own
+    ``text`` — otherwise it announces "Run completed successfully." and
+    says nothing about what the run actually did.
     """
     extras = {k: v for k, v in raw_counters.items() if k not in _DEEJAY_ABSORBED_KWARGS}
-    _post_run_finding(
+    return _post_run_finding(
         flow_name,
         severity,
         text,
         repo=REPO,
         production_only=production_only,
         source=source,
+        notable=notable,
         **extras,
     )
 

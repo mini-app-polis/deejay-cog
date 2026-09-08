@@ -188,6 +188,11 @@ def ingest_live_history() -> LiveIngestSummary:
             text=_success_text(
                 summary, base_url_set=bool(base_url), had_files=bool(m3u_files)
             ),
+            # A poll that found no .m3u is an idle tick and stays silent.
+            # A poll that found one reports either way — "there was a file
+            # and zero plays were sent" is the run worth explaining, and it
+            # looks identical to success in the counters.
+            notable=bool(m3u_files),
             plays_sent=summary.plays_sent,
             plays_failed=0,
             files_processed=summary.files_processed,
