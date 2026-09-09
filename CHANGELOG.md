@@ -1,3 +1,10 @@
+## [1.28.4](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.3...v1.28.4) (2026-09-09)
+
+
+### Bug Fixes
+
+* **process-new-files:** contain post-import failures so an imported set is not renamed FAILED_ ([318275f](https://github.com/mini-app-polis/deejay-cog/commit/318275ff1e7ae94ba1b4cfdb856023ecbb3b729b))
+
 ## [1.28.3](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.2...v1.28.3) (2026-09-09)
 
 
