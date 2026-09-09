@@ -1,3 +1,10 @@
+## [1.28.3](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.2...v1.28.3) (2026-09-09)
+
+
+### Bug Fixes
+
+* **spotify-sync:** give the sync functions a return contract the caller can read ([0dac955](https://github.com/mini-app-polis/deejay-cog/commit/0dac955c134dee4252980d625f9a7cc50f1259db))
+
 ## [1.28.2](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.1...v1.28.2) (2026-09-09)
 
 
