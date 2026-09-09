@@ -1,3 +1,10 @@
+## [1.28.2](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.1...v1.28.2) (2026-09-09)
+
+
+### Bug Fixes
+
+* **process-new-files:** report a skipped or failed API ingest as an issue ([6075101](https://github.com/mini-app-polis/deejay-cog/commit/6075101a0df983239cddb2f7a61a787c73f11406))
+
 ## [1.28.1](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.0...v1.28.1) (2026-09-08)
 
 
