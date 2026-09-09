@@ -771,25 +771,80 @@ def test_post_import_failure_is_counted_and_warns():
     assert process_new_files._common_eval(stats)["post_import_failed"] == 1
 
 
-def test_a_set_is_never_both_imported_and_failed():
-    """sets_imported + sets_failed <= sets_attempted, whatever raised."""
-    g = _drive_for_post_upload()
-    file_meta = {"id": "file-1", "name": "2024-01-03 Venue.csv"}
-    stats = process_new_files.CsvPipelineStats(sets_attempted=1)
+def test_flow_level_failure_after_import_is_not_counted_as_failed(
+    monkeypatch, prefect_test_harness
+):
+    """The Prefect wrapper raising after a successful import must not
+    re-brand the set — this is the path .fn() cannot reach."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "")
+
+    fake_file = SimpleNamespace(id="f1", name="2024-01-02_My Venue.csv")
+    drive = SimpleNamespace(list_files=MagicMock(return_value=[fake_file]))
+    g = SimpleNamespace(drive=drive)
+    captured: dict = {}
+
+    def _fake_process_csv(g_api, meta, year, stats):
+        stats.sets_imported += 1
+        captured["stats"] = stats
+        raise RuntimeError("prefect task wrapper blew up")
 
     with (
-        patch.object(process_new_files, "read_tracks_from_sheet", return_value=[]),
+        patch.object(process_new_files.GoogleAPI, "from_env", return_value=g),
+        patch.object(process_new_files, "normalize_prefixes_in_source"),
         patch.object(
             process_new_files,
-            "_ingest_set_to_api",
-            side_effect=RuntimeError("prefect timeout"),
+            "process_csv_file",
+            side_effect=_fake_process_csv,
         ),
-        patch.object(process_new_files, "_sync_set_to_spotify"),
+        patch.object(process_new_files, "post_run_finding"),
+        patch.object(process_new_files, "config") as mock_cfg,
     ):
-        result = process_new_files.process_csv_file.fn(g, file_meta, "2024", stats)
+        mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
+        process_new_files.main()
 
-    assert result == "imported"
-    assert stats.sets_imported + stats.sets_failed <= stats.sets_attempted
+    stats = captured["stats"]
+    assert stats.sets_imported == 1
+    assert stats.sets_failed == 0
+    assert stats.post_import_failed == 1
+    assert process_new_files._real_issue(stats) is True
+
+
+def test_flow_level_failure_before_import_still_counts_as_failed(
+    monkeypatch, prefect_test_harness
+):
+    """A file that never imported must still reach sets_failed."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "")
+
+    fake_file = SimpleNamespace(id="f1", name="2024-01-02_My Venue.csv")
+    drive = SimpleNamespace(list_files=MagicMock(return_value=[fake_file]))
+    g = SimpleNamespace(drive=drive)
+    captured: dict = {}
+
+    def _fake_process_csv(g_api, meta, year, stats):
+        captured["stats"] = stats
+        raise RuntimeError("never imported")
+
+    with (
+        patch.object(process_new_files.GoogleAPI, "from_env", return_value=g),
+        patch.object(process_new_files, "normalize_prefixes_in_source"),
+        patch.object(
+            process_new_files,
+            "process_csv_file",
+            side_effect=_fake_process_csv,
+        ),
+        patch.object(process_new_files, "post_run_finding"),
+        patch.object(process_new_files, "config") as mock_cfg,
+    ):
+        mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
+        process_new_files.main()
+
+    stats = captured["stats"]
+    assert stats.sets_imported == 0
+    assert stats.sets_failed == 1
+    assert stats.post_import_failed == 0
+    assert process_new_files._real_issue(stats) is True
 
 
 def test_failed_set_is_counted_even_when_the_rename_fails():

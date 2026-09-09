@@ -764,15 +764,31 @@ def process_new_csv_files_flow() -> None:
 
         # At this point we only process CSVs
         stats.sets_attempted += 1
+        # Read before the call so the handler below can tell which side of
+        # the import the failure landed on. process_csv_file mutates this
+        # same stats object, so once it has incremented sets_imported the
+        # set IS imported — counting it in sets_failed as well would report
+        # one file as both, and put a label in failed_set_labels for a set
+        # that is sitting correctly in the Archive folder.
+        imported_before = stats.sets_imported
         try:
             process_csv_file(g, file_metadata, year, stats)
         except Exception as e:
-            logger.error(
-                "❌ Unexpected error processing %s — continuing to next file: %s",
-                filename,
-                e,
-            )
-            stats.sets_failed += 1
+            if stats.sets_imported > imported_before:
+                logger.error(
+                    "❌ Post-import step raised for %s (set is imported): %s",
+                    filename,
+                    e,
+                    exc_info=True,
+                )
+                stats.post_import_failed += 1
+            else:
+                logger.error(
+                    "❌ Unexpected error processing %s — continuing to next file: %s",
+                    filename,
+                    e,
+                )
+                stats.sets_failed += 1
 
     logger.info(
         "✅ Done: %d CSVs, %d non-CSV files, %d skipped.",
