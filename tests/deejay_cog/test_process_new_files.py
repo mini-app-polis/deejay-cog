@@ -736,6 +736,62 @@ def test_archive_move_failure_is_a_warn():
     assert process_new_files._common_eval(stats)["archive_move_failed"] == 1
 
 
+def test_post_import_failure_does_not_mark_the_set_failed():
+    """An imported, archived set must not be renamed FAILED_."""
+    g = _drive_for_post_upload()
+    file_meta = {"id": "file-1", "name": "2024-01-03 Venue.csv"}
+    stats = process_new_files.CsvPipelineStats()
+
+    with (
+        patch.object(process_new_files, "read_tracks_from_sheet", return_value=[]),
+        patch.object(
+            process_new_files,
+            "_ingest_set_to_api",
+            side_effect=RuntimeError("prefect timeout"),
+        ),
+        patch.object(process_new_files, "_sync_set_to_spotify") as mock_sync,
+    ):
+        result = process_new_files.process_csv_file.fn(g, file_meta, "2024", stats)
+
+    assert result == "imported"
+    assert stats.sets_imported == 1
+    assert stats.sets_failed == 0
+    assert stats.failed_set_labels == []
+    assert stats.post_import_failed == 1
+    mock_sync.assert_not_called()
+    for call in g.drive.rename_file.call_args_list:
+        assert not str(call.args[1]).startswith("FAILED_")
+
+
+def test_post_import_failure_is_counted_and_warns():
+    stats = process_new_files.CsvPipelineStats(post_import_failed=1)
+
+    assert process_new_files._real_issue(stats) is True
+    assert "post_import_failed=1" in " ".join(process_new_files._warn_parts(stats))
+    assert process_new_files._common_eval(stats)["post_import_failed"] == 1
+
+
+def test_a_set_is_never_both_imported_and_failed():
+    """sets_imported + sets_failed <= sets_attempted, whatever raised."""
+    g = _drive_for_post_upload()
+    file_meta = {"id": "file-1", "name": "2024-01-03 Venue.csv"}
+    stats = process_new_files.CsvPipelineStats(sets_attempted=1)
+
+    with (
+        patch.object(process_new_files, "read_tracks_from_sheet", return_value=[]),
+        patch.object(
+            process_new_files,
+            "_ingest_set_to_api",
+            side_effect=RuntimeError("prefect timeout"),
+        ),
+        patch.object(process_new_files, "_sync_set_to_spotify"),
+    ):
+        result = process_new_files.process_csv_file.fn(g, file_meta, "2024", stats)
+
+    assert result == "imported"
+    assert stats.sets_imported + stats.sets_failed <= stats.sets_attempted
+
+
 def test_failed_set_is_counted_even_when_the_rename_fails():
     """sets_failed moves before the cleanup that can fail with it."""
     g = _drive_for_post_upload()

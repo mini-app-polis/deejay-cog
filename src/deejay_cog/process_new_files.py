@@ -67,6 +67,11 @@ class CsvPipelineStats:
     #: imported; its CSV is still sitting in the source folder, where the
     #: next run will treat it as a duplicate.
     archive_move_failed: int = 0
+    #: Something escaped the ingest or Spotify calls after the set had
+    #: already uploaded and been counted. The set IS imported — this is
+    #: not sets_failed, and conflating the two is what renamed a
+    #: correctly imported CSV to FAILED_.
+    post_import_failed: int = 0
     #: A non-CSV file could not be moved out of the input folder, so it
     #: will be seen again every run until someone moves it by hand.
     non_csv_move_failed: int = 0
@@ -97,6 +102,7 @@ def _real_issue(stats: CsvPipelineStats) -> bool:
         or stats.archive_move_failed > 0
         or stats.non_csv_move_failed > 0
         or stats.duplicate_check_failed > 0
+        or stats.post_import_failed > 0
     )
 
 
@@ -140,6 +146,11 @@ def _warn_parts(stats: CsvPipelineStats) -> list[str]:
             f"duplicate_check_failed={stats.duplicate_check_failed} "
             "(flagged possible_duplicate_ rather than risk a double import)"
         )
+    if stats.post_import_failed:
+        parts.append(
+            f"post_import_failed={stats.post_import_failed} "
+            "(set imported; ingest or Spotify raised afterwards)"
+        )
     return parts
 
 
@@ -174,6 +185,7 @@ def _common_eval(stats: CsvPipelineStats) -> dict:
         "archive_move_failed": stats.archive_move_failed,
         "non_csv_move_failed": stats.non_csv_move_failed,
         "duplicate_check_failed": stats.duplicate_check_failed,
+        "post_import_failed": stats.post_import_failed,
     }
 
 
@@ -644,21 +656,40 @@ def process_csv_file(
         base_name = os.path.splitext(filename)[0]
         set_date, venue = _extract_date_and_venue(base_name)
         if set_date and venue:
-            _ingest_set_to_api(
-                spreadsheet_id=sheet_id,
-                set_date=set_date,
-                venue=venue,
-                label=base_name,
-                g=g,
-                stats=stats,
-            )
-            _sync_set_to_spotify(
-                sheet_id=sheet_id,
-                set_name=base_name,
-                label=base_name,
-                g=g,
-                stats=stats,
-            )
+            # Contained deliberately. By this point the sheet is uploaded,
+            # sets_imported is incremented and the CSV is archived — the
+            # set IS imported. Letting anything from here reach the outer
+            # handler would count it in sets_failed as well, append it to
+            # failed_set_labels, and rename the archived file FAILED_.
+            # Both calls swallow their own exceptions and record their own
+            # counters, so what lands here is the Prefect task machinery
+            # around them: a timeout, a result-persistence error. Rare,
+            # and destructive if it re-brands a good import.
+            try:
+                _ingest_set_to_api(
+                    spreadsheet_id=sheet_id,
+                    set_date=set_date,
+                    venue=venue,
+                    label=base_name,
+                    g=g,
+                    stats=stats,
+                )
+                _sync_set_to_spotify(
+                    sheet_id=sheet_id,
+                    set_name=base_name,
+                    label=base_name,
+                    g=g,
+                    stats=stats,
+                )
+            except Exception as post_exc:
+                logger.error(
+                    "Post-import step raised for %s (set is imported): %s",
+                    base_name,
+                    post_exc,
+                    exc_info=True,
+                )
+                if stats is not None:
+                    stats.post_import_failed += 1
         else:
             logger.warning(
                 "Could not extract date/venue from filename; skipping API ingest for %s",
