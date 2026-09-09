@@ -1,3 +1,10 @@
+## [1.28.5](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.4...v1.28.5) (2026-09-09)
+
+
+### Bug Fixes
+
+* **process-new-files:** do not count an imported set as failed at flow level ([b2bcc1c](https://github.com/mini-app-polis/deejay-cog/commit/b2bcc1ce3d45835d642fbc904d2960f1856376a1))
+
 ## [1.28.4](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.3...v1.28.4) (2026-09-09)
 
 
