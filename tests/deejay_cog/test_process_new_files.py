@@ -669,3 +669,128 @@ def test_main_flow_continues_after_single_file_failure(
 
     # Both valid files were attempted — the failing one did not abort the loop
     assert call_count == 2
+
+
+# ── Post-upload failures under a SUCCESS report ───────────────────────────────
+#
+# Each of these is a way a set could go missing while the run reported
+# green: the archive move taking the ingest down with it, the failure
+# counter sitting behind cleanup that fails too, an unmovable file that
+# is retried forever, and a duplicate check that could not read the
+# folder answering "no duplicate".
+
+
+def _drive_for_post_upload(*, on_move=None, on_list=None):
+    """A drive that gets one CSV as far as an uploaded sheet."""
+
+    def download_file(_file_id: str, dest: str) -> None:
+        with open(dest, "w") as f:
+            f.write("Title,Artist\nSong,Artist\n")
+
+    drive = SimpleNamespace(
+        download_file=MagicMock(side_effect=download_file),
+        ensure_folder=MagicMock(
+            side_effect=lambda _parent, name: (
+                "archive-folder-id" if name == "Archive" else "year-folder-id"
+            )
+        ),
+        list_files=MagicMock(return_value=[], side_effect=on_list),
+        upload_csv_as_google_sheet=MagicMock(return_value="sheet-id"),
+        move_file=MagicMock(side_effect=on_move),
+        rename_file=MagicMock(),
+        service=MagicMock(),
+    )
+    drive.service.files().get().execute.return_value = {"parents": ["source-folder"]}
+    sheets = SimpleNamespace(
+        formatter=SimpleNamespace(apply_formatting_to_sheet=MagicMock())
+    )
+    return SimpleNamespace(drive=drive, sheets=sheets)
+
+
+def test_archive_move_failure_still_ingests():
+    """A Drive failure on the move must not skip the POST."""
+    g = _drive_for_post_upload(on_move=RuntimeError("drive 503"))
+    file_meta = {"id": "file-1", "name": "2024-01-03 Venue.csv"}
+    stats = process_new_files.CsvPipelineStats()
+
+    with (
+        patch.object(process_new_files, "read_tracks_from_sheet", return_value=[]),
+        patch.object(process_new_files, "_ingest_set_to_api") as mock_ingest,
+        patch.object(process_new_files, "_sync_set_to_spotify") as mock_sync,
+    ):
+        result = process_new_files.process_csv_file.fn(g, file_meta, "2024", stats)
+
+    assert result == "imported"
+    mock_ingest.assert_called_once()
+    assert mock_ingest.call_args.kwargs["spreadsheet_id"] == "sheet-id"
+    mock_sync.assert_called_once()
+    assert stats.archive_move_failed == 1
+    assert process_new_files._real_issue(stats) is True
+
+
+def test_archive_move_failure_is_a_warn():
+    stats = process_new_files.CsvPipelineStats(archive_move_failed=1)
+
+    assert process_new_files._real_issue(stats) is True
+    assert "archive_move_failed=1" in " ".join(process_new_files._warn_parts(stats))
+    assert process_new_files._common_eval(stats)["archive_move_failed"] == 1
+
+
+def test_failed_set_is_counted_even_when_the_rename_fails():
+    """sets_failed moves before the cleanup that can fail with it."""
+    g = _drive_for_post_upload()
+    g.drive.upload_csv_as_google_sheet.side_effect = RuntimeError("drive quota")
+    g.drive.rename_file.side_effect = RuntimeError("drive quota")
+    file_meta = {"id": "file-2", "name": "2024-01-04 Venue.csv"}
+    stats = process_new_files.CsvPipelineStats()
+
+    result = process_new_files.process_csv_file.fn(g, file_meta, "2024", stats)
+
+    assert result == "failed"
+    assert stats.sets_failed == 1
+    assert stats.failed_set_labels == ["2024-01-04 Venue"]
+    assert process_new_files._real_issue(stats) is True
+
+
+def test_unknown_duplicate_check_flags_rather_than_imports():
+    """None from file_exists_with_base_name takes the duplicate branch."""
+    g = _drive_for_post_upload(on_list=RuntimeError("rate limit exceeded"))
+    filename = "2024-01-05 Venue.csv"
+    file_meta = {"id": "file-3", "name": filename}
+    stats = process_new_files.CsvPipelineStats()
+
+    assert (
+        process_new_files.file_exists_with_base_name(g, "year-folder-id", "anything")
+        is None
+    )
+
+    result = process_new_files.process_csv_file.fn(g, file_meta, "2024", stats)
+
+    assert result == "duplicate"
+    g.drive.upload_csv_as_google_sheet.assert_not_called()
+    g.drive.rename_file.assert_called_once_with(
+        "file-3", f"possible_duplicate_{filename}"
+    )
+    assert stats.duplicate_check_failed == 1
+    assert stats.sets_imported == 0
+    assert process_new_files._real_issue(stats) is True
+
+
+def test_unmovable_non_csv_file_is_counted():
+    drive = SimpleNamespace(
+        ensure_folder=MagicMock(return_value="year-folder-id"),
+        list_files=MagicMock(return_value=[]),
+        move_file=MagicMock(side_effect=RuntimeError("drive 503")),
+        rename_file=MagicMock(),
+    )
+    g = SimpleNamespace(drive=drive)
+    file_meta = {"id": "file-4", "name": "2024-01-15_flyer.pdf"}
+    stats = process_new_files.CsvPipelineStats()
+
+    with patch.object(process_new_files, "config") as mock_cfg:
+        mock_cfg.DJ_SETS_FOLDER_ID = "dj-sets-folder"
+        process_new_files.process_non_csv_file(g, file_meta, "2024", stats)
+
+    assert stats.non_csv_move_failed == 1
+    assert stats.sets_skipped_non_csv == 0
+    assert process_new_files._real_issue(stats) is True

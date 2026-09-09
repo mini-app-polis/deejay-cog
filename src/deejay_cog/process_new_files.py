@@ -63,6 +63,16 @@ class CsvPipelineStats:
     #: the handler below only fires once ingest_attempted has moved.
     ingest_prepare_failed: int = 0
     track_read_failed: int = 0
+    #: The Archive move failed after a successful upload. The set is
+    #: imported; its CSV is still sitting in the source folder, where the
+    #: next run will treat it as a duplicate.
+    archive_move_failed: int = 0
+    #: A non-CSV file could not be moved out of the input folder, so it
+    #: will be seen again every run until someone moves it by hand.
+    non_csv_move_failed: int = 0
+    #: The duplicate check could not read the destination folder, so
+    #: "is this already imported" has no answer this run.
+    duplicate_check_failed: int = 0
 
 
 def _real_issue(stats: CsvPipelineStats) -> bool:
@@ -84,6 +94,9 @@ def _real_issue(stats: CsvPipelineStats) -> bool:
         or stats.spotify_failed > 0
         or stats.bad_filename_in_file > 0
         or stats.track_read_failed > 0
+        or stats.archive_move_failed > 0
+        or stats.non_csv_move_failed > 0
+        or stats.duplicate_check_failed > 0
     )
 
 
@@ -112,6 +125,21 @@ def _warn_parts(stats: CsvPipelineStats) -> list[str]:
         parts.append(f"bad_filename_in_file={stats.bad_filename_in_file}")
     if stats.track_read_failed:
         parts.append(f"track_read_failed={stats.track_read_failed}")
+    if stats.archive_move_failed:
+        parts.append(
+            f"archive_move_failed={stats.archive_move_failed} "
+            "(CSV left in the source folder — next run will see it as a duplicate)"
+        )
+    if stats.non_csv_move_failed:
+        parts.append(
+            f"non_csv_move_failed={stats.non_csv_move_failed} "
+            "(file left in the input folder and will be retried every run)"
+        )
+    if stats.duplicate_check_failed:
+        parts.append(
+            f"duplicate_check_failed={stats.duplicate_check_failed} "
+            "(flagged possible_duplicate_ rather than risk a double import)"
+        )
     return parts
 
 
@@ -143,6 +171,9 @@ def _common_eval(stats: CsvPipelineStats) -> dict:
         "spotify_failed": stats.spotify_failed,
         "bad_filename_in_file": stats.bad_filename_in_file,
         "track_read_failed": stats.track_read_failed,
+        "archive_move_failed": stats.archive_move_failed,
+        "non_csv_move_failed": stats.non_csv_move_failed,
+        "duplicate_check_failed": stats.duplicate_check_failed,
     }
 
 
@@ -237,16 +268,23 @@ def remove_summary_file_for_year(g: GoogleAPI, year: str) -> None:
 
 
 # --- Utility: check for duplicate base filename in a folder ---
-def file_exists_with_base_name(g: GoogleAPI, folder_id: str, base_name: str) -> bool:
-    """Return True if a file with the given base name exists in the folder."""
+def file_exists_with_base_name(
+    g: GoogleAPI, folder_id: str, base_name: str
+) -> bool | None:
+    """Whether a file with this base name exists — or None if unknown.
+
+    Three answers, not two. Returning False on a failed listing made a
+    Drive rate limit indistinguishable from an empty folder, and the
+    caller then imported a set it already had. None says "I could not
+    find out", which is a different thing from "it is not there" and the
+    caller has to decide what to do about it.
+    """
     try:
         candidates = g.drive.list_files(folder_id, include_folders=False, trashed=False)
-        for f in candidates:
-            if os.path.splitext(f.name or "")[0] == base_name:
-                return True
     except Exception as e:
         log.error(f"Error checking for duplicates in folder {folder_id}: {e}")
-    return False
+        return None
+    return any(os.path.splitext(f.name or "")[0] == base_name for f in candidates)
 
 
 def rename_file_as_duplicate(g: GoogleAPI, file_id: str, filename: str) -> None:
@@ -272,7 +310,10 @@ def process_non_csv_file(
     try:
         year_folder_id = g.drive.ensure_folder(config.DJ_SETS_FOLDER_ID, year)
         base_name = os.path.splitext(filename)[0]
-        if file_exists_with_base_name(g, year_folder_id, base_name):
+        exists = file_exists_with_base_name(g, year_folder_id, base_name)
+        if exists is None and stats is not None:
+            stats.duplicate_check_failed += 1
+        if exists is not False:
             rename_file_as_duplicate(g, file_id, filename)
             if stats is not None:
                 stats.sets_skipped_non_csv += 1
@@ -287,6 +328,8 @@ def process_non_csv_file(
             stats.sets_skipped_non_csv += 1
     except Exception as e:
         log.error(f"Failed to move non-CSV file {filename}: {e}")
+        if stats is not None:
+            stats.non_csv_move_failed += 1
 
 
 def _extract_year_from_filename(filename: str) -> str | None:
@@ -535,7 +578,10 @@ def process_csv_file(
 
         year_folder_id = g.drive.ensure_folder(config.DJ_SETS_FOLDER_ID, year)
         base_name = os.path.splitext(filename)[0]
-        if file_exists_with_base_name(g, year_folder_id, base_name):
+        exists = file_exists_with_base_name(g, year_folder_id, base_name)
+        if exists is None and stats is not None:
+            stats.duplicate_check_failed += 1
+        if exists is not False:
             logger.warning(
                 f"⚠️ Destination already contains file with base name '{base_name}' in year folder {year_folder_id}. Marking original as possible duplicate and skipping."
             )
@@ -558,6 +604,13 @@ def process_csv_file(
                 if stats is not None:
                     stats.track_read_failed += 1
 
+        # The archive move and the ingest are independent. They were in
+        # one try, so a Drive 5xx on the move also skipped the ingest and
+        # the Spotify sync — and the function still returned "imported"
+        # with sets_imported already incremented. The sheet existed, was
+        # never POSTed, and the CSV was still in the source folder, so
+        # the next run flagged it possible_duplicate_ and it was never
+        # ingested at all. Under a SUCCESS report.
         try:
             archive_folder_id = g.drive.ensure_folder(year_folder_id, "Archive")
             if _file_already_in_folder(g, file_id, archive_folder_id):
@@ -573,48 +626,55 @@ def process_csv_file(
                     remove_from_parents=True,
                 )
                 logger.info(f"📦 Moved original file to Archive subfolder: {filename}")
-
-            base_name = os.path.splitext(filename)[0]
-            set_date, venue = _extract_date_and_venue(base_name)
-            if set_date and venue:
-                _ingest_set_to_api(
-                    spreadsheet_id=sheet_id,
-                    set_date=set_date,
-                    venue=venue,
-                    label=base_name,
-                    g=g,
-                    stats=stats,
-                )
-                _sync_set_to_spotify(
-                    sheet_id=sheet_id,
-                    set_name=base_name,
-                    label=base_name,
-                    g=g,
-                    stats=stats,
-                )
-            else:
-                logger.warning(
-                    "Could not extract date/venue from filename; skipping API ingest for %s",
-                    base_name,
-                )
-                if stats is not None:
-                    stats.bad_filename_in_file += 1
         except Exception as move_exc:
             logger.error(
                 f"Failed to move original file to Archive subfolder: {move_exc}"
             )
+            if stats is not None:
+                stats.archive_move_failed += 1
+
+        base_name = os.path.splitext(filename)[0]
+        set_date, venue = _extract_date_and_venue(base_name)
+        if set_date and venue:
+            _ingest_set_to_api(
+                spreadsheet_id=sheet_id,
+                set_date=set_date,
+                venue=venue,
+                label=base_name,
+                g=g,
+                stats=stats,
+            )
+            _sync_set_to_spotify(
+                sheet_id=sheet_id,
+                set_name=base_name,
+                label=base_name,
+                g=g,
+                stats=stats,
+            )
+        else:
+            logger.warning(
+                "Could not extract date/venue from filename; skipping API ingest for %s",
+                base_name,
+            )
+            if stats is not None:
+                stats.bad_filename_in_file += 1
 
         return "imported"
 
     except Exception as e:
         logger.error(f"❌ Failed to upload or format {filename}: {e}")
+        # Counted before the rename, not after. Whatever broke the upload
+        # — a Drive quota, an auth expiry — usually breaks the rename
+        # too, and the old order meant the set's failure was recorded
+        # only if the cleanup succeeded. A failed set that reports SUCCESS
+        # is worse than a file left unrenamed.
+        if stats is not None:
+            stats.sets_failed += 1
+            stats.failed_set_labels.append(os.path.splitext(filename)[0])
         try:
             failed_name = f"FAILED_{filename}"
             g.drive.rename_file(file_id, failed_name)
             logger.info(f"✏️ Renamed original to '{failed_name}'")
-            if stats is not None:
-                stats.sets_failed += 1
-                stats.failed_set_labels.append(os.path.splitext(filename)[0])
         except Exception as rename_exc:
             logger.error(f"Failed to rename original to FAILED_: {rename_exc}")
         return "failed"
