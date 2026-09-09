@@ -404,6 +404,117 @@ def test_ingest_set_to_api_logs_error_on_api_error(monkeypatch):
         mock_log.error.assert_called()
 
 
+# -- severity when the ingest never happened -----------------------------------
+#
+# Four exits from _ingest_set_to_api, only two of which used to be visible
+# to the run's severity. A delivery path that becomes a no-op because a
+# variable is missing, while every instrument reports green, is the shape
+# these pin against.
+
+
+def test_missing_base_url_is_a_warn_not_a_success():
+    """A run that sent nothing because a variable was unset is not green."""
+    stats = process_new_files.CsvPipelineStats()
+    stats.sets_imported = 3
+    stats.ingest_skipped_env_missing = 3
+
+    assert process_new_files._real_issue(stats) is True
+    parts = " ".join(process_new_files._warn_parts(stats))
+    assert "ingest_skipped_env_missing=3" in parts
+    assert "KAIANO_API_BASE_URL" in parts
+
+
+def test_unavailable_client_is_a_warn_not_a_success():
+    """The same no-op, with nothing at all to read before this."""
+    stats = process_new_files.CsvPipelineStats()
+    stats.sets_imported = 2
+    stats.ingest_client_unavailable = 2
+
+    assert process_new_files._real_issue(stats) is True
+    assert "ingest_client_unavailable=2" in " ".join(
+        process_new_files._warn_parts(stats)
+    )
+
+
+def test_a_clean_run_is_still_a_success():
+    """The fix must not turn a working run WARN."""
+    stats = process_new_files.CsvPipelineStats()
+    stats.sets_attempted = 2
+    stats.sets_imported = 2
+    stats.ingest_attempted = 2
+
+    assert process_new_files._real_issue(stats) is False
+    assert process_new_files._warn_parts(stats) == []
+    assert process_new_files._common_eval(stats)["api_ingest_success"] is True
+
+
+def test_unimportable_client_is_counted(monkeypatch):
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.test")
+    stats = process_new_files.CsvPipelineStats()
+
+    # An api_client module that raises on attribute access is what an
+    # unimportable client looks like from inside the try block.
+    with patch.dict(sys.modules, {"deejay_cog.api_client": None}):
+        process_new_files._ingest_set_to_api.fn(
+            spreadsheet_id="ssid",
+            set_date="2026-01-03",
+            venue="Venue",
+            label="label",
+            g=SimpleNamespace(),
+            stats=stats,
+        )
+
+    assert stats.ingest_client_unavailable == 1
+    assert stats.ingest_attempted == 0
+    assert stats.ingest_failed == 0
+
+
+def test_failure_before_the_post_is_counted(monkeypatch):
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.test")
+    stats = process_new_files.CsvPipelineStats()
+
+    sys.modules["deejay_cog.api_client"] = SimpleNamespace(
+        api_client=lambda *_a, **_k: SimpleNamespace(post=MagicMock())
+    )
+    sys.modules["mini_app_polis.api.errors"] = SimpleNamespace(
+        KaianoApiError=type("FakeApiError", (Exception,), {})
+    )
+
+    with patch.object(
+        process_new_files,
+        "read_tracks_from_sheet",
+        side_effect=RuntimeError("sheet unreadable"),
+    ):
+        process_new_files._ingest_set_to_api.fn(
+            spreadsheet_id="ssid",
+            set_date="2026-01-03",
+            venue="Venue",
+            label="label",
+            g=SimpleNamespace(),
+            stats=stats,
+        )
+
+    assert stats.ingest_prepare_failed == 1
+    assert stats.ingest_failed == 0
+    assert process_new_files._real_issue(stats) is True
+
+
+def test_api_ingest_success_is_false_when_nothing_was_attempted():
+    """Zero failures out of zero attempts is not a success."""
+    stats = process_new_files.CsvPipelineStats()
+    stats.ingest_skipped_env_missing = 2
+
+    assert stats.ingest_attempted == 0
+    assert process_new_files._common_eval(stats)["api_ingest_success"] is False
+
+
+def test_api_ingest_success_is_false_when_preparation_failed():
+    stats = process_new_files.CsvPipelineStats()
+    stats.ingest_prepare_failed = 1
+
+    assert process_new_files._common_eval(stats)["api_ingest_success"] is False
+
+
 # -- _extract_year_from_filename ----------------------------------------------
 
 

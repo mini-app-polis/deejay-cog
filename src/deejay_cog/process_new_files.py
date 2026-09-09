@@ -54,7 +54,96 @@ class CsvPipelineStats:
     bad_filename_in_file: int = 0  # post-import path: could not extract date/venue
     ingest_skipped_no_tracks: int = 0
     ingest_skipped_env_missing: int = 0
+    #: The API client could not be imported or constructed. Distinct from
+    #: ingest_skipped_env_missing, which is a configuration gap, and from
+    #: ingest_failed, which means the API answered and said no.
+    ingest_client_unavailable: int = 0
+    #: Raised before the POST was attempted — reading the sheet or
+    #: building the payload. Previously uncounted, because the guard on
+    #: the handler below only fires once ingest_attempted has moved.
+    ingest_prepare_failed: int = 0
     track_read_failed: int = 0
+
+
+def _real_issue(stats: CsvPipelineStats) -> bool:
+    """Whether this run produced anything a human should look at.
+
+    A set that was never offered to the API is not a set that succeeded.
+    ``ingest_skipped_env_missing`` and ``ingest_client_unavailable`` both
+    mean the whole ingest path was a no-op for this run, which is
+    precisely the state that must not be reported as SUCCESS:
+    ``ingest_failed`` stays 0 because nothing was ever attempted, and a
+    severity derived only from failures reads that as a clean run.
+    """
+    return (
+        stats.sets_failed > 0
+        or stats.ingest_failed > 0
+        or stats.ingest_prepare_failed > 0
+        or stats.ingest_skipped_env_missing > 0
+        or stats.ingest_client_unavailable > 0
+        or stats.spotify_failed > 0
+        or stats.bad_filename_in_file > 0
+        or stats.track_read_failed > 0
+    )
+
+
+def _warn_parts(stats: CsvPipelineStats) -> list[str]:
+    """The ``k=v`` fragments naming what went wrong, in a fixed order."""
+    parts: list[str] = []
+    if stats.sets_failed:
+        parts.append(f"sets_failed={stats.sets_failed}")
+    if stats.ingest_failed:
+        parts.append(f"ingest_failed={stats.ingest_failed}")
+    if stats.ingest_prepare_failed:
+        parts.append(f"ingest_prepare_failed={stats.ingest_prepare_failed}")
+    if stats.ingest_skipped_env_missing:
+        parts.append(
+            f"ingest_skipped_env_missing={stats.ingest_skipped_env_missing} "
+            "(KAIANO_API_BASE_URL unset — nothing was sent)"
+        )
+    if stats.ingest_client_unavailable:
+        parts.append(
+            f"ingest_client_unavailable={stats.ingest_client_unavailable} "
+            "(API client could not be built — nothing was sent)"
+        )
+    if stats.spotify_failed:
+        parts.append(f"spotify_failed={stats.spotify_failed}")
+    if stats.bad_filename_in_file:
+        parts.append(f"bad_filename_in_file={stats.bad_filename_in_file}")
+    if stats.track_read_failed:
+        parts.append(f"track_read_failed={stats.track_read_failed}")
+    return parts
+
+
+def _common_eval(stats: CsvPipelineStats) -> dict:
+    """The counters carried on the run report, whatever its severity."""
+    return {
+        "sets_imported": stats.sets_imported,
+        "sets_failed": stats.sets_failed,
+        "sets_skipped": stats.sets_skipped_non_csv,
+        "total_tracks": stats.total_tracks,
+        "failed_set_labels": list(stats.failed_set_labels),
+        # Not "nothing failed" — "something was attempted and none of it
+        # failed". Zero failures out of zero attempts is not a success.
+        "api_ingest_success": (
+            stats.ingest_attempted > 0
+            and stats.ingest_failed == 0
+            and stats.ingest_prepare_failed == 0
+        ),
+        "sets_attempted": stats.sets_attempted,
+        "collection_update": False,
+        "unrecognized_filename_skips": stats.skipped_bad_filename,
+        "duplicate_csv_count": stats.duplicate_csv,
+        "ingest_skipped_no_tracks": stats.ingest_skipped_no_tracks,
+        "ingest_skipped_env_missing": stats.ingest_skipped_env_missing,
+        "ingest_client_unavailable": stats.ingest_client_unavailable,
+        "ingest_prepare_failed": stats.ingest_prepare_failed,
+        "ingest_attempted": stats.ingest_attempted,
+        "ingest_failed": stats.ingest_failed,
+        "spotify_failed": stats.spotify_failed,
+        "bad_filename_in_file": stats.bad_filename_in_file,
+        "track_read_failed": stats.track_read_failed,
+    }
 
 
 def normalize_prefixes_in_source(drive) -> None:
@@ -321,6 +410,8 @@ def _ingest_set_to_api(
         logger.warning(
             "⚠️ API client not available; skipping ingest for %s: %s", label, e
         )
+        if stats is not None:
+            stats.ingest_client_unavailable += 1
         return
 
     try:
@@ -348,8 +439,14 @@ def _ingest_set_to_api(
             stats.ingest_failed += 1
         logger.error("❌ API ingest failed for %s: %s", label, e)
     except Exception as e:
-        if stats is not None and stats.ingest_attempted > 0:
-            stats.ingest_failed += 1
+        if stats is not None:
+            # Which side of the POST this landed on decides which counter
+            # moves, but both are failures. The old guard counted only the
+            # first case and dropped the second on the floor.
+            if stats.ingest_attempted > 0:
+                stats.ingest_failed += 1
+            else:
+                stats.ingest_prepare_failed += 1
         logger.error("❌ Unexpected error during API ingest for %s: %s", label, e)
 
 
@@ -607,44 +704,9 @@ def process_new_csv_files_flow() -> None:
             logger.error("❌ Spotify playlist sync failed: %s", e)
             stats.spotify_failed += 1
 
-    real_issue = (
-        stats.sets_failed > 0
-        or stats.ingest_failed > 0
-        or stats.spotify_failed > 0
-        or stats.bad_filename_in_file > 0
-        or stats.track_read_failed > 0
-    )
-    warn_parts: list[str] = []
-    if stats.sets_failed:
-        warn_parts.append(f"sets_failed={stats.sets_failed}")
-    if stats.ingest_failed:
-        warn_parts.append(f"ingest_failed={stats.ingest_failed}")
-    if stats.spotify_failed:
-        warn_parts.append(f"spotify_failed={stats.spotify_failed}")
-    if stats.bad_filename_in_file:
-        warn_parts.append(f"bad_filename_in_file={stats.bad_filename_in_file}")
-    if stats.track_read_failed:
-        warn_parts.append(f"track_read_failed={stats.track_read_failed}")
-
-    common_eval = {
-        "sets_imported": stats.sets_imported,
-        "sets_failed": stats.sets_failed,
-        "sets_skipped": stats.sets_skipped_non_csv,
-        "total_tracks": stats.total_tracks,
-        "failed_set_labels": list(stats.failed_set_labels),
-        "api_ingest_success": (stats.ingest_failed == 0),
-        "sets_attempted": stats.sets_attempted,
-        "collection_update": False,
-        "unrecognized_filename_skips": stats.skipped_bad_filename,
-        "duplicate_csv_count": stats.duplicate_csv,
-        "ingest_skipped_no_tracks": stats.ingest_skipped_no_tracks,
-        "ingest_skipped_env_missing": stats.ingest_skipped_env_missing,
-        "ingest_attempted": stats.ingest_attempted,
-        "ingest_failed": stats.ingest_failed,
-        "spotify_failed": stats.spotify_failed,
-        "bad_filename_in_file": stats.bad_filename_in_file,
-        "track_read_failed": stats.track_read_failed,
-    }
+    real_issue = _real_issue(stats)
+    warn_parts = _warn_parts(stats)
+    common_eval = _common_eval(stats)
 
     # Whether this run had anything in front of it at all. A scheduled
     # sweep over an empty folder is an idle tick; a sweep that saw files
