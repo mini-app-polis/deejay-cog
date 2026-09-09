@@ -525,7 +525,15 @@ def _sync_set_to_spotify(
             return
 
         tracks = read_tracks_from_sheet(g, sheet_id)
-        sync_set_to_spotify(sp, set_name, tracks)
+        outcome = sync_set_to_spotify(sp, set_name, tracks)
+        if not outcome.ok:
+            logger.error(
+                "❌ Spotify sync failed for %s: %s",
+                label,
+                outcome.detail,
+            )
+            if stats is not None:
+                stats.spotify_failed += 1
         push_playlists_to_api(sp)
     except Exception as e:
         logger.error("❌ Spotify sync failed for %s: %s", label, e)

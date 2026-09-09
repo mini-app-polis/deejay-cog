@@ -7,6 +7,7 @@ pushes a full Spotify playlist snapshot to the Kaiano API when configured.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import Any
 
 from mini_app_polis import logger as logger_mod
@@ -16,6 +17,29 @@ from mini_app_polis.spotify import SpotifyAPI
 from .api_client import api_client
 
 log = logger_mod.get_logger()
+
+
+@dataclass(frozen=True)
+class SyncOutcome:
+    """What a Spotify operation actually did.
+
+    ``None`` was doing three jobs — "nothing to do", "worked, nothing to
+    return" and "broke" — and the caller could not tell them apart, so
+    the flow's spotify_failed counter never moved and a lost sync
+    reported SUCCESS.
+    """
+
+    ok: bool
+    detail: str = ""
+
+    @classmethod
+    def success(cls) -> SyncOutcome:
+        return cls(True)
+
+    @classmethod
+    def failure(cls, exc: BaseException) -> SyncOutcome:
+        return cls(False, f"{type(exc).__name__}: {exc}")
+
 
 # Env-driven config (mini_app_polis loads dotenv when config is first imported).
 SPOTIFY_RADIO_PLAYLIST_ID = os.getenv("SPOTIFY_RADIO_PLAYLIST_ID")
@@ -93,7 +117,11 @@ def fetch_all_playlists(sp: Any) -> list[dict]:
                 "fetch_playlists",
             ],
         )
-    except Exception:
+    except AttributeError:
+        # Only a missing method is a probe miss. A 429 or an auth failure
+        # inside a method that does exist used to land here too, and
+        # fetch_all_playlists then returned [] — which push_playlists_to_api
+        # POSTed as an empty snapshot and logged as "0 upserted".
         pass
 
     client = _first_attr(sp, ["client", "spotify", "sp", "_client", "_sp"])
@@ -127,15 +155,16 @@ def fetch_all_playlists(sp: Any) -> list[dict]:
 
 
 def push_playlists_to_api(sp: Any) -> int | None:
-    """
-    Fetch all playlists from the Spotify account and push a full snapshot
-    to POST /v1/spotify/playlists via KaianoApiClient.
+    """Fetch all playlists and push a full snapshot to the Kaiano API.
 
-    The API upserts all playlists using snapshot_id to skip unchanged rows.
-    Returns the number of playlists upserted, or None if the API call was
-    skipped (KAIANO_API_BASE_URL not set) or failed.
+    Returns the upserted count on success, or None if the push was skipped
+    because ``KAIANO_API_BASE_URL`` is not set.
 
-    Skips gracefully if KAIANO_API_BASE_URL is not set.
+    A ``KaianoApiError`` from the POST is re-raised after logging (callers
+    used to read a ``None`` return as success and log "None playlists
+    pushed"). A response with no ``upserted`` count is also a failed
+    push: this raises ``ValueError`` rather than returning ``None`` or a
+    sentinel, so the caller cannot claim the sync completed.
     """
     if not os.getenv("KAIANO_API_BASE_URL"):
         log.warning(
@@ -177,18 +206,21 @@ def push_playlists_to_api(sp: Any) -> int | None:
         response = client.post("/v1/spotify/playlists", payload)
     except KaianoApiError as e:
         log.error("Spotify playlist push to API failed: %s", e)
-        return None
+        # Raised, not returned. Both call sites read None as success and
+        # the flow logged "complete: None playlists pushed" on a total
+        # failure. The callers below now count it.
+        raise
 
     data = response.get("data") if isinstance(response, dict) else None
     if not isinstance(data, dict):
         log.error("Spotify playlist API response missing data: %s", response)
-        return None
+        raise ValueError("Spotify playlist API response missing data")
 
     upserted = data.get("upserted")
     unchanged = data.get("unchanged", 0)
     if upserted is None:
         log.error("Spotify playlist API response missing upserted count: %s", response)
-        return None
+        raise ValueError("Spotify playlist API response missing upserted count")
 
     log.info(
         "✅ Spotify playlists pushed to API: %s upserted, %s unchanged",
@@ -200,16 +232,18 @@ def push_playlists_to_api(sp: Any) -> int | None:
 
 def update_spotify_radio_playlist(
     sp: SpotifyAPI, playlist_id: str | None, found_uris: list[str]
-) -> None:
+) -> SyncOutcome:
     """Append tracks to the main radio playlist and trim."""
     if not playlist_id or not found_uris:
-        return
+        return SyncOutcome.success()
 
     try:
         sp.add_tracks_to_specific_playlist(playlist_id, found_uris)
         sp.trim_playlist_to_limit()
     except Exception as e:
         log.error("Error updating Spotify radio playlist: %s", e, exc_info=True)
+        return SyncOutcome.failure(e)
+    return SyncOutcome.success()
 
 
 def create_spotify_playlist_for_file(
@@ -246,7 +280,10 @@ def create_spotify_playlist_for_file(
             e,
             exc_info=True,
         )
-        return None
+        # Raised rather than swallowed. The caller below turns this into
+        # a SyncOutcome; returning None here made a broken playlist look
+        # exactly like a set with no tracks to add.
+        raise
 
 
 def get_spotify_client() -> SpotifyAPI | None:
@@ -268,12 +305,14 @@ def sync_set_to_spotify(
     sp: SpotifyAPI,
     set_name: str,
     tracks: list[dict],
-) -> str | None:
+) -> SyncOutcome:
     """Search Spotify for each track and update playlists.
 
-    Returns the per-set playlist ID if one was created/updated, else None.
-    Idempotent — existing playlists are found by name before creating.
-    Never raises.
+    Returns a SyncOutcome. Radio-playlist failure is a failed outcome
+    even if the per-set playlist was written: the CSV is already archived
+    by the time this runs, so this is the only moment the loss can be
+    recorded. Exceptions during search or per-set playlist create are
+    caught and returned as SyncOutcome.failure rather than raised.
     """
     try:
         found_uris: list[str] = []
@@ -299,8 +338,13 @@ def sync_set_to_spotify(
             not_found,
         )
 
-        update_spotify_radio_playlist(sp, SPOTIFY_RADIO_PLAYLIST_ID, found_uris)
-        return create_spotify_playlist_for_file(sp, set_name, found_uris)
+        radio = update_spotify_radio_playlist(sp, SPOTIFY_RADIO_PLAYLIST_ID, found_uris)
+        create_spotify_playlist_for_file(sp, set_name, found_uris)
+        # A set whose tracks never reached the radio playlist is a
+        # partial sync, and the CSV is already archived by the time this
+        # runs — so the set is never revisited and this is the only
+        # moment the loss can be recorded.
+        return radio
     except Exception as e:
         log.error("sync_set_to_spotify failed: %s", e, exc_info=True)
-        return None
+        return SyncOutcome.failure(e)

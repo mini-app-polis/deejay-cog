@@ -794,3 +794,71 @@ def test_unmovable_non_csv_file_is_counted():
     assert stats.non_csv_move_failed == 1
     assert stats.sets_skipped_non_csv == 0
     assert process_new_files._real_issue(stats) is True
+
+
+def _spotify_env(monkeypatch) -> None:
+    monkeypatch.setenv("SPOTIPY_CLIENT_ID", "cid")
+    monkeypatch.setenv("SPOTIPY_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("SPOTIPY_REFRESH_TOKEN", "rtok")
+
+
+def test_spotify_failed_moves_when_sync_returns_not_ok(monkeypatch):
+    """The counter no longer depends on an exception that never propagates."""
+    _spotify_env(monkeypatch)
+    stats = process_new_files.CsvPipelineStats()
+    outcome = SimpleNamespace(ok=False, detail="RuntimeError: token expired")
+    mock_log = MagicMock()
+
+    with (
+        patch.object(process_new_files, "get_spotify_client", return_value=MagicMock()),
+        patch.object(
+            process_new_files,
+            "read_tracks_from_sheet",
+            return_value=[{"artist": "A", "title": "T"}],
+        ),
+        patch.object(process_new_files, "sync_set_to_spotify", return_value=outcome),
+        patch.object(process_new_files, "push_playlists_to_api", return_value=0),
+        patch.object(process_new_files, "get_prefect_logger", return_value=mock_log),
+    ):
+        process_new_files._sync_set_to_spotify.fn(
+            sheet_id="ssid",
+            set_name="2024-01-01 Venue",
+            label="2024-01-01 Venue",
+            g=SimpleNamespace(),
+            stats=stats,
+        )
+
+    assert stats.spotify_failed == 1
+    mock_log.error.assert_called()
+    assert "token expired" in mock_log.error.call_args.args[2]
+
+
+def test_a_failed_push_is_counted_not_logged_as_none(
+    monkeypatch, prefect_test_harness
+) -> None:
+    """push_playlists_to_api raising reaches spotify_failed."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic")
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
+    _spotify_env(monkeypatch)
+
+    drive = SimpleNamespace(list_files=MagicMock(return_value=[]))
+    g = SimpleNamespace(drive=drive)
+
+    with (
+        patch.object(process_new_files.GoogleAPI, "from_env", return_value=g),
+        patch.object(process_new_files, "normalize_prefixes_in_source"),
+        patch.object(process_new_files, "get_spotify_client", return_value=MagicMock()),
+        patch.object(
+            process_new_files,
+            "push_playlists_to_api",
+            side_effect=RuntimeError("KaianoApiError: upstream failed"),
+        ),
+        patch.object(process_new_files, "post_run_finding") as mock_post,
+        patch.object(process_new_files, "config") as mock_cfg,
+    ):
+        mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
+        process_new_files.main()
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["severity"] == "WARN"
+    assert "spotify_failed=1" in mock_post.call_args.kwargs["text"]
