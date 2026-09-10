@@ -47,6 +47,7 @@ from typing import Any, Literal
 
 import sentry_sdk
 from dotenv import load_dotenv
+from mini_app_polis.environment import current_environment
 from mini_app_polis.serve_resilience import serve_with_retry
 from prefect import flow
 from prefect.flows import flow as prefect_flow
@@ -106,7 +107,10 @@ def main() -> None:
     exhausted or the error is a non-retryable configuration error.
     """
     load_dotenv()
-    sentry_sdk.init(dsn=os.getenv("SENTRY_DSN"), environment="production")
+    sentry_sdk.init(
+        dsn=os.getenv("SENTRY_DSN"),
+        environment=current_environment().value,
+    )
 
     src_path = os.environ.get(
         "APP_SOURCE_PATH", str(Path(__file__).parent.parent.parent)
