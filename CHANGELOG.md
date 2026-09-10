@@ -1,3 +1,12 @@
+## [1.28.8](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.7...v1.28.8) (2026-09-10)
+
+
+### Bug Fixes
+
+* moving to common 5.7.1 ([2556972](https://github.com/mini-app-polis/deejay-cog/commit/2556972a5f572be85fc688c492e8f33d5c03af78))
+* **observability:** report Sentry errors under the real environment ([5f8fa5a](https://github.com/mini-app-polis/deejay-cog/commit/5f8fa5a6ff8334c3dd5cd23298973b638b583682))
+* test setup ([927db67](https://github.com/mini-app-polis/deejay-cog/commit/927db67d78e0f04bed8d3e8e2b36140ec4d03d66))
+
 ## [1.28.7](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.6...v1.28.7) (2026-09-10)
 
 
