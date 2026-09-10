@@ -15,10 +15,22 @@
 # Minor and patch updates are grouped into one pull request per
 # ecosystem per week. Majors arrive on their own, because a major is a
 # decision rather than a bump.
+#
+# `target-branch` points these at `dev`, not `main`. An upgrade should land
+# where it can be exercised before a release cuts: `dev` publishes to the
+# Cloudflare preview URL and to the Railway development environment, so a
+# bad bump surfaces there instead of in production.
+#
+# Two asymmetries are worth knowing. Dependabot reads this file from the
+# *default* branch only, so this config has to be on `main` to take effect
+# even though every pull request it opens targets `dev`. And Dependabot
+# security updates ignore `target-branch` entirely — those always open
+# against the default branch, and GitHub gives no way to move them.
 version: 2
 updates:
   - package-ecosystem: "uv"
     directory: "/"
+    target-branch: "dev"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -31,6 +43,7 @@ updates:
       prefix-development: "chore(deps)"
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "dev"
     schedule:
       interval: "weekly"
       day: "monday"
