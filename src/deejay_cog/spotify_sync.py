@@ -41,8 +41,18 @@ class SyncOutcome:
         return cls(False, f"{type(exc).__name__}: {exc}")
 
 
-# Env-driven config (mini_app_polis loads dotenv when config is first imported).
-SPOTIFY_RADIO_PLAYLIST_ID = os.getenv("SPOTIFY_RADIO_PLAYLIST_ID")
+# Credentials are read lazily, on every access, the way mini_app_polis.config
+# reads its own. A module-level constant frozen at import diverged from it in
+# any process that outlives its import.
+#
+# The radio playlist ID is not one of these: credentials decide whether a
+# Spotify client can exist at all, while a missing playlist ID breaks only the
+# radio playlist and is reported by update_spotify_radio_playlist.
+SPOTIFY_CREDENTIAL_ENV = (
+    "SPOTIPY_CLIENT_ID",
+    "SPOTIPY_CLIENT_SECRET",
+    "SPOTIPY_REFRESH_TOKEN",
+)
 
 DEFAULT_PLAYLIST_DESCRIPTION = (
     "Generated automatically by Deejay Marvel Automation Tools. "
@@ -51,21 +61,27 @@ DEFAULT_PLAYLIST_DESCRIPTION = (
 )
 
 
+def radio_playlist_id() -> str | None:
+    """The long-running radio playlist ID, or None when unset."""
+    return os.getenv("SPOTIFY_RADIO_PLAYLIST_ID")
+
+
+def missing_spotify_credentials() -> list[str]:
+    """Credential env vars this path needs and does not have.
+
+    The one "is Spotify usable" check. There were three: two copies in the
+    flow over these three names, and one in ``get_spotify_client`` over two
+    of them, so a run missing only ``SPOTIPY_CLIENT_SECRET`` passed.
+    """
+    return [name for name in SPOTIFY_CREDENTIAL_ENV if not os.getenv(name)]
+
+
 def _first_attr(obj: Any, names: list[str]) -> Any:
     """Return the first existing attribute value on obj from a list of names."""
     for n in names:
         if hasattr(obj, n):
             return getattr(obj, n)
     return None
-
-
-def _call_first(sp: Any, method_names: list[str], *args: Any, **kwargs: Any) -> Any:
-    """Call the first method that exists on sp; return its result."""
-    for name in method_names:
-        fn = getattr(sp, name, None)
-        if callable(fn):
-            return fn(*args, **kwargs)
-    raise AttributeError(f"None of these methods exist on SpotifyAPI: {method_names}")
 
 
 def _extract_external_url(playlist: dict) -> str:
@@ -101,29 +117,12 @@ def _normalize_playlist_item(p: dict) -> dict:
 def fetch_all_playlists(sp: Any) -> list[dict]:
     """Fetch all playlists visible to the account.
 
-    This is intentionally defensive because SpotifyAPI wrappers differ.
-    We try a handful of common method names; if none exist, we log and return [].
+    Pages ``current_user_playlists`` on the underlying spotipy client. A
+    probe over five candidate wrapper method names used to run first; none
+    exists on ``SpotifyAPI``, so every call already landed here.
 
     Expected return shape is a list of raw Spotify playlist dicts.
     """
-    try:
-        return _call_first(
-            sp,
-            [
-                "get_all_playlists",
-                "get_user_playlists",
-                "list_playlists",
-                "get_playlists",
-                "fetch_playlists",
-            ],
-        )
-    except AttributeError:
-        # Only a missing method is a probe miss. A 429 or an auth failure
-        # inside a method that does exist used to land here too, and
-        # fetch_all_playlists then returned [] — which push_playlists_to_api
-        # POSTed as an empty snapshot and logged as "0 upserted".
-        pass
-
     client = _first_attr(sp, ["client", "spotify", "sp", "_client", "_sp"])
     if client is None:
         return []
@@ -154,11 +153,13 @@ def fetch_all_playlists(sp: Any) -> list[dict]:
     return items
 
 
-def push_playlists_to_api(sp: Any) -> int | None:
+def push_playlists_to_api(sp: Any) -> tuple[int, int] | None:
     """Fetch all playlists and push a full snapshot to the Kaiano API.
 
-    Returns the upserted count on success, or None if the push was skipped
-    because ``KAIANO_API_BASE_URL`` is not set.
+    Returns ``(upserted, unchanged)`` on success, or None if the push was
+    skipped because ``KAIANO_API_BASE_URL`` is not set. Both counts, because
+    "0 pushed" could not distinguish every playlist already being current
+    from an empty snapshot. A skip is not a push, and callers log it as one.
 
     A ``KaianoApiError`` from the POST is re-raised after logging (callers
     used to read a ``None`` return as success and log "None playlists
@@ -227,19 +228,30 @@ def push_playlists_to_api(sp: Any) -> int | None:
         upserted,
         unchanged,
     )
-    return int(upserted)
+    return int(upserted), int(unchanged or 0)
 
 
 def update_spotify_radio_playlist(
     sp: SpotifyAPI, playlist_id: str | None, found_uris: list[str]
 ) -> SyncOutcome:
-    """Append tracks to the main radio playlist and trim."""
-    if not playlist_id or not found_uris:
+    """Append tracks to the main radio playlist and trim it to the limit.
+
+    A missing ``playlist_id`` is a misconfiguration, not a no-op. It used
+    to share a ``SyncOutcome.success()`` with "there was nothing to add",
+    which is the exact conflation SyncOutcome exists to remove.
+    """
+    if not playlist_id:
+        return SyncOutcome(
+            False,
+            "SPOTIFY_RADIO_PLAYLIST_ID is not set — the radio playlist was not updated",
+        )
+
+    if not found_uris:
         return SyncOutcome.success()
 
     try:
         sp.add_tracks_to_specific_playlist(playlist_id, found_uris)
-        sp.trim_playlist_to_limit()
+        sp.trim_playlist_to_limit(playlist_id=playlist_id)
     except Exception as e:
         log.error("Error updating Spotify radio playlist: %s", e, exc_info=True)
         return SyncOutcome.failure(e)
@@ -248,14 +260,18 @@ def update_spotify_radio_playlist(
 
 def create_spotify_playlist_for_file(
     sp: SpotifyAPI, set_name: str, found_uris: list[str]
-) -> str | None:
+) -> SyncOutcome:
     """Create or replace a per-set Spotify playlist.
 
     If a playlist with the given name already exists, it is cleared and
     repopulated with ``found_uris``. Otherwise a new playlist is created.
+
+    Returns a ``SyncOutcome`` rather than a playlist ID, which no caller
+    used. It used to raise while its sibling returned an outcome, and the
+    exception was caught a level up and flattened into a generic failure.
     """
     if not found_uris:
-        return None
+        return SyncOutcome.success()
 
     try:
         existing = sp.find_playlist_by_name(set_name)
@@ -263,15 +279,19 @@ def create_spotify_playlist_for_file(
             playlist_id = existing["id"]
             sp.clear_playlist(playlist_id)
             sp.add_tracks_to_specific_playlist(playlist_id, found_uris)
-            return playlist_id
+            return SyncOutcome.success()
 
         playlist_id = sp.create_playlist(set_name, DEFAULT_PLAYLIST_DESCRIPTION)
         if not playlist_id:
-            return None
+            # Previously an unlogged None, indistinguishable from a set
+            # with no tracks to add.
+            return SyncOutcome(
+                False, f"Spotify returned no playlist id for '{set_name}'"
+            )
 
         unique_uris = list(dict.fromkeys(found_uris))
         sp.add_tracks_to_specific_playlist(playlist_id, unique_uris)
-        return playlist_id
+        return SyncOutcome.success()
 
     except Exception as e:
         log.error(
@@ -280,18 +300,17 @@ def create_spotify_playlist_for_file(
             e,
             exc_info=True,
         )
-        # Raised rather than swallowed. The caller below turns this into
-        # a SyncOutcome; returning None here made a broken playlist look
-        # exactly like a set with no tracks to add.
-        raise
+        return SyncOutcome.failure(e)
 
 
 def get_spotify_client() -> SpotifyAPI | None:
-    """Return SpotifyAPI.from_env() or None if credentials are missing."""
-    if not os.getenv("SPOTIPY_CLIENT_ID") or not os.getenv("SPOTIPY_REFRESH_TOKEN"):
+    """Return SpotifyAPI.from_env() or None if it cannot be built."""
+    missing = missing_spotify_credentials()
+    if missing:
         log.warning(
-            "SPOTIPY_CLIENT_ID or SPOTIPY_REFRESH_TOKEN not set; "
+            "Spotify credentials incomplete (%s not set) — "
             "skipping Spotify client initialization.",
+            ", ".join(missing),
         )
         return None
     try:
@@ -308,11 +327,9 @@ def sync_set_to_spotify(
 ) -> SyncOutcome:
     """Search Spotify for each track and update playlists.
 
-    Returns a SyncOutcome. Radio-playlist failure is a failed outcome
-    even if the per-set playlist was written: the CSV is already archived
-    by the time this runs, so this is the only moment the loss can be
-    recorded. Exceptions during search or per-set playlist create are
-    caught and returned as SyncOutcome.failure rather than raised.
+    Returns a SyncOutcome covering both the radio playlist and the per-set
+    playlist. The CSV is already archived by the time this runs, so this is
+    the only moment a partial sync can be recorded.
     """
     try:
         found_uris: list[str] = []
@@ -338,13 +355,14 @@ def sync_set_to_spotify(
             not_found,
         )
 
-        radio = update_spotify_radio_playlist(sp, SPOTIFY_RADIO_PLAYLIST_ID, found_uris)
-        create_spotify_playlist_for_file(sp, set_name, found_uris)
-        # A set whose tracks never reached the radio playlist is a
-        # partial sync, and the CSV is already archived by the time this
-        # runs — so the set is never revisited and this is the only
-        # moment the loss can be recorded.
-        return radio
+        radio = update_spotify_radio_playlist(sp, radio_playlist_id(), found_uris)
+        per_set = create_spotify_playlist_for_file(sp, set_name, found_uris)
+        if radio.ok and per_set.ok:
+            return SyncOutcome.success()
+        return SyncOutcome(
+            False,
+            "; ".join(o.detail for o in (radio, per_set) if not o.ok and o.detail),
+        )
     except Exception as e:
         log.error("sync_set_to_spotify failed: %s", e, exc_info=True)
         return SyncOutcome.failure(e)

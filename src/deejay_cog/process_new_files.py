@@ -20,6 +20,7 @@ from deejay_cog.ingest_to_api import (
 )
 from deejay_cog.spotify_sync import (
     get_spotify_client,
+    missing_spotify_credentials,
     push_playlists_to_api,
     sync_set_to_spotify,
 )
@@ -515,18 +516,12 @@ def _sync_set_to_spotify(
 ) -> None:
     logger = get_prefect_logger()
 
-    spotify_env_ok = all(
-        os.environ.get(name)
-        for name in (
-            "SPOTIPY_CLIENT_ID",
-            "SPOTIPY_CLIENT_SECRET",
-            "SPOTIPY_REFRESH_TOKEN",
-        )
-    )
-    if not spotify_env_ok:
+    missing = missing_spotify_credentials()
+    if missing:
         logger.warning(
-            "Spotify credentials incomplete (need SPOTIPY_CLIENT_ID, "
-            "SPOTIPY_CLIENT_SECRET, SPOTIPY_REFRESH_TOKEN) — skipping Spotify sync for %s",
+            "Spotify credentials incomplete (%s not set) — "
+            "skipping Spotify sync for %s",
+            ", ".join(missing),
             label,
         )
         return
@@ -534,6 +529,17 @@ def _sync_set_to_spotify(
     try:
         sp = get_spotify_client()
         if sp is None:
+            # Credentials are present, so this is a client that would not
+            # build. This used to return with no log line at all: the only
+            # message came from get_spotify_client's module logger, which
+            # does not reach the Prefect run logger.
+            logger.error(
+                "❌ Spotify client could not be initialized — "
+                "skipping Spotify sync for %s",
+                label,
+            )
+            if stats is not None:
+                stats.spotify_failed += 1
             return
 
         tracks = read_tracks_from_sheet(g, sheet_id)
@@ -546,7 +552,10 @@ def _sync_set_to_spotify(
             )
             if stats is not None:
                 stats.spotify_failed += 1
-        push_playlists_to_api(sp)
+        # The full playlist snapshot used to be pushed here as well as at
+        # the end of the flow: N+1 enumerations and N+1 POSTs for N files,
+        # with a push failure logged as that CSV's sync failing. The
+        # flow-level push runs unconditionally and covers this.
     except Exception as e:
         logger.error("❌ Spotify sync failed for %s: %s", label, e)
         if stats is not None:
@@ -798,26 +807,39 @@ def process_new_csv_files_flow() -> None:
     )
 
     # Always sync Spotify playlists regardless of whether new files were processed
-    spotify_env_ok = all(
-        os.environ.get(name)
-        for name in (
-            "SPOTIPY_CLIENT_ID",
-            "SPOTIPY_CLIENT_SECRET",
-            "SPOTIPY_REFRESH_TOKEN",
-        )
-    )
-    if spotify_env_ok:
+    missing_credentials = missing_spotify_credentials()
+    if not missing_credentials:
         try:
             sp = get_spotify_client()
-            if sp is not None:
-                pushed = push_playlists_to_api(sp)
-                logger.info(
-                    "✅ Spotify playlist sync complete: %s playlists pushed",
-                    pushed,
+            if sp is None:
+                logger.error(
+                    "❌ Spotify client could not be initialized — "
+                    "playlist snapshot not pushed",
                 )
+                stats.spotify_failed += 1
+            else:
+                push = push_playlists_to_api(sp)
+                if push is None:
+                    # A skip is not a push of None playlists.
+                    logger.warning(
+                        "⚠️ Spotify playlist push skipped — KAIANO_API_BASE_URL not set",
+                    )
+                else:
+                    upserted, unchanged = push
+                    logger.info(
+                        "✅ Spotify playlist sync complete: %s upserted, %s unchanged",
+                        upserted,
+                        unchanged,
+                    )
         except Exception as e:
             logger.error("❌ Spotify playlist sync failed: %s", e)
             stats.spotify_failed += 1
+    else:
+        logger.warning(
+            "Spotify credentials incomplete (%s not set) — "
+            "playlist snapshot not pushed",
+            ", ".join(missing_credentials),
+        )
 
     real_issue = _real_issue(stats)
     warn_parts = _warn_parts(stats)

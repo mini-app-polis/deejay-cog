@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import deejay_cog.process_new_files as process_new_files
+from deejay_cog.spotify_sync import SyncOutcome
 
 
 def test_main_posts_single_success_finding_when_llm_and_api_configured(
@@ -917,7 +918,7 @@ def test_spotify_failed_moves_when_sync_returns_not_ok(monkeypatch):
     """The counter no longer depends on an exception that never propagates."""
     _spotify_env(monkeypatch)
     stats = process_new_files.CsvPipelineStats()
-    outcome = SimpleNamespace(ok=False, detail="RuntimeError: token expired")
+    outcome = SyncOutcome(False, "RuntimeError: token expired")
     mock_log = MagicMock()
 
     with (
@@ -928,7 +929,7 @@ def test_spotify_failed_moves_when_sync_returns_not_ok(monkeypatch):
             return_value=[{"artist": "A", "title": "T"}],
         ),
         patch.object(process_new_files, "sync_set_to_spotify", return_value=outcome),
-        patch.object(process_new_files, "push_playlists_to_api", return_value=0),
+        patch.object(process_new_files, "push_playlists_to_api") as mock_push,
         patch.object(process_new_files, "get_prefect_logger", return_value=mock_log),
     ):
         process_new_files._sync_set_to_spotify.fn(
@@ -942,6 +943,32 @@ def test_spotify_failed_moves_when_sync_returns_not_ok(monkeypatch):
     assert stats.spotify_failed == 1
     mock_log.error.assert_called()
     assert "token expired" in mock_log.error.call_args.args[2]
+    # The per-file snapshot push is gone; the flow-level one covers it.
+    mock_push.assert_not_called()
+
+
+def test_a_client_that_will_not_build_is_logged_and_counted(monkeypatch):
+    """Credentials present, client None — used to return in silence."""
+    _spotify_env(monkeypatch)
+    stats = process_new_files.CsvPipelineStats()
+    mock_log = MagicMock()
+
+    with (
+        patch.object(process_new_files, "get_spotify_client", return_value=None),
+        patch.object(process_new_files, "sync_set_to_spotify") as mock_sync,
+        patch.object(process_new_files, "get_prefect_logger", return_value=mock_log),
+    ):
+        process_new_files._sync_set_to_spotify.fn(
+            sheet_id="ssid",
+            set_name="2024-01-01 Venue",
+            label="2024-01-01 Venue",
+            g=SimpleNamespace(),
+            stats=stats,
+        )
+
+    assert stats.spotify_failed == 1
+    mock_sync.assert_not_called()
+    mock_log.error.assert_called()
 
 
 def test_a_failed_push_is_counted_not_logged_as_none(
