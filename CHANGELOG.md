@@ -1,3 +1,10 @@
+## [1.28.7](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.6...v1.28.7) (2026-09-10)
+
+
+### Bug Fixes
+
+* **deps:** require common 5.5.0 for trim_playlist_to_limit(playlist_id) ([2a1c694](https://github.com/mini-app-polis/deejay-cog/commit/2a1c69469f8495498676fbd5e9113ac0c2343dac))
+
 ## [1.28.6](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.5...v1.28.6) (2026-09-10)
 
 
