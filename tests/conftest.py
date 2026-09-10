@@ -124,3 +124,19 @@ def prefect_test_harness():
 
     with _real_prefect_test_harness():
         yield
+
+
+@pytest.fixture(autouse=True)
+def _production_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the environment so assertions do not depend on the host shell.
+
+    Effect gates and the Discord title prefix both resolve from the
+    environment, and an unset one resolves to local. Left to inherit
+    whatever ENVIRONMENT the launching shell carries, this suite asserts
+    different rendered titles on a laptop than in CI — and the lenient
+    run is the one that hides the regression. Tests that want the
+    non-production path set ENVIRONMENT themselves.
+    """
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("PREFECT_TRIGGER_ENABLED", raising=False)
+    monkeypatch.delenv("HEALTHCHECKS_ENABLED", raising=False)
