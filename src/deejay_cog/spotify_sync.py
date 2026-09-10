@@ -34,10 +34,25 @@ class SyncOutcome:
 
     @classmethod
     def success(cls) -> SyncOutcome:
+        """An outcome meaning the operation ran and did what it was asked.
+
+        Carries no detail: there is nothing for a caller to report beyond
+        the fact that the sync landed, and the flow's success counter is
+        the only thing that reads it.
+        """
         return cls(True)
 
     @classmethod
     def failure(cls, exc: BaseException) -> SyncOutcome:
+        """An outcome meaning the operation raised, built from the exception.
+
+        ``detail`` is rendered as ``ExceptionType: message`` so the run
+        report names the failure without the caller having to hold on to
+        the exception object or re-raise it to find out what broke.
+
+        Args:
+            exc: The exception the Spotify operation raised.
+        """
         return cls(False, f"{type(exc).__name__}: {exc}")
 
 
