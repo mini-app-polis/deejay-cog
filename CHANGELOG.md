@@ -1,3 +1,10 @@
+## [1.28.6](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.5...v1.28.6) (2026-09-10)
+
+
+### Bug Fixes
+
+* **spotify-sync:** trim the radio playlist by id ([cca0e00](https://github.com/mini-app-polis/deejay-cog/commit/cca0e00f6ecb2b2fca20b287939f98517fb74608))
+
 ## [1.28.5](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.4...v1.28.5) (2026-09-09)
 
 
