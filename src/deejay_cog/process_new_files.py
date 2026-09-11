@@ -3,6 +3,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from time import monotonic
 
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.google import GoogleAPI
@@ -10,9 +11,10 @@ from prefect import flow, task
 
 import deejay_cog.config as config
 from deejay_cog._pipeline_eval import (
+    REPO,
+    RunReport,
     get_prefect_logger,
     make_failure_hook,
-    post_run_finding,
 )
 from deejay_cog.ingest_to_api import (
     build_ingest_payload,
@@ -49,6 +51,10 @@ class CsvPipelineStats:
     duplicate_csv: int = 0
     total_tracks: int = 0
     failed_set_labels: list[str] = field(default_factory=list)
+    #: The sets this run actually imported, by filename. The counter
+    #: beside it says how many; only this says which, and "3 sets
+    #: imported" is not something anyone can go and look at.
+    imported_set_labels: list[str] = field(default_factory=list)
     ingest_attempted: int = 0
     ingest_failed: int = 0
     spotify_failed: int = 0
@@ -107,52 +113,52 @@ def _real_issue(stats: CsvPipelineStats) -> bool:
     )
 
 
+#: What can go wrong, in the order it is reported: the counter's name on
+#: :class:`CsvPipelineStats`, and the note that says why it matters where
+#: the name alone does not. One list so the run report and the warning
+#: text cannot drift — they were two hand-written sequences of the same
+#: twelve facts, and only one of them ever got a new entry.
+_ISSUE_FIELDS: tuple[tuple[str, str | None], ...] = (
+    ("sets_failed", None),
+    ("ingest_failed", None),
+    ("ingest_prepare_failed", None),
+    ("ingest_skipped_env_missing", "KAIANO_API_BASE_URL unset — nothing was sent"),
+    ("ingest_client_unavailable", "API client could not be built — nothing was sent"),
+    ("spotify_failed", None),
+    ("bad_filename_in_file", None),
+    ("track_read_failed", None),
+    (
+        "archive_move_failed",
+        "CSV left in the source folder — next run will see it as a duplicate",
+    ),
+    (
+        "non_csv_move_failed",
+        "file left in the input folder and will be retried every run",
+    ),
+    (
+        "duplicate_check_failed",
+        "flagged possible_duplicate_ rather than risk a double import",
+    ),
+    ("post_import_failed", "set imported; ingest or Spotify raised afterwards"),
+)
+
+
+def _issue_counts(stats: CsvPipelineStats) -> list[tuple[str, int, str | None]]:
+    """Every non-zero problem this run had, as ``(reason, count, note)``."""
+    out: list[tuple[str, int, str | None]] = []
+    for name, note in _ISSUE_FIELDS:
+        count = int(getattr(stats, name, 0) or 0)
+        if count:
+            out.append((name, count, note))
+    return out
+
+
 def _warn_parts(stats: CsvPipelineStats) -> list[str]:
     """The ``k=v`` fragments naming what went wrong, in a fixed order."""
-    parts: list[str] = []
-    if stats.sets_failed:
-        parts.append(f"sets_failed={stats.sets_failed}")
-    if stats.ingest_failed:
-        parts.append(f"ingest_failed={stats.ingest_failed}")
-    if stats.ingest_prepare_failed:
-        parts.append(f"ingest_prepare_failed={stats.ingest_prepare_failed}")
-    if stats.ingest_skipped_env_missing:
-        parts.append(
-            f"ingest_skipped_env_missing={stats.ingest_skipped_env_missing} "
-            "(KAIANO_API_BASE_URL unset — nothing was sent)"
-        )
-    if stats.ingest_client_unavailable:
-        parts.append(
-            f"ingest_client_unavailable={stats.ingest_client_unavailable} "
-            "(API client could not be built — nothing was sent)"
-        )
-    if stats.spotify_failed:
-        parts.append(f"spotify_failed={stats.spotify_failed}")
-    if stats.bad_filename_in_file:
-        parts.append(f"bad_filename_in_file={stats.bad_filename_in_file}")
-    if stats.track_read_failed:
-        parts.append(f"track_read_failed={stats.track_read_failed}")
-    if stats.archive_move_failed:
-        parts.append(
-            f"archive_move_failed={stats.archive_move_failed} "
-            "(CSV left in the source folder — next run will see it as a duplicate)"
-        )
-    if stats.non_csv_move_failed:
-        parts.append(
-            f"non_csv_move_failed={stats.non_csv_move_failed} "
-            "(file left in the input folder and will be retried every run)"
-        )
-    if stats.duplicate_check_failed:
-        parts.append(
-            f"duplicate_check_failed={stats.duplicate_check_failed} "
-            "(flagged possible_duplicate_ rather than risk a double import)"
-        )
-    if stats.post_import_failed:
-        parts.append(
-            f"post_import_failed={stats.post_import_failed} "
-            "(set imported; ingest or Spotify raised afterwards)"
-        )
-    return parts
+    return [
+        f"{reason}={count}" + (f" ({note})" if note else "")
+        for reason, count, note in _issue_counts(stats)
+    ]
 
 
 def _common_eval(stats: CsvPipelineStats) -> dict:
@@ -741,6 +747,7 @@ def process_csv_file(
 )
 def process_new_csv_files_flow() -> None:
     """TODO: describe this function."""
+    started_at = monotonic()
     logger = get_prefect_logger()
     logger.info("Starting main process")
     g = GoogleAPI.from_env()
@@ -799,6 +806,14 @@ def process_new_csv_files_flow() -> None:
                 )
                 stats.sets_failed += 1
 
+        # Recorded here rather than inside process_csv_file, because this
+        # is where the run already decides which side of the import a
+        # file landed on. Both paths pass through: a set whose
+        # post-import step raised is still imported, and still belongs in
+        # the report as something this run created.
+        if stats.sets_imported > imported_before:
+            stats.imported_set_labels.append(filename)
+
     logger.info(
         "✅ Done: %d CSVs, %d non-CSV files, %d skipped.",
         stats.sets_attempted,
@@ -841,14 +856,13 @@ def process_new_csv_files_flow() -> None:
             ", ".join(missing_credentials),
         )
 
-    real_issue = _real_issue(stats)
-    warn_parts = _warn_parts(stats)
-    common_eval = _common_eval(stats)
-
     # Whether this run had anything in front of it at all. A scheduled
     # sweep over an empty folder is an idle tick; a sweep that saw files
     # reports even when every one of them was skipped, because "there were
     # four files and nothing was imported" is the case that hides a bug.
+    # A run that imported something is notable on its own — the outcomes
+    # below say so — but this covers the run that saw four files and
+    # imported none, which has no outcome to speak for it.
     saw_input = bool(
         stats.sets_attempted
         or stats.sets_skipped_non_csv
@@ -856,29 +870,33 @@ def process_new_csv_files_flow() -> None:
         or stats.duplicate_csv
     )
 
-    if real_issue:
-        post_run_finding(
-            flow_name="process-new-csv-files",
-            severity="WARN",
-            text="Completed with issues: " + "; ".join(warn_parts),
-            production_only=True,
-            **common_eval,
-        )
-    else:
-        post_run_finding(
-            flow_name="process-new-csv-files",
-            severity="SUCCESS",
-            # Spelled out here because the counters below are absorbed by
-            # the cog shim and never reach the message text.
-            text=(
-                f"Imported {stats.sets_imported} set(s) from "
-                f"{stats.sets_attempted} file(s); "
-                f"{stats.total_tracks} track(s)"
-            ),
-            production_only=True,
-            notable=saw_input,
-            **common_eval,
-        )
+    # Assembled rather than hand-written. The severity is derived from
+    # the issues recorded below instead of chosen by ``_real_issue``,
+    # which stays as the tested predicate other code reads; a run with
+    # any issue is a WARN, which is the same answer.
+    report = RunReport(
+        flow_name="process-new-csv-files",
+        repo=REPO,
+        duration_sec=monotonic() - started_at,
+    )
+    report.ok(stats.sets_imported)
+    for label in stats.imported_set_labels:
+        report.created("dj set", label)
+    report.count("tracks", stats.total_tracks)
+    report.count("attempted", stats.sets_attempted)
+    if stats.duplicate_csv:
+        report.note("duplicate_csv")
+    if stats.skipped_bad_filename:
+        report.note("unrecognized_filename")
+
+    for reason, count, note in _issue_counts(stats):
+        for index in range(count):
+            # The note rides on the first one only: it explains the
+            # reason, not the instance, and repeating it once per count
+            # is how one bad run fills the channel.
+            report.issue(reason, note if index == 0 else None)
+
+    report.send(notable=saw_input)
 
 
 # Backwards-compatible alias for tests and callers that import main
