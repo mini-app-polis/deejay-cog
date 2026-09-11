@@ -1,3 +1,10 @@
+# [1.29.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.9...v1.29.0) (2026-09-11)
+
+
+### Features
+
+* verb status and duration added ([50a1cf3](https://github.com/mini-app-polis/deejay-cog/commit/50a1cf387fcb7188d14b1bc07011d7f5e5560f70))
+
 ## [1.28.9](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.8...v1.28.9) (2026-09-11)
 
 
