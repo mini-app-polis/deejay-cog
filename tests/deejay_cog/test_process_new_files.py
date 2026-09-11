@@ -31,21 +31,28 @@ def test_main_posts_single_success_finding_when_llm_and_api_configured(
             "process_csv_file",
             side_effect=_fake_process_csv,
         ),
-        patch.object(process_new_files, "post_run_finding") as mock_post,
+        patch.object(process_new_files.RunReport, "send", autospec=True) as mock_post,
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
         process_new_files.main()
 
     mock_post.assert_called_once()
-    kw = mock_post.call_args.kwargs
-    assert kw["flow_name"] == "process-new-csv-files"
-    assert kw["severity"] == "SUCCESS"
-    assert kw["production_only"] is True
-    assert kw["sets_attempted"] == 1
-    assert kw["sets_imported"] == 1
-    assert kw["total_tracks"] == 11
-    assert kw["collection_update"] is False
+    report = mock_post.call_args.args[0]
+    assert report.flow_name == "process-new-csv-files"
+    assert report.repo == "deejay-cog"
+    assert report.severity == "SUCCESS"
+    assert report.production_only is True
+    assert report.processed == 1
+    assert report.counters["attempted"] == 1
+    assert report.counters["tracks"] == 11
+
+    # The set that was imported is named. The old report carried twelve
+    # counters, every one of which the cog shim dropped before the text
+    # was built, and announced "Run completed successfully."
+    text = report.text()
+    assert "+ dj set: 2024-01-02_My Venue.csv" in text
+    assert text.startswith("Run complete in ")
 
 
 def test_main_skips_evaluate_without_anthropic(
@@ -60,7 +67,7 @@ def test_main_skips_evaluate_without_anthropic(
     with (
         patch.object(process_new_files.GoogleAPI, "from_env", return_value=g),
         patch.object(process_new_files, "normalize_prefixes_in_source"),
-        patch.object(process_new_files, "post_run_finding") as mock_post,
+        patch.object(process_new_files.RunReport, "send", autospec=True) as mock_post,
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
@@ -92,15 +99,16 @@ def test_main_posts_single_warn_finding_when_sets_failed(
             "process_csv_file",
             side_effect=_fake_process_csv,
         ),
-        patch.object(process_new_files, "post_run_finding") as mock_post,
+        patch.object(process_new_files.RunReport, "send", autospec=True) as mock_post,
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
         process_new_files.main()
 
     mock_post.assert_called_once()
-    assert mock_post.call_args.kwargs["severity"] == "WARN"
-    assert "sets_failed=1" in mock_post.call_args.kwargs["text"]
+    report = mock_post.call_args.args[0]
+    assert report.severity == "WARN"
+    assert "sets_failed=1" in report.text()
 
 
 # --- Normalization tests -----------------------------------------------------
@@ -798,7 +806,7 @@ def test_flow_level_failure_after_import_is_not_counted_as_failed(
             "process_csv_file",
             side_effect=_fake_process_csv,
         ),
-        patch.object(process_new_files, "post_run_finding"),
+        patch.object(process_new_files.RunReport, "send", autospec=True),
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
@@ -835,7 +843,7 @@ def test_flow_level_failure_before_import_still_counts_as_failed(
             "process_csv_file",
             side_effect=_fake_process_csv,
         ),
-        patch.object(process_new_files, "post_run_finding"),
+        patch.object(process_new_files.RunReport, "send", autospec=True),
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
@@ -991,12 +999,13 @@ def test_a_failed_push_is_counted_not_logged_as_none(
             "push_playlists_to_api",
             side_effect=RuntimeError("KaianoApiError: upstream failed"),
         ),
-        patch.object(process_new_files, "post_run_finding") as mock_post,
+        patch.object(process_new_files.RunReport, "send", autospec=True) as mock_post,
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
         process_new_files.main()
 
     mock_post.assert_called_once()
-    assert mock_post.call_args.kwargs["severity"] == "WARN"
-    assert "spotify_failed=1" in mock_post.call_args.kwargs["text"]
+    report = mock_post.call_args.args[0]
+    assert report.severity == "WARN"
+    assert "spotify_failed=1" in report.text()

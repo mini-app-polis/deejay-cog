@@ -16,6 +16,12 @@ The shim provides two conveniences for deejay-cog callers:
    are free to pass any counters they like — flexibility belongs to the
    cog, not the library.
 
+   That filter applies to ``post_run_finding`` only. A flow that builds a
+   :class:`RunReport` chooses what it carries by calling ``count()``, so
+   there is nothing to absorb — which is the better end of the same
+   trade, since the absorbed list is why a SUCCESS report could be sent
+   carrying twelve counters and saying "Run completed successfully."
+
 See ``docs/decisions/ADR-004-best-effort-pipeline-eval.md`` for the
 decision record on best-effort posting.
 
@@ -34,6 +40,7 @@ from typing import Any
 
 from mini_app_polis.pipeline_status import (
     DeliveryReport,
+    RunReport,
     Severity,
     get_prefect_logger,
     get_run_id,
@@ -125,6 +132,7 @@ def make_failure_hook(
 
 __all__ = [
     "REPO",
+    "RunReport",
     "Severity",
     "get_prefect_logger",
     "get_run_id",

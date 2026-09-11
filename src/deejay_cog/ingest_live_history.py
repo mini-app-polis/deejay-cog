@@ -4,6 +4,7 @@ import dataclasses
 import datetime
 import os
 import sys
+from time import monotonic
 from typing import Any
 
 import pytz
@@ -15,9 +16,10 @@ from prefect import flow, task
 
 import deejay_cog.config as config
 from deejay_cog._pipeline_eval import (
+    REPO,
+    RunReport,
     get_prefect_logger,
     make_failure_hook,
-    post_run_finding,
 )
 
 from .api_client import api_client
@@ -141,6 +143,8 @@ def ingest_live_history() -> LiveIngestSummary:
 
     Processes only the most-recent .m3u file, not all files.
     """
+    started_at = monotonic()
+    processed_file = ""
     logger = get_prefect_logger()
     g = GoogleAPI.from_env()
     base_url = os.getenv("KAIANO_API_BASE_URL", "").strip()
@@ -161,7 +165,8 @@ def ingest_live_history() -> LiveIngestSummary:
             )
         else:
             most_recent = m3u_files[0]
-            logger.info("Processing most recent file: %s", most_recent.get("name", ""))
+            processed_file = str(most_recent.get("name", "") or "")
+            logger.info("Processing most recent file: %s", processed_file)
             ps, pf, file_ok = process_m3u_file(g, most_recent, client)
             plays_sent = ps
             plays_failed = pf
@@ -181,38 +186,41 @@ def ingest_live_history() -> LiveIngestSummary:
                 files_failed=files_failed,
             )
 
-    if summary.plays_failed == 0 and summary.files_failed == 0:
-        post_run_finding(
-            flow_name="ingest-live-history",
-            severity="SUCCESS",
-            text=_success_text(
-                summary, base_url_set=bool(base_url), had_files=bool(m3u_files)
-            ),
-            # A poll that found no .m3u is an idle tick and stays silent.
-            # A poll that found one reports either way — "there was a file
-            # and zero plays were sent" is the run worth explaining, and it
-            # looks identical to success in the counters.
-            notable=bool(m3u_files),
-            plays_sent=summary.plays_sent,
-            plays_failed=0,
-            files_processed=summary.files_processed,
-            files_failed=0,
+    report = RunReport(
+        flow_name="ingest-live-history",
+        repo=REPO,
+        duration_sec=monotonic() - started_at,
+    )
+    report.ok(summary.files_processed)
+    report.count("plays_sent", summary.plays_sent)
+
+    if summary.plays_sent:
+        # Plays now exist on the other side of an API call, which is the
+        # only thing this flow does and the one thing its report never
+        # said. The file names the set they came from.
+        report.created(
+            "live play",
+            f"{summary.plays_sent} from {processed_file or 'the latest .m3u'}",
         )
-    else:
-        post_run_finding(
-            flow_name="ingest-live-history",
-            severity="WARN",
-            text=(
-                "Completed with issues: "
-                f"plays_failed={summary.plays_failed}, "
-                f"files_failed={summary.files_failed}. "
-                "Check the most recent .m3u file for parse or upload errors."
-            ),
-            plays_sent=summary.plays_sent,
-            plays_failed=summary.plays_failed,
-            files_processed=summary.files_processed,
-            files_failed=summary.files_failed,
+    if not base_url:
+        report.note("skipped_no_base_url")
+    elif not m3u_files:
+        report.note("no_m3u_files")
+
+    for _ in range(summary.plays_failed):
+        report.issue("plays_failed", processed_file or None)
+    for _ in range(summary.files_failed):
+        report.issue(
+            "files_failed",
+            processed_file or None,
+            detail="parse or upload error — check the .m3u",
         )
+
+    # A poll that found no .m3u is an idle tick and stays silent. A poll
+    # that found one reports either way — "there was a file and zero
+    # plays were sent" is the run worth explaining, and it looks
+    # identical to success in the counters.
+    report.send(notable=bool(m3u_files))
 
     return summary
 

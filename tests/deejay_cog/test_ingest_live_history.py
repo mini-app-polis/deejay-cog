@@ -104,7 +104,7 @@ def test_ingest_live_history_skips_when_no_api_url(monkeypatch) -> None:
     with (
         patch.object(live.GoogleAPI, "from_env", return_value=fake_g),
         patch.object(live, "api_client", return_value=client) as mock_client,
-        patch.object(live, "post_run_finding") as mock_post,
+        patch.object(live.RunReport, "send", autospec=True) as mock_post,
     ):
         summary = live.ingest_live_history.fn()
 
@@ -145,7 +145,7 @@ def test_ingest_live_history_sends_plays_and_returns_summary(
         patch.object(live.GoogleAPI, "from_env", return_value=fake_g),
         patch.object(live, "api_client", return_value=client) as mock_client_cls,
         patch.object(live, "M3UToolbox", return_value=m3u_instance),
-        patch.object(live, "post_run_finding") as mock_post,
+        patch.object(live.RunReport, "send", autospec=True) as mock_post,
     ):
         summary = live.ingest_live_history.fn()
 
@@ -199,7 +199,7 @@ def test_ingest_live_history_sends_all_parsed_entries(
         patch.object(live.GoogleAPI, "from_env", return_value=fake_g),
         patch.object(live, "api_client", return_value=client),
         patch.object(live, "M3UToolbox", return_value=m3u_instance),
-        patch.object(live, "post_run_finding") as mock_post,
+        patch.object(live.RunReport, "send", autospec=True) as mock_post,
     ):
         summary = live.ingest_live_history.fn()
 
