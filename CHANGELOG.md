@@ -1,3 +1,10 @@
+## [1.28.9](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.8...v1.28.9) (2026-09-11)
+
+
+### Bug Fixes
+
+* stop serving prefect deployments outside production ([3595744](https://github.com/mini-app-polis/deejay-cog/commit/3595744d45112fadf6db2c69ba21c675e6025fe9))
+
 ## [1.28.8](https://github.com/mini-app-polis/deejay-cog/compare/v1.28.7...v1.28.8) (2026-09-10)
 
 
