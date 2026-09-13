@@ -95,3 +95,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx semantic-release
+
+  # Conformance is graded when the repository changes, and this is where
+  # that is said. The evaluation runs after this job ends, so what the job
+  # reports is whether the request landed — never what was found.
+  evaluate:
+    needs: release
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    uses: mini-app-polis/.github/.github/workflows/evaluate.yml@v3
+    secrets:
+      api-key: ${{ secrets.CI_VALIDATOR_API_KEY }}
