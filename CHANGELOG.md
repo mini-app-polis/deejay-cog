@@ -1,3 +1,10 @@
+## [2.0.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.0.1...v2.0.2) (2026-09-21)
+
+
+### Bug Fixes
+
+* **ci:** deploy the Lambda through the shared workflow and evaluate after it ([016b23e](https://github.com/mini-app-polis/deejay-cog/commit/016b23ee8231aa7312ecd307ed5aecc502cf6296))
+
 ## [2.0.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.0.0...v2.0.1) (2026-09-21)
 
 
