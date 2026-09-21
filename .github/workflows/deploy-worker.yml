@@ -1,0 +1,149 @@
+# Deploys the worker's code to Lambda. Nothing else.
+#
+# Copied from evaluator-cog's, which is the reference; the comments there
+# explain the guards. What differs is said where it differs.
+#
+# Terraform owns the function's configuration — role, environment,
+# timeout, concurrency — and is applied from a workstation; this owns the
+# code. The deploy role can call UpdateFunctionCode and GetFunction and
+# nothing more.
+#
+# Called by ci.yml after a release, not `on: release`: semantic-release
+# publishes with GITHUB_TOKEN, and GitHub starts no workflows from events
+# that token creates. workflow_dispatch stays for redeploying a known-good
+# build without cutting a release, and for the first deploy.
+
+name: Deploy worker
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: The ref to build — the release tag when called from ci.yml.
+        type: string
+        required: true
+
+permissions:
+  id-token: write # for OIDC; this is what replaces a long-lived key
+  contents: read
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # x86_64, matching `architectures` in infra/worker.tf. deejay has
+    # compiled dependencies (cryptography, cffi, rpds-py), so the runner's
+    # architecture is the one whose wheels land in the zip — and the import
+    # guard below is only a real test if it runs the same binaries.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # The runtime's Python, not the runner's. ubuntu-latest ships a newer
+      # one, and a wheel built for it carries cpython-3xx extension modules
+      # that python3.11 on Lambda cannot load — an import error on the
+      # first real message rather than here.
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Build the function zip
+        run: |
+          set -euo pipefail
+
+          # From the lockfile, not a fresh resolve. `uv pip install .`
+          # resolves pyproject's ranges at deploy time, so the zip could
+          # carry versions the test job never ran. CD-020 applies here too.
+          uv export --frozen --no-dev --no-emit-project --no-hashes \
+            --format requirements-txt -o requirements.lock.txt
+          uv pip install --python 3.11 --target build/ \
+            -r requirements.lock.txt --quiet
+          uv pip install --python 3.11 --target build/ --no-deps . --quiet
+
+          # The runtime provides boto3. deejay does not depend on it at all
+          # once Prefect is gone, so today this removes nothing; it stays so
+          # a transitive arrival cannot shadow the runtime's copy.
+          rm -rf build/boto3 build/botocore build/s3transfer build/jmespath
+
+          # No Google strip, unlike evaluator-cog: both routed flows use
+          # Drive and Sheets. Measured with it in, built by this step from
+          # the lock: 29.5 MB zipped, 153 MB unzipped, against 50 and 250.
+
+          rm -rf build/*.dist-info build/__pycache__
+
+          test -f build/deejay_cog/worker.py || {
+            echo "::error::deejay_cog/worker.py is not at the package root of the zip"
+            exit 1
+          }
+
+          # Import every module against the package as it will be unpacked,
+          # on the runtime's Python, with nothing else on the path. An
+          # ImportError here is the guard working; one at invocation means
+          # a message retries three times and dead-letters before anyone
+          # knows the deploy was bad.
+          PYTHONPATH="$PWD/build" uv run --no-project --python 3.11 python - <<'IMPORTS'
+          import importlib, pkgutil, sys
+          import deejay_cog
+
+          failed = []
+          for m in pkgutil.walk_packages(deejay_cog.__path__, "deejay_cog."):
+              try:
+                  importlib.import_module(m.name)
+              except Exception as exc:
+                  failed.append(f"{m.name}: {type(exc).__name__}: {exc}")
+          if failed:
+              print("::error::the package does not import as it will be unpacked")
+              for line in failed:
+                  print(f"  {line}")
+              sys.exit(1)
+          assert callable(importlib.import_module("deejay_cog.worker").lambda_handler)
+          print("every module imports from the built package")
+          IMPORTS
+
+          cd build
+          zip -qr "$GITHUB_WORKSPACE/worker.zip" .
+          cd "$GITHUB_WORKSPACE"
+
+          size=$(stat -c%s worker.zip)
+          echo "zip is $((size / 1024 / 1024)) MB of the 50 MB direct-upload limit"
+          if [ "$size" -gt 47000000 ]; then
+            echo "::error::the zip is within 3 MB of the 50 MB limit"
+            exit 1
+          fi
+
+          echo "LOCAL_SHA=$(openssl dgst -sha256 -binary worker.zip | base64)" >> "$GITHUB_ENV"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy
+        run: |
+          aws lambda update-function-code \
+            --function-name "${{ vars.AWS_FUNCTION_NAME }}" \
+            --zip-file fileb://worker.zip \
+            --publish >/dev/null
+          aws lambda wait function-updated \
+            --function-name "${{ vars.AWS_FUNCTION_NAME }}"
+
+      # The checksum AWS reports must be the checksum of the artifact this
+      # run built, so a green run is evidence rather than an assumption.
+      - name: Confirm what is deployed
+        run: |
+          REMOTE_SHA=$(aws lambda get-function \
+            --function-name "${{ vars.AWS_FUNCTION_NAME }}" \
+            --query 'Configuration.CodeSha256' --output text)
+          echo "built:    $LOCAL_SHA"
+          echo "deployed: $REMOTE_SHA"
+          if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+            echo "::error::the deployed checksum is not the one this run built"
+            exit 1
+          fi

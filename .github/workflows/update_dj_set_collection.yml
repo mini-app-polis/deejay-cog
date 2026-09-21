@@ -23,8 +23,6 @@ jobs:
       KAIANO_API_OWNER_ID: ${{ vars.KAIANO_API_OWNER_ID }}
       OWNER_ID: ${{ vars.OWNER_ID }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      PREFECT_API_KEY: ${{ secrets.PREFECT_API_KEY }}
-      PREFECT_API_URL: ${{ vars.PREFECT_API_URL }}
 
     steps:
       - name: Checkout repo
@@ -38,12 +36,6 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --all-extras
-
-      - name: Authenticate with Prefect Cloud
-        run: |
-          uv run prefect cloud login \
-            --key ${{ secrets.PREFECT_API_KEY }} \
-            --workspace ${{ vars.PREFECT_ACCOUNT_SLUG }}/${{ vars.PREFECT_WORKSPACE_SLUG }}
 
       - name: Run update_dj_set_collection
         run: uv run python -u src/deejay_cog/update_deejay_set_collection.py

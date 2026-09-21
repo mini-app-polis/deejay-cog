@@ -1,0 +1,26 @@
+# Local state. See README.md — Terraform is applied from a workstation, not CI.
+.terraform/
+
+# NOT ignored: .terraform.lock.hcl is committed on purpose. It pins the
+# exact provider versions and their checksums, so a second machine — or a
+# second person — resolves the same providers rather than whatever is
+# newest that day. It contains no secrets.
+#
+# It records hashes per platform. If anything ever runs Terraform on Linux,
+# add those hashes first with:
+#   terraform providers lock -platform=darwin_arm64 -platform=linux_amd64
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Real values. terraform.tfvars.example is the committed template.
+terraform.tfvars
+*.auto.tfvars
+
+# Build output
+*.zip
+
+# A saved plan carries the variable values it was made with,
+# secrets included.
+tfplan
+*.tfplan

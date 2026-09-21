@@ -1,20 +1,17 @@
 import contextlib
 import os
 import re
-import sys
 from dataclasses import dataclass, field
 from time import monotonic
 
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.google import GoogleAPI
-from prefect import flow, task
 
 import deejay_cog.config as config
 from deejay_cog._pipeline_eval import (
     REPO,
     RunReport,
     get_prefect_logger,
-    make_failure_hook,
 )
 from deejay_cog.ingest_to_api import (
     build_ingest_payload,
@@ -31,12 +28,6 @@ log = logger_mod.get_logger()
 
 os.environ.setdefault("CSV_SOURCE_FOLDER_ID", "1t4d_8lMC3ZJfSyainbpwInoDta7n69hC")
 os.environ.setdefault("DJ_SETS_FOLDER_ID", "1A0tKQ2DBXI1Bt9h--olFwnBNne3am-rL")
-
-# Retry backoff: zero delay under pytest so retries do not slow the suite.
-# Checking sys.modules is reliable at import time; the previously-used
-# PYTEST_CURRENT_TEST env var is only set while a test function is
-# running, not when this module is first imported during collection.
-_INGEST_TO_API_RETRY_DELAY = 0 if "pytest" in sys.modules else 30
 
 
 @dataclass
@@ -373,7 +364,6 @@ def _extract_date_and_venue(
     return match.group(1), match.group(2)
 
 
-@task(name="normalize-csv")
 def _normalize_csv(file_path: str) -> None:
     """
     Normalize a CSV file before upload.
@@ -416,7 +406,6 @@ def _normalize_csv(file_path: str) -> None:
     logger.debug(f"✅ Normalized: {file_path}")
 
 
-@task(name="upload-to-sheets")
 def _upload_csv_to_sheets(
     g: GoogleAPI,
     temp_path: str,
@@ -434,11 +423,6 @@ def _upload_csv_to_sheets(
     return sheet_id
 
 
-@task(
-    name="ingest-to-api",
-    retries=2,
-    retry_delay_seconds=_INGEST_TO_API_RETRY_DELAY,
-)
 def _ingest_set_to_api(
     spreadsheet_id: str,
     set_date: str,
@@ -512,7 +496,6 @@ def _ingest_set_to_api(
         logger.error("❌ Unexpected error during API ingest for %s: %s", label, e)
 
 
-@task(name="sync-to-spotify")
 def _sync_set_to_spotify(
     sheet_id: str,
     set_name: str,
@@ -592,7 +575,6 @@ def _file_already_in_folder(g: GoogleAPI, file_id: str, folder_id: str) -> bool:
         return False
 
 
-@task(name="process-csv-file")
 def process_csv_file(
     g: GoogleAPI,
     file_metadata: dict,
@@ -738,15 +720,17 @@ def process_csv_file(
                 os.remove(temp_path)
 
 
-@flow(
-    name="process-new-csv-files",
-    description="Normalize new DJ set CSVs, upload to "
-    "Google Sheets, archive (idempotent), and ingest to API.",
-    on_failure=[make_failure_hook("process-new-csv-files")],
-    on_crashed=[make_failure_hook("process-new-csv-files")],
-)
-def process_new_csv_files_flow() -> None:
-    """TODO: describe this function."""
+def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
+    """Normalize new DJ set CSVs, upload to Google Sheets, archive, ingest to API.
+
+    A sweep of the source folder, not one file: whatever is there is
+    processed, so a trigger that arrives after its files were already
+    handled finds nothing and reports an idle run.
+
+    ``run_id`` is the queue message id when the Lambda worker runs this.
+    Passed rather than resolved: ``get_run_id()`` only knows Prefect's ids,
+    so without it every report would arrive as ``"local-run"``.
+    """
     started_at = monotonic()
     logger = get_prefect_logger()
     logger.info("Starting main process")
@@ -878,6 +862,7 @@ def process_new_csv_files_flow() -> None:
         flow_name="process-new-csv-files",
         repo=REPO,
         duration_sec=monotonic() - started_at,
+        run_id=run_id,
     )
     report.ok(stats.sets_imported)
     for label in stats.imported_set_labels:

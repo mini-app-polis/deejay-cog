@@ -220,13 +220,12 @@ def test_post_run_finding_source_in_kwargs_does_not_raise(monkeypatch) -> None:
     assert post.call_args.kwargs["source"] == "flow_hook"
 
 
-def test_get_run_id_local_run_when_no_runtime_or_env(monkeypatch) -> None:
+def test_get_run_id_is_unattributable_without_prefect(monkeypatch) -> None:
+    """Why the worker passes the message id as run_id.
+
+    Both of get_run_id's resolution steps are Prefect's. With Prefect gone
+    every run falls back to one id that identifies nothing, so a report
+    that relied on it could not be joined to the run that sent it.
+    """
     monkeypatch.delenv("PREFECT_FLOW_RUN_ID", raising=False)
-    with patch("prefect.runtime.flow_run.id", None):
-        assert pe.get_run_id() == "local-run"
-
-
-def test_get_run_id_prefers_runtime_id_over_env(monkeypatch) -> None:
-    monkeypatch.setenv("PREFECT_FLOW_RUN_ID", "env-id")
-    with patch("prefect.runtime.flow_run.id", "runtime-id"):
-        assert pe.get_run_id() == "runtime-id"
+    assert pe.get_run_id() == "local-run"

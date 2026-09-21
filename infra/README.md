@@ -1,0 +1,78 @@
+# deejay-cog on AWS: one queue, one function
+
+deejay-cog's queue, dead-letter queue, alarm, Lambda function and CI deploy
+role. A copy of evaluator-cog's `infra/` with `name_prefix = "deejay"`.
+
+**The runbook is evaluator-cog's** —
+[evaluator-cog/infra/README.md](https://github.com/mini-app-polis/evaluator-cog/blob/main/infra/README.md):
+order of operations, the cutover, rolling back, and what was verified once
+for the whole account (Cloudflare does not challenge AWS egress, the DLQ
+works, a zip is enough). Those are properties of the account, not of a cog,
+and are not re-proven here. This file is what differs.
+
+## What differs from evaluator-cog
+
+**Nothing account-level.** `create_github_oidc_provider`,
+`create_api_producer` and `create_account_budget` all default to **false**
+in this directory. The OIDC provider, the API's producer user (whose
+`*-jobs` policy already covers `deejay-jobs`) and the monthly budget live in
+evaluator-cog's state. Defaults rather than tfvars, because a switch with
+one correct value should not depend on remembering to pass it.
+
+**x86_64, pinned to Python 3.11.** deejay has compiled dependencies
+(cryptography, cffi, rpds-py). The deploy workflow builds on an x86_64
+runner with the runtime's Python, so its import guard exercises the exact
+binaries Lambda will load.
+
+**The Google stack stays in the zip.** Both routed flows use Drive and
+Sheets. Measured on the zip the deploy workflow builds from the lock:
+29.5 MB zipped, 153 MB unzipped, against 50 MB and 250 MB. boto3 is not
+in deejay's dependency tree at all once Prefect is gone.
+
+**The environment is near Lambda's 4 KB cap.** The limit covers every key
+and value together, and the service-account JSON is most of it. Check the
+JSON before the first apply — everything else is roughly 700 bytes, so the
+JSON needs to be under about 3,300:
+
+```bash
+wc -c < path/to/service-account.json
+```
+
+If it is over, the environment is the wrong place for the credentials and
+they belong in SSM Parameter Store — a code change, not a Terraform one.
+
+**Timeout is 900 s and unmeasured.** See `worker_timeout_seconds`. Lower it
+once the slowest run is known.
+
+**Concurrency wants to be 1.** A process-new-files run is a sweep of one
+Drive folder, and two at once race over the same files. The event source
+mapping cannot go below 2, so `max_concurrency = 2` until the account's
+Lambda quota allows `reserved_concurrency = 1` — `TODO(lambda-quota)` in
+`variables.tf`. That is no worse than the Prefect deployment this replaced,
+which had no limit.
+
+## Order of operations for this cog
+
+```bash
+cp terraform.tfvars.example terraform.tfvars   # then fill it in
+terraform init
+terraform fmt -check
+terraform validate
+terraform plan        # expect: no budget, no OIDC provider, no producer user
+terraform apply
+```
+
+1. **Apply.** The function is created holding a placeholder that cannot
+   import, and the mapping is on. Until the first deploy, anything enqueued
+   fails, retries and dead-letters — visible, not lost.
+2. **Confirm the alert subscription.** AWS emails a link; an unconfirmed
+   subscription delivers nothing.
+3. **CI deploy path.** Three repository *variables* in GitHub (none are
+   secret): `AWS_DEPLOY_ROLE_ARN`, `AWS_REGION`, `AWS_FUNCTION_NAME` from
+   `terraform output`. Then run **Deploy worker** by hand; it fails unless
+   the checksum AWS reports is the artifact it built.
+4. **Probe**, as in evaluator-cog's runbook: a malformed record should come
+   back in `batchItemFailures` with no `FunctionError`.
+5. **Cut over.** Stop the Prefect deployment and scale the Railway service
+   to zero, *then* deploy watcher-cog's API trigger. Stopping first leaves a
+   gap that the next sweep closes; the other order runs both.

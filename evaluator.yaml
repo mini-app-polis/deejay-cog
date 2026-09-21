@@ -12,28 +12,16 @@ exemptions:
 
   - rule: CD-015
     reason: >
-      Evaluator false positive — check_prefect_serve_pattern looks for
-      a literal 'prefect.serve(' or 'flow.serve(' call. As of ADR-005,
-      main.py registers its deployment via
-      'serve_with_retry(router.to_deployment(...), repo=REPO)' from
-      mini_app_polis.serve_resilience, which wraps prefect.serve() with
-      startup retry/backoff. There is no bare serve( token in the source
-      at all, so the checker's "neither serve() nor deploy() found —
-      registration pattern missing entirely" branch fires. The pattern is
-      present and correct; the detector cannot see through the shared
-      wrapper. CD-015's check_notes were updated in ecosystem-standards
-      to name serve_with_retry( as a valid registration mechanism (and
-      CD-016 now requires it). To remove this exemption, update
-      check_prefect_serve_pattern in evaluator-cog to accept
-      serve_with_retry( alongside prefect.serve( / flow.serve( /
-      bare serve( — then delete this entry.
-
-      Supersedes the pre-ADR-005 reason, which cited 'from prefect import
-      serve' + a bare serve(...) call at main.py:25 / main.py:48. Both
-      lines are gone.
+      deejay-cog no longer registers a Prefect deployment at all: it runs on
+      AWS Lambda behind its own SQS queue (ADR-006), so there is no serve(),
+      serve_with_retry() or deploy() for this check to find, and none should
+      exist. CD-015, CD-016, PIPE-004, PIPE-006 and PIPE-015 assume Prefect
+      and are being retired or rescoped fleet-wide at the end of the
+      serverless migration (evaluator-cog docs/serverless-migration.md,
+      "Retire Prefect"); remove this entry when CD-015 is.
 
   - rule: CD-010
-    reason: "on-demand cog with no expected cadence — flows run only when Kaiano triggers DJ event processing (roughly monthly). Healthchecks.io's liveness model assumes a regular cadence and doesn't apply here. Per-flow success/failure is observable via Prefect run state."
+    reason: "on-demand cog with no expected cadence — flows run only when Kaiano triggers DJ event processing (roughly monthly). Healthchecks.io's liveness model assumes a regular cadence and doesn't apply here. Per-run success/failure is observable via each flow's run report and, for a run that fails every retry, the deejay-dlq-not-empty alarm (ADR-006)."
 
   - rule: PIPE-005
     reason: >

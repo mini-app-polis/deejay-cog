@@ -102,7 +102,7 @@ def test_generate_next_missing_summary_skips_existing_canonical_and_unready_year
         mock_config.DJ_SETS_FOLDER_ID = "dj-sets-folder"
         mock_config.SUMMARY_FOLDER_NAME = "Summary"
 
-        generate_summaries.generate_summaries_flow.fn()
+        generate_summaries.generate_summaries_flow()
 
     g.drive.ensure_folder.assert_called_once()
     assert mock_dedup.deduplicate_summary.call_count == 1

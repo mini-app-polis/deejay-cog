@@ -4,7 +4,7 @@ Date: 2026-04-20
 
 ## Status
 
-Accepted
+Superseded by [ADR-006](./ADR-006-lambda-behind-sqs.md) — deejay-cog runs on Lambda behind SQS, with no Prefect.
 
 ## Context
 
