@@ -21,6 +21,15 @@ The shim provides two conveniences for deejay-cog callers:
    there is nothing to absorb — which is the better end of the same
    trade, since the absorbed list is why a SUCCESS report could be sent
    carrying twelve counters and saying "Run completed successfully."
+3. Stamps ``(processor=X.Y.Z)`` — the version of the code that is running —
+   onto every message, from ``_version.py``. The library would stamp it
+   itself, but it resolves the version from the installed distribution's
+   metadata, and the Lambda deploy strips every ``*.dist-info`` from the
+   zip; there the lookup fails and the library, by design, stamps nothing.
+   ``_version.py`` is source and ships in the zip, and the deploy builds
+   from the release tag, so it is the version of what is running. The
+   library skips its own stamp when the text already carries one, so
+   nothing is stamped twice where the distribution is installed.
 
 See ``docs/decisions/ADR-004-best-effort-pipeline-eval.md`` for the
 decision record on best-effort posting.
@@ -36,14 +45,17 @@ regardless of which env vars are set.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from mini_app_polis.pipeline_status import (
     DeliveryReport,
-    RunReport,
     Severity,
     get_prefect_logger,
     get_run_id,
+)
+from mini_app_polis.pipeline_status import (
+    RunReport as _RunReport,
 )
 from mini_app_polis.pipeline_status import (
     make_failure_hook as _make_failure_hook,
@@ -52,8 +64,35 @@ from mini_app_polis.pipeline_status import (
     post_run_finding as _post_run_finding,
 )
 
+from deejay_cog._version import __version__
+
 REPO = "deejay-cog"
 """Repo identifier sent on every self-reported finding from this cog."""
+
+VERSION_STAMP = f"(processor={__version__})"
+"""The running code's version, in the library's own stamp format."""
+
+
+def stamp_version(text: str) -> str:
+    """Append :data:`VERSION_STAMP` to ``text`` on a line of its own.
+
+    Left alone when empty — an empty report is skipped by the library, and
+    a version alone would turn it into a message that says nothing — and
+    when already stamped. Any counters the library appends land after the
+    stamp, so the last line of a message is its metadata.
+    """
+    if not text or "(processor=" in text:
+        return text
+    return f"{text}\n{VERSION_STAMP}"
+
+
+@dataclass
+class RunReport(_RunReport):
+    """:class:`mini_app_polis.pipeline_status.RunReport`, version-stamped."""
+
+    def text(self) -> str:
+        return stamp_version(super().text())
+
 
 # Counters that callers may pass as kwargs but which deejay-cog does not
 # want surfaced in the human-readable finding text. They originated as
@@ -106,10 +145,13 @@ def post_run_finding(
     says nothing about what the run actually did.
     """
     extras = {k: v for k, v in raw_counters.items() if k not in _DEEJAY_ABSORBED_KWARGS}
+    # The library's default, applied here so it can be stamped.
+    if severity == "SUCCESS" and text is None:
+        text = "Run completed successfully."
     return _post_run_finding(
         flow_name,
         severity,
-        text,
+        stamp_version(text) if text is not None else None,
         repo=REPO,
         production_only=production_only,
         source=source,
@@ -132,10 +174,12 @@ def make_failure_hook(
 
 __all__ = [
     "REPO",
+    "VERSION_STAMP",
     "RunReport",
     "Severity",
     "get_prefect_logger",
     "get_run_id",
     "make_failure_hook",
     "post_run_finding",
+    "stamp_version",
 ]

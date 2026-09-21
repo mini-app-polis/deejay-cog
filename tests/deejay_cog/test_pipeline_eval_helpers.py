@@ -134,9 +134,10 @@ def test_post_run_finding_warn_includes_extras(monkeypatch) -> None:
             production_only=True,
             spotify_failed=2,
         )
-    # ``in`` rather than ``==`` — the library appends
-    # ``(processor=X.Y.Z)`` when the cog distribution is installed.
-    assert "Completed with issues spotify_failed=2" in post.call_args.kwargs["text"]
+    # Counters follow the version stamp, so the last line is the metadata.
+    assert post.call_args.kwargs["text"] == (
+        f"Completed with issues\n{pe.VERSION_STAMP} spotify_failed=2"
+    )
 
 
 def test_make_failure_hook_binds_repo_and_emits_warn(monkeypatch) -> None:
@@ -229,3 +230,62 @@ def test_get_run_id_is_unattributable_without_prefect(monkeypatch) -> None:
     """
     monkeypatch.delenv("PREFECT_FLOW_RUN_ID", raising=False)
     assert pe.get_run_id() == "local-run"
+
+
+def test_post_run_finding_stamps_version_without_distribution(monkeypatch) -> None:
+    """Regression: Lambda strips *.dist-info, so the library's own lookup
+    finds nothing and stamps nothing. The shim stamps from _version.py."""
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
+    with (
+        patch.object(ps, "_resolve_processor_version", return_value=None),
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
+        pe.post_run_finding("f", "ERROR", text="worker failed", production_only=True)
+    assert post.call_args.kwargs["text"] == f"worker failed\n{pe.VERSION_STAMP}"
+
+
+def test_version_stamp_is_the_running_code() -> None:
+    from deejay_cog import __version__
+
+    assert f"(processor={__version__})" == pe.VERSION_STAMP
+
+
+def test_post_run_finding_stamps_once_when_distribution_installed(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
+    with (
+        patch.object(ps, "_resolve_processor_version", return_value="9.9.9"),
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
+        pe.post_run_finding("f", "SUCCESS", production_only=True, notable=True)
+    text = post.call_args.kwargs["text"]
+    assert text.count("(processor=") == 1
+    assert pe.VERSION_STAMP in text
+
+
+def test_stamp_version_leaves_empty_text_alone() -> None:
+    assert pe.stamp_version("") == ""
+
+
+def test_run_report_text_is_version_stamped() -> None:
+    report = pe.RunReport(flow_name="f", repo=pe.REPO)
+    report.ok(2)
+    lines = report.text().splitlines()
+    assert lines[0].startswith("Run complete in ")
+    assert lines[-1] == pe.VERSION_STAMP
+
+
+def test_run_report_send_carries_version_without_distribution(monkeypatch) -> None:
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
+    report = pe.RunReport(flow_name="f", repo=pe.REPO)
+    report.ok()
+    with (
+        patch.object(ps, "_resolve_processor_version", return_value=None),
+        patch.object(ps, "_deliver", return_value=True),
+        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
+    ):
+        report.send(notable=True)
+    assert post.call_args.kwargs["text"].endswith(pe.VERSION_STAMP)
