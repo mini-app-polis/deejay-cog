@@ -112,7 +112,7 @@ resource "aws_lambda_function" "worker" {
   timeout     = var.worker_timeout_seconds
   memory_size = var.worker_memory_mb
 
-  # Set to 1 once the account quota allows it — see var.reserved_concurrency.
+  # 1: runs are serialised. See var.reserved_concurrency.
   reserved_concurrent_executions = var.reserved_concurrency
 
   # Lambda caps the whole map at 4 KB, keys included, and the service
@@ -175,9 +175,8 @@ resource "aws_lambda_event_source_mapping" "jobs" {
 
   function_response_types = ["ReportBatchItemFailures"]
 
-  # The ceiling that exists today. reserved_concurrent_executions on the
-  # function is the one this account cannot set yet; this one is per
-  # mapping and needs no quota, and cannot go below 2.
+  # At AWS's floor of 2. The function's reserved concurrency of 1 is the
+  # real limit; see var.reserved_concurrency for what happens between them.
   scaling_config {
     maximum_concurrency = var.max_concurrency
   }

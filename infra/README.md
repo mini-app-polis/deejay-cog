@@ -50,12 +50,11 @@ they belong in SSM Parameter Store — a code change, not a Terraform one.
 **Timeout is 900 s and unmeasured.** See `worker_timeout_seconds`. Lower it
 once the slowest run is known.
 
-**Concurrency wants to be 1.** A process-new-files run is a sweep of one
-Drive folder, and two at once race over the same files. The event source
-mapping cannot go below 2, so `max_concurrency = 2` until the account's
-Lambda quota allows `reserved_concurrency = 1` — `TODO(lambda-quota)` in
-`variables.tf`. That is no worse than the Prefect deployment this replaced,
-which had no limit.
+**Concurrency is 1.** A process-new-files run is a sweep of one Drive
+folder, and two at once race over the same files. The event source mapping
+cannot go below 2, so the function reserves 1 (`reserved_concurrency`) and
+the mapping stays at its floor of 2. A second message arriving mid-run is
+throttled and redelivered, which is why `max_receive_count` is 5.
 
 ## Order of operations for this cog
 

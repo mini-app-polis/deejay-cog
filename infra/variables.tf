@@ -82,45 +82,31 @@ variable "worker_memory_mb" {
 
 variable "reserved_concurrency" {
   description = <<-DESC
-    For deejay this is the serialisation knob, not a throttle: set it to 1
-    once it can be set. process-new-files is a sweep of one Drive folder,
-    and two sweeps running at once list the same files and race to upload
-    and archive them. The GitHub Actions workflows this replaced serialised
-    with a concurrency group; the Prefect deployment did not.
+    For deejay this is the serialisation knob, not a throttle. process-new-files
+    is a sweep of one Drive folder, and two sweeps running at once list the
+    same files and race to upload and archive them. The GitHub Actions
+    workflows this replaced serialised with a concurrency group; the Prefect
+    deployment did not.
 
-    -1 means unreserved, and it is the default on purpose. AWS refuses to
-    reserve concurrency for a function if doing so would leave the account
-    with fewer than 100 unreserved executions, and a new account's total
-    limit is well below that — so any positive value here fails at apply
-    time with a message about UnreservedConcurrentExecution rather than
-    anything that sounds like a quota.
+    1 became settable when the account's concurrent-executions quota was
+    raised to 1,000 (2026-09-21). Before that AWS refused any reservation that
+    left fewer than 100 unreserved executions.
 
-    TODO(lambda-quota): request the increase, then set this.
-
-      Service Quotas -> Lambda -> "Concurrent executions" -> Request
-      increase. The default account limit is 1,000 in most regions but a
-      new account is throttled well below it; the ask is to be raised to
-      the standard limit, not above it, so it is routine rather than a
-      capacity case.
-
-    Not urgent, and worth saying why rather than leaving it open-ended.
-    max_concurrency on the event source mapping is a real ceiling and
-    needs no quota — it is what actually limits a fleet pass today. What
-    this variable adds once available is a *reservation*: guaranteed
-    capacity for this function rather than a cap on it, which matters when
-    a second cog's worker starts competing for the same account pool.
-
-    So the trigger for doing this is the second cog going to Lambda, not
-    a date — which is this cog.
+    It sits below the mapping's max_concurrency, which AWS will not set under
+    2. When two messages arrive together the mapping can invoke twice and the
+    second invocation is throttled. A throttled message goes back on the queue
+    after the visibility timeout and the attempt counts toward
+    max_receive_count, which is why that is 5 rather than 3: a burst must not
+    dead-letter good work. Two messages at once is rare for this cog.
   DESC
   type        = number
-  default     = -1
+  default     = 1
 }
 
 variable "max_receive_count" {
-  description = "Deliveries before a message goes to the DLQ. Not automatic — without a redrive policy a poison message retries forever."
+  description = "Deliveries before a message goes to the DLQ. Not automatic — without a redrive policy a poison message retries forever. 5, not 3, because reserved_concurrency = 1 below the mapping's floor of 2 means a burst can throttle a good message, and a throttled attempt still counts."
   type        = number
-  default     = 3
+  default     = 5
 }
 
 variable "log_retention_days" {
@@ -230,10 +216,8 @@ variable "create_github_oidc_provider" {
 variable "max_concurrency" {
   description = <<-DESC
     How many workers the queue may run at once. For deejay: the lowest AWS
-    allows, because what it wants is one (see reserved_concurrency). Two
-    concurrent sweeps is the residual race until the quota allows a
-    reservation of 1 — no worse than the Prefect deployment, which had no
-    limit at all.
+    allows. The real limit is reserved_concurrency = 1 on the function; this
+    only keeps the mapping from asking for more than it can get.
 
     The evaluator's reasoning, kept for the template:
 
