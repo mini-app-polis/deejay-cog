@@ -1,3 +1,10 @@
+## [1.29.2](https://github.com/mini-app-polis/deejay-cog/compare/v1.29.1...v1.29.2) (2026-09-21)
+
+
+### Bug Fixes
+
+* **deps:** bump the python-minor-and-patch group with 4 updates ([9191e91](https://github.com/mini-app-polis/deejay-cog/commit/9191e916fc5926e8ff75fe165c22f6396d8d6e6b))
+
 ## [1.29.1](https://github.com/mini-app-polis/deejay-cog/compare/v1.29.0...v1.29.1) (2026-09-15)
 
 
