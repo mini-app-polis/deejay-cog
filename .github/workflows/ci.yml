@@ -22,35 +22,10 @@ jobs:
       language: python
       package-manager: uv
 
+  # Lock check, lint, format and tests, from the shared workflow so every
+  # cog's `test` stage is the same stage. See mini-app-polis/.github.
   test:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      # CD-020. `uv sync` without --locked silently re-resolves when the
-      # lockfile and pyproject.toml disagree, so a stale lock passes CI and
-      # then fails the deploy, where `uv sync --locked` refuses the drift.
-      # Checked here because this is where the failure is cheap to fix.
-      - name: Verify the lockfile matches pyproject
-        run: uv lock --check
-
-      - name: Install dependencies
-        run: uv sync --all-extras
-
-      - name: Lint
-        run: uv run ruff check src/ tests/
-
-      - name: Test
-        run: uv run pytest --cov=src --cov-report=term-missing
+    uses: mini-app-polis/.github/.github/workflows/python-test.yml@v3
 
   release:
     needs: [test, security]
@@ -105,7 +80,7 @@ jobs:
         id: released
         run: echo "tag=$(git tag --points-at HEAD --list 'v*' | head -n1)" >> "$GITHUB_OUTPUT"
 
-  # The worker is deployed here rather than by deploy-worker.yml's own
+  # The worker is deployed here, as a job, rather than by a workflow's own
   # trigger: a release published with GITHUB_TOKEN starts no workflows, so
   # `on: release` would never fire and the Lambda would drift behind main.
   deploy:
@@ -114,9 +89,17 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    uses: ./.github/workflows/deploy-worker.yml
+    uses: mini-app-polis/.github/.github/workflows/lambda-deploy.yml@v3
     with:
       ref: ${{ needs.release.outputs.tag }}
+      # These three match infra/worker.tf; the deploy refuses a function
+      # whose architecture differs.
+      handler: deejay_cog.worker.lambda_handler
+      architecture: x86_64
+      python-version: "3.11"
+      role-arn: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      region: ${{ vars.AWS_REGION }}
+      function-name: ${{ vars.AWS_FUNCTION_NAME }}
 
   # Conformance is graded when the repository changes, and this is where
   # that is said. The evaluation runs after this job ends, so what the job

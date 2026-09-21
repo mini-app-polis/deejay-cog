@@ -19,16 +19,16 @@ in this directory. The OIDC provider, the API's producer user (whose
 evaluator-cog's state. Defaults rather than tfvars, because a switch with
 one correct value should not depend on remembering to pass it.
 
-**x86_64, Python 3.11, manylinux_2_17 wheels.** deejay has compiled
-dependencies (cryptography, cffi, rpds-py), and the python3.11 runtime is
-Amazon Linux 2 with glibc 2.26. The deploy installs with
-`--python-platform x86_64-manylinux_2_17`, fails if any library in the zip
-needs a newer glibc, and imports the package inside
-`public.ecr.aws/lambda/python:3.11` before uploading.
+**x86_64, Python 3.11.** deejay has compiled dependencies (cryptography,
+cffi, rpds-py) and the python3.11 runtime is Amazon Linux 2, glibc 2.26.
+The shared `lambda-deploy.yml` builds wheels for exactly that and proves the
+zip imports inside Lambda's own image; `ci.yml` passes it the architecture,
+runtime and handler, which must match `worker.tf`.
 
-The first deploy had none of that: uv picked wheels for the Ubuntu runner,
-cryptography's needed GLIBC_2.28, and the import guard passed because it ran
-on the runner. The function failed at import on its first invocation.
+The first deploy used a copied workflow that chose wheels for the runner
+and checked imports on the runner. It passed, and the function failed at
+import on Lambda (cryptography needing GLIBC_2.28). That is why the deploy is
+shared now rather than copied.
 
 **The Google stack stays in the zip.** Both routed flows use Drive and
 Sheets. Measured on the zip the deploy workflow builds from the lock:
@@ -75,8 +75,9 @@ terraform apply
    subscription delivers nothing.
 3. **CI deploy path.** Three repository *variables* in GitHub (none are
    secret): `AWS_DEPLOY_ROLE_ARN`, `AWS_REGION`, `AWS_FUNCTION_NAME` from
-   `terraform output`. Then run **Deploy worker** by hand; it fails unless
-   the checksum AWS reports is the artifact it built.
+   `terraform output`. The next release deploys; to redeploy without one,
+   re-run the `deploy` job of the release's CI run. It fails unless the
+   checksum AWS reports is the artifact it built.
 4. **Probe**, as in evaluator-cog's runbook: a malformed record should come
    back in `batchItemFailures` with no `FunctionError`.
 5. **Cut over.** Stop the Prefect deployment and scale the Railway service
