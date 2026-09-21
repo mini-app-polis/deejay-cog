@@ -60,13 +60,20 @@ which had no limit.
 ## Order of operations for this cog
 
 ```bash
-cp terraform.tfvars.example terraform.tfvars   # then fill it in
-terraform init
-terraform fmt -check
-terraform validate
-terraform plan        # expect: no budget, no OIDC provider, no producer user
-terraform apply
+cp terraform.tfvars.example terraform.tfvars   # alert_email only; secrets come from Doppler
+export AWS_PROFILE=miniapppolis
+terraform init && terraform fmt -check && terraform validate
+doppler run --project <deejay-cog project> --config prd --name-transformer tf-var -- \
+  terraform plan -out tfplan    # expect: no budget, no OIDC provider, no producer user
+terraform apply tfplan
 ```
+
+Secrets are read from Doppler at plan time rather than copied into
+`terraform.tfvars`: the variable names are Doppler's lowercased, and the
+`tf-var` transformer turns them into `TF_VAR_*`. `terraform.tfvars` wins over
+`TF_VAR_*`, so a secret left in it silently overrides Doppler. They still end
+up in the local state file in plaintext, as any Terraform-managed secret
+does, which is why state is gitignored.
 
 1. **Apply.** The function is created holding a placeholder that cannot
    import, and the mapping is on. Until the first deploy, anything enqueued
