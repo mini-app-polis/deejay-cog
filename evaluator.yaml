@@ -7,22 +7,6 @@ exemptions:
   - rule: TEST-011
     reason: "Evaluator false positive — check_mock_assertions regex only matches .assert_called* and misses .assert_not_called() (line 182 in test_ingest_to_api.py) and .call_count comparisons (line 149). Both are valid mock interrogation patterns. To remove this exemption, update check_mock_assertions in evaluator-cog to accept the full mock-assertion family."
 
-  - rule: PIPE-006
-    reason: "Evaluator false positive — check_prefect_run_logger searches for literal 'get_run_logger' inside flow bodies but deejay-cog calls get_prefect_logger(), a repo-local wrapper in _pipeline_eval.py that calls get_run_logger() with fallback (wrapper docstring: 'Satisfies PIPE-006'). The wrapper pattern is the intended implementation. To remove this exemption, update check_prefect_run_logger in evaluator-cog to accept calls to repo-local logger-wrapper functions."
-
-  - rule: CD-015
-    reason: >
-      deejay-cog no longer registers a Prefect deployment at all: it runs on
-      AWS Lambda behind its own SQS queue (ADR-006), so there is no serve(),
-      serve_with_retry() or deploy() for this check to find, and none should
-      exist. CD-015, CD-016, PIPE-004, PIPE-006 and PIPE-015 assume Prefect
-      and are being retired or rescoped fleet-wide at the end of the
-      serverless migration (evaluator-cog docs/serverless-migration.md,
-      "Retire Prefect"); remove this entry when CD-015 is.
-
-  - rule: CD-010
-    reason: "on-demand cog with no expected cadence — flows run only when Kaiano triggers DJ event processing (roughly monthly). Healthchecks.io's liveness model assumes a regular cadence and doesn't apply here. Per-run success/failure is observable via each flow's run report and, for a run that fails every retry, the deejay-dlq-not-empty alarm (ADR-006)."
-
   - rule: PIPE-005
     reason: >
       The flagged call (g.drive.delete_file in
