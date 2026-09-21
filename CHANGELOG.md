@@ -1,3 +1,11 @@
+## [2.0.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.0.2...v2.0.3) (2026-09-21)
+
+
+### Bug Fixes
+
+* **infra:** read secrets from Doppler and refuse placeholders ([22a76ec](https://github.com/mini-app-polis/deejay-cog/commit/22a76eccdd0954c4e9f8bab885845f3bcb6d2096))
+* **trigger:** suppress the API trigger outside production ([d2a83f0](https://github.com/mini-app-polis/deejay-cog/commit/d2a83f0241d15a200dee417beeb8ae926b8a7259))
+
 ## [2.0.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.0.1...v2.0.2) (2026-09-21)
 
 
