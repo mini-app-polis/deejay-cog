@@ -60,20 +60,23 @@ which had no limit.
 ## Order of operations for this cog
 
 ```bash
-cp terraform.tfvars.example terraform.tfvars   # alert_email only; secrets come from Doppler
-export AWS_PROFILE=miniapppolis
+cp terraform.tfvars.example terraform.tfvars   # alert_email; no secrets
+doppler setup --project <deejay-cog project> --config prd   # once per machine, in this directory
 terraform init && terraform fmt -check && terraform validate
-doppler run --project <deejay-cog project> --config prd --name-transformer tf-var -- \
-  terraform plan -out tfplan    # expect: no budget, no OIDC provider, no producer user
-terraform apply tfplan
+./tf plan -out tfplan    # expect: no budget, no OIDC provider, no producer user
+./tf apply tfplan
 ```
 
-Secrets are read from Doppler at plan time rather than copied into
-`terraform.tfvars`: the variable names are Doppler's lowercased, and the
-`tf-var` transformer turns them into `TF_VAR_*`. `terraform.tfvars` wins over
-`TF_VAR_*`, so a secret left in it silently overrides Doppler. They still end
-up in the local state file in plaintext, as any Terraform-managed secret
-does, which is why state is gitignored.
+**Always go through `./tf`.** It reads the secrets from Doppler into
+Terraform's environment, fixes the Google key's line breaks (Doppler returns
+them raw, which strict JSON rejects), refuses to run if `terraform.tfvars`
+would override any of them, never lets Terraform prompt, and prints nothing
+secret. Every by-hand route failed at least once on the first day: tfvars
+shipped placeholders, the clipboard lost the value to the next copy, and a
+pasted `unset` cleared exported variables before they were used.
+
+The secrets still end up in `terraform.tfstate` and `tfplan` in plaintext,
+as any Terraform-managed secret does — both are gitignored.
 
 1. **Apply.** The function is created holding a placeholder that cannot
    import, and the mapping is on. Until the first deploy, anything enqueued

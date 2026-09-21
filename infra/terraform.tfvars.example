@@ -1,16 +1,9 @@
 # Copy to terraform.tfvars (gitignored) and fill in.
 #
-# Only what Doppler does not hold. The cog's secrets and settings come from
-# Doppler at plan time, as TF_VAR_* environment variables:
-#
-#   doppler run --project <deejay-cog project> --config prd \
-#     --name-transformer tf-var -- terraform plan -out tfplan
-#
-# The variable names in variables.tf are Doppler's names lowercased
-# (GOOGLE_CREDENTIALS_JSON -> google_credentials_json), which is what makes
-# that work. Do NOT also set them here: terraform.tfvars takes precedence
-# over TF_VAR_*, so a value here silently wins over Doppler's — which is how
-# the first apply shipped this file's placeholders.
+# Only what Doppler does not hold. The secrets come from Doppler through
+# ./tf, which refuses to run if any of them is also set here —
+# terraform.tfvars wins over the environment, which is how the first apply
+# shipped this file's placeholders. See README.md.
 
 alert_email = "you@example.com"
 
