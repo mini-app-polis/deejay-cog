@@ -1,3 +1,14 @@
+# [2.0.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.29.2...v2.0.0) (2026-09-21)
+
+
+* feat!: run deejay-cog on Lambda behind SQS instead of Prefect ([3bac4f1](https://github.com/mini-app-polis/deejay-cog/commit/3bac4f1d4a966ac32f3ed8bb476306e9c7d7e812))
+
+
+### BREAKING CHANGES
+
+* the Prefect deployment deejay-cog/deejay-cog is retired;
+runs are enqueued through POST /v1/deejay/runs.
+
 ## [1.29.2](https://github.com/mini-app-polis/deejay-cog/compare/v1.29.1...v1.29.2) (2026-09-21)
 
 
