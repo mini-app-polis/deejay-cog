@@ -14,27 +14,17 @@ flag passed to the pipeline_eval helpers prevents any API call.
 
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.google import GoogleAPI
-from prefect import flow
 
 import deejay_cog.config as config
 import deejay_cog.deduplicate_summary as deduplication
 from deejay_cog._pipeline_eval import (
     get_prefect_logger,
-    make_failure_hook,
     post_run_finding,
 )
 
 log = logger_mod.get_logger()
 
 
-@flow(
-    name="generate-summaries",
-    description="Generates per-year summary sheets. "
-    "Validation layer — will be deprecated once "
-    "PostgreSQL is confirmed as source of truth.",
-    on_failure=[make_failure_hook("generate-summaries", production_only=False)],
-    on_crashed=[make_failure_hook("generate-summaries", production_only=False)],
-)
 def generate_summaries_flow() -> None:
     """Generate the next missing summary for a year."""
     logger = get_prefect_logger()

@@ -3,7 +3,6 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import os
-import sys
 from time import monotonic
 from typing import Any
 
@@ -12,24 +11,17 @@ from mini_app_polis import logger as logger_mod
 from mini_app_polis.api import KaianoApiError
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.vdj.m3u import M3UToolbox
-from prefect import flow, task
 
 import deejay_cog.config as config
 from deejay_cog._pipeline_eval import (
     REPO,
     RunReport,
     get_prefect_logger,
-    make_failure_hook,
 )
 
 from .api_client import api_client
 
 log = logger_mod.get_logger()
-
-# Retry backoff: zero delay under pytest so retries do not slow the suite.
-# Checking sys.modules is reliable at import time; PYTEST_CURRENT_TEST
-# is only set while a test function runs, not during collection/import.
-_PROCESS_M3U_RETRY_DELAY = 0 if "pytest" in sys.modules else 10
 
 
 @dataclasses.dataclass
@@ -87,7 +79,6 @@ def build_live_plays_payload(entries: list) -> dict[str, Any]:
     return {"plays": plays}
 
 
-@task(name="process-m3u-file", retries=2, retry_delay_seconds=_PROCESS_M3U_RETRY_DELAY)
 def process_m3u_file(
     g: GoogleAPI,
     m3u_file: dict[str, Any],
@@ -131,17 +122,15 @@ def process_m3u_file(
         return (0, 0, False)
 
 
-@flow(
-    name="ingest-live-history",
-    description="Read VDJ .m3u history files from Drive and send plays to api-kaianolevine-com.",
-    on_failure=[make_failure_hook("ingest-live-history")],
-    on_crashed=[make_failure_hook("ingest-live-history")],
-)
-def ingest_live_history() -> LiveIngestSummary:
+def ingest_live_history(*, run_id: str | None = None) -> LiveIngestSummary:
     """
     Read .m3u files from Drive, parse them, and send plays to POST /v1/live-plays.
 
     Processes only the most-recent .m3u file, not all files.
+
+    ``run_id`` is the queue message id when the Lambda worker runs this.
+    Passed rather than resolved: ``get_run_id()`` only knows Prefect's ids,
+    so without it every report would arrive as ``"local-run"``.
     """
     started_at = monotonic()
     processed_file = ""
@@ -190,6 +179,7 @@ def ingest_live_history() -> LiveIngestSummary:
         flow_name="ingest-live-history",
         repo=REPO,
         duration_sec=monotonic() - started_at,
+        run_id=run_id,
     )
     report.ok(summary.files_processed)
     report.count("plays_sent", summary.plays_sent)

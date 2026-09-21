@@ -106,7 +106,7 @@ def test_ingest_live_history_skips_when_no_api_url(monkeypatch) -> None:
         patch.object(live, "api_client", return_value=client) as mock_client,
         patch.object(live.RunReport, "send", autospec=True) as mock_post,
     ):
-        summary = live.ingest_live_history.fn()
+        summary = live.ingest_live_history()
 
     mock_post.assert_called_once()
     mock_client.assert_not_called()
@@ -118,9 +118,7 @@ def test_ingest_live_history_skips_when_no_api_url(monkeypatch) -> None:
     assert summary.files_failed == 0
 
 
-def test_ingest_live_history_sends_plays_and_returns_summary(
-    monkeypatch, prefect_test_harness
-) -> None:
+def test_ingest_live_history_sends_plays_and_returns_summary(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://example.test")
 
     fake_entries = [
@@ -147,7 +145,7 @@ def test_ingest_live_history_sends_plays_and_returns_summary(
         patch.object(live, "M3UToolbox", return_value=m3u_instance),
         patch.object(live.RunReport, "send", autospec=True) as mock_post,
     ):
-        summary = live.ingest_live_history.fn()
+        summary = live.ingest_live_history()
 
     mock_post.assert_called_once()
     mock_client_cls.assert_called_once_with(base_url="https://example.test")
@@ -168,9 +166,7 @@ def test_ingest_live_history_sends_plays_and_returns_summary(
     assert summary.files_failed == 0
 
 
-def test_ingest_live_history_sends_all_parsed_entries(
-    monkeypatch, prefect_test_harness
-) -> None:
+def test_ingest_live_history_sends_all_parsed_entries(monkeypatch) -> None:
     """Parser returns oldest-first; every parsed entry is posted."""
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://example.test")
 
@@ -201,7 +197,7 @@ def test_ingest_live_history_sends_all_parsed_entries(
         patch.object(live, "M3UToolbox", return_value=m3u_instance),
         patch.object(live.RunReport, "send", autospec=True) as mock_post,
     ):
-        summary = live.ingest_live_history.fn()
+        summary = live.ingest_live_history()
 
     mock_post.assert_called_once()
     _, payload = client.post.call_args.args
@@ -209,3 +205,21 @@ def test_ingest_live_history_sends_all_parsed_entries(
     assert len(payload["plays"]) == 6
     assert [p["title"] for p in payload["plays"]] == [f"Track{i}" for i in range(6)]
     assert summary.plays_sent == 6
+
+
+def test_the_run_id_reaches_the_report(monkeypatch) -> None:
+    """The worker passes the message id; the report must carry it.
+
+    Without it RunReport falls back to get_run_id(), which only knows
+    Prefect's ids and so answers "local-run" for every Lambda run.
+    """
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "")
+    fake_g = SimpleNamespace(drive=SimpleNamespace(get_all_m3u_files=MagicMock()))
+
+    with (
+        patch.object(live.GoogleAPI, "from_env", return_value=fake_g),
+        patch.object(live.RunReport, "send", autospec=True) as sent,
+    ):
+        live.ingest_live_history(run_id="m-42")
+
+    assert sent.call_args.args[0].run_id == "m-42"

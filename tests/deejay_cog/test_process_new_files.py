@@ -9,7 +9,6 @@ from deejay_cog.spotify_sync import SyncOutcome
 
 def test_main_posts_single_success_finding_when_llm_and_api_configured(
     monkeypatch,
-    prefect_test_harness,
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic")
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
@@ -55,9 +54,7 @@ def test_main_posts_single_success_finding_when_llm_and_api_configured(
     assert text.startswith("Run complete in ")
 
 
-def test_main_skips_evaluate_without_anthropic(
-    monkeypatch, prefect_test_harness
-) -> None:
+def test_main_skips_evaluate_without_anthropic(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
 
@@ -76,9 +73,7 @@ def test_main_skips_evaluate_without_anthropic(
     mock_post.assert_called_once()
 
 
-def test_main_posts_single_warn_finding_when_sets_failed(
-    monkeypatch, prefect_test_harness
-) -> None:
+def test_main_posts_single_warn_finding_when_sets_failed(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic")
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
 
@@ -117,7 +112,7 @@ def test_main_posts_single_warn_finding_when_sets_failed(
 def _write_and_normalize(tmp_path, contents: str) -> str:
     path = tmp_path / "input.csv"
     path.write_text(contents)
-    process_new_files._normalize_csv.fn(str(path))
+    process_new_files._normalize_csv(str(path))
     return path.read_text()
 
 
@@ -206,7 +201,7 @@ def test_temp_file_is_removed_in_all_cases(tmp_path):
 
     g.drive.upload_csv_as_google_sheet.side_effect = RuntimeError("boom")
 
-    process_new_files.process_csv_file.fn(g, file_meta, "2024")
+    process_new_files.process_csv_file(g, file_meta, "2024")
 
     temp_path = os.path.join("/tmp", file_meta["name"])
     assert not os.path.exists(temp_path)
@@ -277,7 +272,7 @@ def test_process_csv_file_skips_archive_move_when_already_archived():
     g = SimpleNamespace(drive=drive, sheets=sheets)
 
     with patch.object(process_new_files, "read_tracks_from_sheet", return_value=[]):
-        process_new_files.process_csv_file.fn(g, file_meta, "2024")
+        process_new_files.process_csv_file(g, file_meta, "2024")
 
     drive.move_file.assert_not_called()
 
@@ -291,7 +286,7 @@ def test_ingest_set_to_api_skips_when_base_url_not_set(monkeypatch):
 
     mock_log = MagicMock()
     with patch.object(process_new_files, "get_prefect_logger", return_value=mock_log):
-        process_new_files._ingest_set_to_api.fn(
+        process_new_files._ingest_set_to_api(
             spreadsheet_id="ssid",
             set_date="2024-01-01",
             venue="Venue",
@@ -341,7 +336,7 @@ def test_ingest_set_to_api_posts_payload(monkeypatch):
             "tracks": [{"play_order": 1, "title": "Song", "artist": "Artist"}],
         }
 
-        process_new_files._ingest_set_to_api.fn(
+        process_new_files._ingest_set_to_api(
             spreadsheet_id="ssid",
             set_date="2024-01-01",
             venue="Venue",
@@ -402,7 +397,7 @@ def test_ingest_set_to_api_logs_error_on_api_error(monkeypatch):
         with patch.object(
             process_new_files, "get_prefect_logger", return_value=mock_log
         ):
-            process_new_files._ingest_set_to_api.fn(
+            process_new_files._ingest_set_to_api(
                 spreadsheet_id="ssid",
                 set_date="2024-01-01",
                 venue="Venue",
@@ -464,7 +459,7 @@ def test_unimportable_client_is_counted(monkeypatch):
     # An api_client module that raises on attribute access is what an
     # unimportable client looks like from inside the try block.
     with patch.dict(sys.modules, {"deejay_cog.api_client": None}):
-        process_new_files._ingest_set_to_api.fn(
+        process_new_files._ingest_set_to_api(
             spreadsheet_id="ssid",
             set_date="2026-01-03",
             venue="Venue",
@@ -494,7 +489,7 @@ def test_failure_before_the_post_is_counted(monkeypatch):
         "read_tracks_from_sheet",
         side_effect=RuntimeError("sheet unreadable"),
     ):
-        process_new_files._ingest_set_to_api.fn(
+        process_new_files._ingest_set_to_api(
             spreadsheet_id="ssid",
             set_date="2026-01-03",
             venue="Venue",
@@ -599,7 +594,7 @@ def test_process_csv_file_skips_when_duplicate_exists_in_year_folder():
     g = SimpleNamespace(drive=drive, sheets=sheets)
 
     stats = process_new_files.CsvPipelineStats()
-    result = process_new_files.process_csv_file.fn(g, file_meta, "2024", stats)
+    result = process_new_files.process_csv_file(g, file_meta, "2024", stats)
 
     assert result == "duplicate"
 
@@ -640,9 +635,7 @@ def test_process_non_csv_file_moves_to_year_folder():
 # ── Failure path (TEST-003) ───────────────────────────────────────────────────
 
 
-def test_main_flow_continues_after_single_file_failure(
-    monkeypatch, prefect_test_harness
-) -> None:
+def test_main_flow_continues_after_single_file_failure(monkeypatch) -> None:
     """Main pipeline loop does not abort when process_csv_file raises — continues to next."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     monkeypatch.setenv("KAIANO_API_BASE_URL", "")
@@ -727,7 +720,7 @@ def test_archive_move_failure_still_ingests():
         patch.object(process_new_files, "_ingest_set_to_api") as mock_ingest,
         patch.object(process_new_files, "_sync_set_to_spotify") as mock_sync,
     ):
-        result = process_new_files.process_csv_file.fn(g, file_meta, "2024", stats)
+        result = process_new_files.process_csv_file(g, file_meta, "2024", stats)
 
     assert result == "imported"
     mock_ingest.assert_called_once()
@@ -760,7 +753,7 @@ def test_post_import_failure_does_not_mark_the_set_failed():
         ),
         patch.object(process_new_files, "_sync_set_to_spotify") as mock_sync,
     ):
-        result = process_new_files.process_csv_file.fn(g, file_meta, "2024", stats)
+        result = process_new_files.process_csv_file(g, file_meta, "2024", stats)
 
     assert result == "imported"
     assert stats.sets_imported == 1
@@ -780,11 +773,9 @@ def test_post_import_failure_is_counted_and_warns():
     assert process_new_files._common_eval(stats)["post_import_failed"] == 1
 
 
-def test_flow_level_failure_after_import_is_not_counted_as_failed(
-    monkeypatch, prefect_test_harness
-):
-    """The Prefect wrapper raising after a successful import must not
-    re-brand the set — this is the path .fn() cannot reach."""
+def test_flow_level_failure_after_import_is_not_counted_as_failed(monkeypatch):
+    """process_csv_file raising after a successful import must not
+    re-brand the set — the flow loop, not the file, decides the counter."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     monkeypatch.setenv("KAIANO_API_BASE_URL", "")
 
@@ -819,9 +810,7 @@ def test_flow_level_failure_after_import_is_not_counted_as_failed(
     assert process_new_files._real_issue(stats) is True
 
 
-def test_flow_level_failure_before_import_still_counts_as_failed(
-    monkeypatch, prefect_test_harness
-):
+def test_flow_level_failure_before_import_still_counts_as_failed(monkeypatch):
     """A file that never imported must still reach sets_failed."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     monkeypatch.setenv("KAIANO_API_BASE_URL", "")
@@ -864,7 +853,7 @@ def test_failed_set_is_counted_even_when_the_rename_fails():
     file_meta = {"id": "file-2", "name": "2024-01-04 Venue.csv"}
     stats = process_new_files.CsvPipelineStats()
 
-    result = process_new_files.process_csv_file.fn(g, file_meta, "2024", stats)
+    result = process_new_files.process_csv_file(g, file_meta, "2024", stats)
 
     assert result == "failed"
     assert stats.sets_failed == 1
@@ -884,7 +873,7 @@ def test_unknown_duplicate_check_flags_rather_than_imports():
         is None
     )
 
-    result = process_new_files.process_csv_file.fn(g, file_meta, "2024", stats)
+    result = process_new_files.process_csv_file(g, file_meta, "2024", stats)
 
     assert result == "duplicate"
     g.drive.upload_csv_as_google_sheet.assert_not_called()
@@ -940,7 +929,7 @@ def test_spotify_failed_moves_when_sync_returns_not_ok(monkeypatch):
         patch.object(process_new_files, "push_playlists_to_api") as mock_push,
         patch.object(process_new_files, "get_prefect_logger", return_value=mock_log),
     ):
-        process_new_files._sync_set_to_spotify.fn(
+        process_new_files._sync_set_to_spotify(
             sheet_id="ssid",
             set_name="2024-01-01 Venue",
             label="2024-01-01 Venue",
@@ -966,7 +955,7 @@ def test_a_client_that_will_not_build_is_logged_and_counted(monkeypatch):
         patch.object(process_new_files, "sync_set_to_spotify") as mock_sync,
         patch.object(process_new_files, "get_prefect_logger", return_value=mock_log),
     ):
-        process_new_files._sync_set_to_spotify.fn(
+        process_new_files._sync_set_to_spotify(
             sheet_id="ssid",
             set_name="2024-01-01 Venue",
             label="2024-01-01 Venue",
@@ -979,9 +968,7 @@ def test_a_client_that_will_not_build_is_logged_and_counted(monkeypatch):
     mock_log.error.assert_called()
 
 
-def test_a_failed_push_is_counted_not_logged_as_none(
-    monkeypatch, prefect_test_harness
-) -> None:
+def test_a_failed_push_is_counted_not_logged_as_none(monkeypatch) -> None:
     """push_playlists_to_api raising reaches spotify_failed."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic")
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
@@ -1009,3 +996,24 @@ def test_a_failed_push_is_counted_not_logged_as_none(
     report = mock_post.call_args.args[0]
     assert report.severity == "WARN"
     assert "spotify_failed=1" in report.text()
+
+
+def test_the_run_id_reaches_the_report(monkeypatch) -> None:
+    """The worker passes the message id; the report must carry it.
+
+    Without it RunReport falls back to get_run_id(), which only knows
+    Prefect's ids and so answers "local-run" for every Lambda run.
+    """
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "")
+    g = SimpleNamespace(drive=SimpleNamespace(list_files=MagicMock(return_value=[])))
+
+    with (
+        patch.object(process_new_files.GoogleAPI, "from_env", return_value=g),
+        patch.object(process_new_files, "normalize_prefixes_in_source"),
+        patch.object(process_new_files.RunReport, "send", autospec=True) as sent,
+        patch.object(process_new_files, "config") as mock_cfg,
+    ):
+        mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
+        process_new_files.process_new_csv_files_flow(run_id="m-42")
+
+    assert sent.call_args.args[0].run_id == "m-42"

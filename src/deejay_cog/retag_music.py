@@ -41,7 +41,6 @@ System dependencies (must be present in the runtime environment):
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 from dataclasses import dataclass, field
 from typing import Any
@@ -51,21 +50,14 @@ from mini_app_polis.google import GoogleAPI
 from mini_app_polis.mp3.identify import IdentificationPolicy, Mp3Identifier
 from mini_app_polis.mp3.rename import Mp3Renamer
 from mini_app_polis.mp3.tag import Mp3Tagger
-from prefect import flow, task
 
 import deejay_cog.config as config
 from deejay_cog._pipeline_eval import (
     get_prefect_logger,
-    make_failure_hook,
     post_run_finding,
 )
 
 log = logger_mod.get_logger()
-
-# Retry backoff: short during tests, normal in production.
-# Checking sys.modules is reliable at import time; PYTEST_CURRENT_TEST
-# is only set while a test function runs, not during collection/import.
-_RETAG_MUSIC_RETRY_DELAY = 0 if "pytest" in sys.modules else 15
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +150,6 @@ class RetagSummary:
     skipped: int = field(default=0)
 
 
-@task(name="retag-music-file", retries=2, retry_delay_seconds=_RETAG_MUSIC_RETRY_DELAY)
 def retag_music_file(
     g: GoogleAPI,
     file: Any,
@@ -299,12 +290,6 @@ def retag_music_file(
 # ---------------------------------------------------------------------------
 
 
-@flow(
-    name="retag-music",
-    description="Download audio files from Drive, identify via AcoustID/MusicBrainz, write tags, and upload.",
-    on_failure=[make_failure_hook("retag-music", production_only=False)],
-    on_crashed=[make_failure_hook("retag-music", production_only=False)],
-)
 def retag_music_flow() -> RetagSummary:
     """
     For each audio file in MUSIC_UPLOAD_SOURCE_FOLDER_ID:

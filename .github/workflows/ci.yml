@@ -60,6 +60,8 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+    outputs:
+      tag: ${{ steps.released.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v7
@@ -95,6 +97,26 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx semantic-release
+
+      # semantic-release tags the release commit it leaves at HEAD. No tag
+      # there means the push carried nothing releasable, and nothing new
+      # needs deploying.
+      - name: Record the release tag
+        id: released
+        run: echo "tag=$(git tag --points-at HEAD --list 'v*' | head -n1)" >> "$GITHUB_OUTPUT"
+
+  # The worker is deployed here rather than by deploy-worker.yml's own
+  # trigger: a release published with GITHUB_TOKEN starts no workflows, so
+  # `on: release` would never fire and the Lambda would drift behind main.
+  deploy:
+    needs: release
+    if: needs.release.outputs.tag != ''
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/deploy-worker.yml
+    with:
+      ref: ${{ needs.release.outputs.tag }}
 
   # Conformance is graded when the repository changes, and this is where
   # that is said. The evaluation runs after this job ends, so what the job

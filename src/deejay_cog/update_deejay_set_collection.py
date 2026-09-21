@@ -18,12 +18,10 @@ import re
 
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.google import GoogleAPI
-from prefect import flow
 
 import deejay_cog.config as config
 from deejay_cog._pipeline_eval import (
     get_prefect_logger,
-    make_failure_hook,
     post_run_finding,
 )
 
@@ -42,15 +40,6 @@ def _write_json_snapshot(data: dict, path: str) -> None:
     out.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-@flow(
-    name="update-dj-set-collection",
-    description="Rebuilds master DJ set collection spreadsheet "
-    "and JSON snapshot. Validation layer — will be "
-    "deprecated once PostgreSQL is confirmed as "
-    "source of truth.",
-    on_failure=[make_failure_hook("update-dj-set-collection", production_only=False)],
-    on_crashed=[make_failure_hook("update-dj-set-collection", production_only=False)],
-)
 def generate_dj_set_collection():
     """TODO: describe this function."""
     logger = get_prefect_logger()

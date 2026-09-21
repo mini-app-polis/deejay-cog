@@ -8,13 +8,13 @@ Processes DJ set CSV files from Google Drive into Google Sheets (organized by ye
 
 This repository is the backend cog for a Drive-based DJ set pipeline. It reads CSV files (and optionally other files) from a configured Google Drive source folder, normalizes and uploads them as Google Sheets into year-based folders, and can maintain collection and summary artifacts for cross-checks during the PostgreSQL migration.
 
-**Production** runs on Railway under `python -m deejay_cog.main` (Prefect `serve()`, wrapped in `serve_with_retry` for startup resilience — see [ADR-005](docs/decisions/ADR-005-serve-startup-resilience.md)), which registers a single router-style deployment (`deejay-cog/deejay-cog`). The router dispatches to the right underlying flow based on a required `mode` parameter (`process-new-files` or `ingest-live-history`). **watcher-cog** detects Drive changes and creates Prefect runs per **PIPE-008** (watcher-cog → Prefect → cog), passing the appropriate `mode`.
+**Production** runs on AWS Lambda behind its own SQS queue, `deejay-jobs` — see [ADR-006](docs/decisions/ADR-006-lambda-behind-sqs.md) and [infra/](infra/README.md). **watcher-cog** detects Drive changes and POSTs `/v1/deejay/runs` with a `mode` (`process-new-files` or `ingest-live-history`); api-kaianolevine-com enqueues one message, and `deejay_cog.worker.lambda_handler` runs the matching flow. Nothing runs between triggers.
 
 ---
 
 ## Flow inventory
 
-### Production (served on Railway as the `deejay-cog/deejay-cog` router)
+### Production (run by the Lambda worker, one flow per queue message)
 
 | Mode | Underlying flow | Script | Notes |
 |------|-----------------|--------|--------|
@@ -40,7 +40,7 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 
 - **Source location**: Google Drive folder (`CSV_SOURCE_FOLDER_ID`) — drop zone for files to process.
 - **File format**: CSVs with filenames starting with a four-digit year (e.g. `2024-01-15_My_Set.csv`). Non-CSV files that start with a year can be moved into the year folder without conversion.
-- **Origin**: Files are placed in the folder by your Drive workflow; **watcher-cog** schedules Prefect when new files appear.
+- **Origin**: Files are placed in the folder by your Drive workflow; **watcher-cog** asks the API to enqueue a run when new files appear.
 
 ---
 
@@ -57,7 +57,7 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 
 | Script | Purpose |
 |--------|--------|
-| **process_new_files.py** | Production CSV pipeline (also the `main` Prefect deployment). |
+| **process_new_files.py** | Production CSV pipeline (the `process-new-files` mode). |
 | **ingest_live_history.py** | Production live-play ingest from the latest `.m3u`. |
 | **update_deejay_set_collection.py** | Local-only collection + JSON rebuild. |
 | **generate_summaries.py** | Local-only summary generation. |
@@ -78,14 +78,13 @@ Required for Drive/Sheets and logging:
 
 Layout and behavior keys live in **common-python-utils** / `config` (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
 
-API and Prefect (production):
+API (production — on Lambda these come from `infra/`, not Doppler):
 
 | Variable | Description |
 |----------|-------------|
 | **ANTHROPIC_API_KEY** | With **`KAIANO_API_BASE_URL`**, enables **production** `post_run_finding` posts to pipeline evaluations. |
 | **KAIANO_API_BASE_URL** | api-kaianolevine-com base URL; required for API ingest and for gated evaluation posts. |
 | **DEEJAY_COG_API_KEY** | This cog's own named key, used by the API client to authenticate to api-kaianolevine-com. No fallback — unset means 401. |
-| **PREFECT_API_KEY** / **PREFECT_API_URL** | Prefect Cloud worker authentication. |
 
 Spotify variables (`SPOTIPY_*`, `SPOTIFY_RADIO_PLAYLIST_ID`) are optional; if incomplete, Spotify steps are skipped.
 
@@ -103,10 +102,11 @@ uv run pre-commit install
 uv run pre-commit run --all-files
 ```
 
-**Production flows (Prefect runner)** — same entrypoint as Railway:
+**Production flows** — the worker runs them on Lambda; locally, run one directly:
 
 ```bash
-uv run python -m deejay_cog.main
+uv run python -u src/deejay_cog/process_new_files.py
+uv run python -u src/deejay_cog/ingest_live_history.py
 ```
 
 **Local-only / WIP flows** — run modules directly. These call `post_run_finding(..., production_only=False)` and **do not** write to the production `pipeline_evaluations` API, **even if** `KAIANO_API_BASE_URL` and `ANTHROPIC_API_KEY` are set in your shell:
@@ -117,7 +117,7 @@ uv run python -m deejay_cog.update_deejay_set_collection
 uv run python -m deejay_cog.retag_music   # requires ffmpeg + fpcalc on PATH
 ```
 
-**One-off CSV processing** (without Prefect):
+**One-off CSV processing:**
 
 ```bash
 uv run python -u src/deejay_cog/process_new_files.py
