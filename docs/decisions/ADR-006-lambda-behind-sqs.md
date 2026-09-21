@@ -49,9 +49,12 @@ ran the routed flows on `repository_dispatch` are removed too: nothing in
 the fleet sends those events, and a second trigger path for the same work
 is what the cutover rule forbids.
 
-The function is x86_64 and built on the runtime's Python, because deejay
-has compiled dependencies and the deploy's import guard is only a test if
-it loads the same binaries Lambda will.
+The function is x86_64 on python3.11, whose runtime is Amazon Linux 2
+(glibc 2.26). deejay has compiled dependencies, so the deploy pins the wheel
+platform to `x86_64-manylinux_2_17` and imports the package inside Lambda's
+own image before uploading. An import check on the build runner is not a
+test of the runtime: the first deploy passed one and failed at import on
+Lambda, because Ubuntu's glibc accepted a wheel Amazon Linux 2 cannot load.
 
 ## Consequences
 

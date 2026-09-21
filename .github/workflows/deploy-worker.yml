@@ -34,10 +34,10 @@ concurrency:
 
 jobs:
   deploy:
-    # x86_64, matching `architectures` in infra/worker.tf. deejay has
-    # compiled dependencies (cryptography, cffi, rpds-py), so the runner's
-    # architecture is the one whose wheels land in the zip — and the import
-    # guard below is only a real test if it runs the same binaries.
+    # x86_64, matching `architectures` in infra/worker.tf. The wheels are
+    # chosen by --python-platform below, not by this runner, and the import
+    # guard runs inside Lambda's own image — so neither depends on what
+    # Ubuntu happens to ship.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -63,8 +63,15 @@ jobs:
           # carry versions the test job never ran. CD-020 applies here too.
           uv export --frozen --no-dev --no-emit-project --no-hashes \
             --format requirements-txt -o requirements.lock.txt
-          uv pip install --python 3.11 --target build/ \
-            -r requirements.lock.txt --quiet
+          # --python-platform, and this is the line that matters. Left to
+          # itself uv picks the newest wheel the *runner* can load, and
+          # Ubuntu's glibc accepts manylinux_2_34. The python3.11 Lambda
+          # runtime is Amazon Linux 2, glibc 2.26: the first deploy shipped
+          # cryptography's manylinux_2_28 wheel and failed at import with
+          # "GLIBC_2.28 not found". manylinux_2_17 is the newest tag AL2
+          # can load that every locked compiled dependency publishes.
+          uv pip install --python 3.11 --python-platform x86_64-manylinux_2_17 \
+            --target build/ -r requirements.lock.txt --quiet
           uv pip install --python 3.11 --target build/ --no-deps . --quiet
 
           # The runtime provides boto3. deejay does not depend on it at all
@@ -83,12 +90,31 @@ jobs:
             exit 1
           }
 
-          # Import every module against the package as it will be unpacked,
-          # on the runtime's Python, with nothing else on the path. An
-          # ImportError here is the guard working; one at invocation means
-          # a message retries three times and dead-letters before anyone
-          # knows the deploy was bad.
-          PYTHONPATH="$PWD/build" uv run --no-project --python 3.11 python - <<'IMPORTS'
+          # No compiled library may need a newer glibc than the runtime has.
+          # Cheap, and it names the offending file — which the import error
+          # from Lambda did not.
+          RUNTIME_GLIBC_MINOR=26   # python3.11 runtime = Amazon Linux 2
+          worst=$(find build -name '*.so*' -type f -exec readelf -V {} + 2>/dev/null \
+            | grep -o 'GLIBC_2\.[0-9]*' | sort -t. -k2 -n -u | tail -1)
+          echo "newest glibc symbol required: ${worst:-none}"
+          if [ -n "$worst" ] && [ "${worst#GLIBC_2.}" -gt "$RUNTIME_GLIBC_MINOR" ]; then
+            echo "::error::the zip needs $worst; the runtime has GLIBC_2.$RUNTIME_GLIBC_MINOR"
+            for f in $(find build -name '*.so*' -type f); do
+              readelf -V "$f" 2>/dev/null | grep -q "$worst" && echo "  $f"
+            done
+            exit 1
+          fi
+
+          # Import every module, and call the handler once, inside Lambda's
+          # own image with the package mounted where Lambda unpacks it. The
+          # first version of this ran on the runner's Python and passed a
+          # zip that could not import on Lambda, because the runner's glibc
+          # is newer. Running in the runtime's image is what makes a pass
+          # here mean the function will start.
+          docker run --rm -i \
+            -v "$PWD/build:/var/task:ro" -e PYTHONPATH=/var/task \
+            --entrypoint /var/lang/bin/python3 \
+            public.ecr.aws/lambda/python:3.11 - <<'IMPORTS'
           import importlib, pkgutil, sys
           import deejay_cog
 
@@ -99,12 +125,20 @@ jobs:
               except Exception as exc:
                   failed.append(f"{m.name}: {type(exc).__name__}: {exc}")
           if failed:
-              print("::error::the package does not import as it will be unpacked")
+              print("::error::the package does not import in the Lambda runtime")
               for line in failed:
                   print(f"  {line}")
               sys.exit(1)
-          assert callable(importlib.import_module("deejay_cog.worker").lambda_handler)
-          print("every module imports from the built package")
+
+          # The probe from infra/README.md, without AWS: a malformed record
+          # must come back as a reported failure, not an exception.
+          from deejay_cog.worker import lambda_handler
+          result = lambda_handler(
+              {"Records": [{"messageId": "probe-1", "body": "not json", "attributes": {}}]},
+              None,
+          )
+          assert result == {"batchItemFailures": [{"itemIdentifier": "probe-1"}]}, result
+          print("every module imports, and the handler answers, in the Lambda runtime")
           IMPORTS
 
           cd build

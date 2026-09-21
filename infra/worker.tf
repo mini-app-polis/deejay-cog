@@ -100,10 +100,10 @@ resource "aws_lambda_function" "worker" {
 
   # x86_64, not the evaluator's arm64, because deejay's dependencies are
   # not all pure Python — cryptography, cffi and rpds-py ship compiled
-  # wheels. The deploy workflow builds on an x86_64 runner against the
-  # runtime's Python, so the import guard it runs is a test of the exact
-  # binaries Lambda will load. On arm64 the build would have to
-  # cross-install, and the guard could no longer import what it checks.
+  # wheels. The deploy workflow installs them for x86_64-manylinux_2_17 —
+  # this runtime is Amazon Linux 2, glibc 2.26 — and imports the package
+  # inside Lambda's own python3.11 image before uploading. Changing this
+  # means changing --python-platform and the guard's image to match.
   architectures = ["x86_64"]
 
   filename         = data.archive_file.bootstrap.output_path
