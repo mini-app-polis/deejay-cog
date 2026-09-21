@@ -1,3 +1,10 @@
+## [2.1.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.1.0...v2.1.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **reporting:** stamp the running version on discord run reports ([c5b8a96](https://github.com/mini-app-polis/deejay-cog/commit/c5b8a961df821f382175c46b8217437f6f73be4e))
+
 # [2.1.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.0.4...v2.1.0) (2026-09-21)
 
 
