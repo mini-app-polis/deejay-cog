@@ -1,3 +1,10 @@
+## [2.0.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.0.0...v2.0.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **deploy:** build the Lambda zip for Amazon Linux 2, and test it there ([1dae868](https://github.com/mini-app-polis/deejay-cog/commit/1dae8685251e92a33410aa2b7dace5b15ff2480a))
+
 # [2.0.0](https://github.com/mini-app-polis/deejay-cog/compare/v1.29.2...v2.0.0) (2026-09-21)
 
 
