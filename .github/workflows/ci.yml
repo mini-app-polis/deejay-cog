@@ -101,12 +101,14 @@ jobs:
       region: ${{ vars.AWS_REGION }}
       function-name: ${{ vars.AWS_FUNCTION_NAME }}
 
-  # Conformance is graded when the repository changes, and this is where
-  # that is said. The evaluation runs after this job ends, so what the job
-  # reports is whether the request landed — never what was found.
+  # Conformance is graded on each release, after that release is running.
+  # Sequential with deploy, as in every Lambda cog: a release that did not
+  # deploy is not graded as though it had, and a push that cut no release
+  # has nothing new to grade. The evaluation runs after this job ends, so
+  # what the job reports is whether the request landed — never what was
+  # found.
   evaluate:
-    needs: release
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: deploy
     uses: mini-app-polis/.github/.github/workflows/evaluate.yml@v3
     secrets:
       api-key: ${{ secrets.CI_VALIDATOR_API_KEY }}
