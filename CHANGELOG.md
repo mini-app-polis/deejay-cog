@@ -1,3 +1,10 @@
+## [2.0.4](https://github.com/mini-app-polis/deejay-cog/compare/v2.0.3...v2.0.4) (2026-09-21)
+
+
+### Bug Fixes
+
+* latest common ([0ccc659](https://github.com/mini-app-polis/deejay-cog/commit/0ccc6596740576ab54a2e78c583b96081ce29d1a))
+
 ## [2.0.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.0.2...v2.0.3) (2026-09-21)
 
 
