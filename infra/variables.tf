@@ -144,12 +144,31 @@ variable "deejay_cog_api_key" {
   description = "This cog's own named API key (CD-019), DEEJAY_COG_API_KEY. No fallback — unset or wrong means 401 on every ingest."
   type        = string
   sensitive   = true
+
+  # The first apply shipped the example's "..." and every call 401'd,
+  # including the failure report that would have said so.
+  validation {
+    condition     = length(var.deejay_cog_api_key) >= 20 && !strcontains(var.deejay_cog_api_key, "...")
+    error_message = "deejay_cog_api_key looks like the placeholder from terraform.tfvars.example."
+  }
 }
 
 variable "google_credentials_json" {
   description = "Service-account JSON as a string, GOOGLE_CREDENTIALS_JSON. Drive and Sheets for both flows."
   type        = string
   sensitive   = true
+
+  # The first apply shipped the example's placeholder, which the Google
+  # client rejected before falling back to a credentials.json that does not
+  # exist on Lambda. Parsing here fails the plan instead of every run.
+  validation {
+    condition = (
+      can(jsondecode(var.google_credentials_json)) &&
+      try(jsondecode(var.google_credentials_json).type, "") == "service_account" &&
+      can(jsondecode(var.google_credentials_json).private_key)
+    )
+    error_message = "google_credentials_json must be a service-account JSON document (type = service_account, with a private_key)."
+  }
 }
 
 variable "spotipy_client_id" {

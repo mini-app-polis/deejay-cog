@@ -1,18 +1,11 @@
-# Copy to terraform.tfvars (gitignored) and fill in. Secrets live here in
-# plaintext, as they do in the state file — both are gitignored.
+# Copy to terraform.tfvars (gitignored) and fill in.
+#
+# Only what Doppler does not hold. The secrets come from Doppler through
+# ./tf, which refuses to run if any of them is also set here —
+# terraform.tfvars wins over the environment, which is how the first apply
+# shipped this file's placeholders. See README.md.
 
-alert_email             = "you@example.com"
-kaiano_api_base_url     = "https://api.kaianolevine.com"
-deejay_cog_api_key      = "..."   # DEEJAY_COG_API_KEY, this cog's named key
-google_credentials_json = <<-JSON
-  { "type": "service_account", ... }
-JSON
-
-spotipy_client_id         = ""
-spotipy_client_secret     = ""
-spotipy_refresh_token     = ""
-spotify_radio_playlist_id = ""
-sentry_dsn                = ""    # SENTRY_DSN
+alert_email = "you@example.com"
 
 # Account-level resources evaluator-cog's state owns. Already false by
 # default in this directory; pinned here so the intent is written down.

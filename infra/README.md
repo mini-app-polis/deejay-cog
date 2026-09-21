@@ -60,13 +60,23 @@ which had no limit.
 ## Order of operations for this cog
 
 ```bash
-cp terraform.tfvars.example terraform.tfvars   # then fill it in
-terraform init
-terraform fmt -check
-terraform validate
-terraform plan        # expect: no budget, no OIDC provider, no producer user
-terraform apply
+cp terraform.tfvars.example terraform.tfvars   # alert_email; no secrets
+doppler setup --project <deejay-cog project> --config prd   # once per machine, in this directory
+terraform init && terraform fmt -check && terraform validate
+./tf plan -out tfplan    # expect: no budget, no OIDC provider, no producer user
+./tf apply tfplan
 ```
+
+**Always go through `./tf`.** It reads the secrets from Doppler into
+Terraform's environment, fixes the Google key's line breaks (Doppler returns
+them raw, which strict JSON rejects), refuses to run if `terraform.tfvars`
+would override any of them, never lets Terraform prompt, and prints nothing
+secret. Every by-hand route failed at least once on the first day: tfvars
+shipped placeholders, the clipboard lost the value to the next copy, and a
+pasted `unset` cleared exported variables before they were used.
+
+The secrets still end up in `terraform.tfstate` and `tfplan` in plaintext,
+as any Terraform-managed secret does — both are gitignored.
 
 1. **Apply.** The function is created holding a placeholder that cannot
    import, and the mapping is on. Until the first deploy, anything enqueued
