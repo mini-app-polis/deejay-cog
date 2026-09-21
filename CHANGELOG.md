@@ -1,3 +1,10 @@
+# [2.1.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.0.4...v2.1.0) (2026-09-21)
+
+
+### Features
+
+* **infra:** serialise runs with reserved concurrency of 1 ([a589564](https://github.com/mini-app-polis/deejay-cog/commit/a58956441b0647257b767362d8a1795a7dd219ae))
+
 ## [2.0.4](https://github.com/mini-app-polis/deejay-cog/compare/v2.0.3...v2.0.4) (2026-09-21)
 
 
