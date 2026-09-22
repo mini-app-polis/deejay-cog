@@ -100,9 +100,11 @@ variable "reserved_concurrency" {
     raised to 1,000 (2026-09-21). Before that AWS refused any reservation that
     left fewer than 100 unreserved executions.
 
-    It sits below the mapping's max_concurrency, which AWS will not set under
-    2. When two messages arrive together the mapping can invoke twice and the
-    second invocation is throttled. A throttled message goes back on the queue
+    It is the only concurrency setting. The mapping's scaling_config cannot
+    go below 2, and AWS refuses to create a mapping whose maximum exceeds the
+    function's reservation, so there is none. When two messages arrive
+    together the mapping can invoke twice and the second invocation is
+    throttled. A throttled message goes back on the queue
     after the visibility timeout and the attempt counts toward
     max_receive_count, which is why that is 5 rather than 3: a burst must not
     dead-letter good work. Two messages at once is rare for this cog.
@@ -112,7 +114,7 @@ variable "reserved_concurrency" {
 }
 
 variable "max_receive_count" {
-  description = "Deliveries before a message goes to the DLQ. Not automatic — without a redrive policy a poison message retries forever. 5, not 3, because reserved_concurrency = 1 below the mapping's floor of 2 means a burst can throttle a good message, and a throttled attempt still counts."
+  description = "Deliveries before a message goes to the DLQ. Not automatic — without a redrive policy a poison message retries forever. 5, not 3, because reserved_concurrency = 1 means a burst can throttle a good message, and a throttled attempt still counts."
   type        = number
   default     = 5
 }
@@ -219,40 +221,6 @@ variable "create_github_oidc_provider" {
   DESC
   type        = bool
   default     = false
-}
-
-variable "max_concurrency" {
-  description = <<-DESC
-    How many workers the queue may run at once. For deejay: the lowest AWS
-    allows. The real limit is reserved_concurrency = 1 on the function; this
-    only keeps the mapping from asking for more than it can get.
-
-    The evaluator's reasoning, kept for the template:
-
-    Not reserved_concurrency, which is the other knob above and is
-    unavailable: AWS refuses to reserve for a function if that would leave
-    the account under 100 unreserved, and this account is below that. This
-    one lives on the event source mapping instead, needs no quota, and is
-    the throttle that actually exists today.
-
-    It matters because a fleet pass is now N concurrent jobs rather than
-    one serial loop. Each clones a repository and posts its findings back
-    through Cloudflare to a single Railway container, so an unthrottled
-    pass is the self-inflicted load test the fleet's own notes warn about,
-    aimed at the API that every other service also depends on.
-
-    Four is a starting point, not a measurement: it keeps a pass roughly
-    four times faster than the old serial sweep while leaving the API most
-    of its headroom. Raise it once a pass has been watched under load. AWS
-    requires at least 2.
-  DESC
-  type        = number
-  default     = 2
-
-  validation {
-    condition     = var.max_concurrency >= 2
-    error_message = "SQS event source mappings require maximum_concurrency >= 2."
-  }
 }
 
 variable "create_api_producer" {

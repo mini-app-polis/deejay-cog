@@ -26,6 +26,9 @@ jobs:
   # cog's `test` stage is the same stage. See mini-app-polis/.github.
   test:
     uses: mini-app-polis/.github/.github/workflows/python-test.yml@v3
+    with:
+      # fmt and validate only; applying stays on the workstation.
+      terraform-dir: infra
 
   release:
     needs: [test, security]

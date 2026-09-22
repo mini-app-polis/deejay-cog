@@ -51,9 +51,10 @@ they belong in SSM Parameter Store — a code change, not a Terraform one.
 once the slowest run is known.
 
 **Concurrency is 1.** A process-new-files run is a sweep of one Drive
-folder, and two at once race over the same files. The event source mapping
-cannot go below 2, so the function reserves 1 (`reserved_concurrency`) and
-the mapping stays at its floor of 2. A second message arriving mid-run is
+folder, and two at once race over the same files. The function reserves 1
+(`reserved_concurrency`). The mapping has no `scaling_config`: its floor is
+2, and AWS refuses a mapping maximum above the function's reservation. A
+second message arriving mid-run is
 throttled and redelivered, which is why `max_receive_count` is 5.
 
 ## Order of operations for this cog
