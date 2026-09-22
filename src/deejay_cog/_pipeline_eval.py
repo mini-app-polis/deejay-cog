@@ -91,6 +91,11 @@ class RunReport(_RunReport):
     """:class:`mini_app_polis.pipeline_status.RunReport`, version-stamped."""
 
     def text(self) -> str:
+        """The library's message body, with :data:`VERSION_STAMP` as its last line.
+
+        Stamped here rather than at send time so every path that renders the
+        report — :meth:`send`, and the tests that read it — sees the same text.
+        """
         return stamp_version(super().text())
 
 
