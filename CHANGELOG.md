@@ -1,3 +1,11 @@
+## [2.1.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.1.1...v2.1.2) (2026-09-22)
+
+
+### Bug Fixes
+
+* ci check infra with terraform fmt and validate, fix(infra): drop scaling_config, which conflicts with reserved concurrency ([d146d3f](https://github.com/mini-app-polis/deejay-cog/commit/d146d3f9935601551f7842b5ea7969b49688819a))
+* **worker): report an unprocessable message once, not per receive and chore(infra:** refuse the placeholder alert email ([6ad5dd2](https://github.com/mini-app-polis/deejay-cog/commit/6ad5dd2eef1c9aa8ca53ee46f33c91a3eb6c2680))
+
 ## [2.1.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.1.0...v2.1.1) (2026-09-21)
 
 
