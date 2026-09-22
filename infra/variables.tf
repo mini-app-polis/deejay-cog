@@ -33,6 +33,14 @@ variable "github_repo" {
 variable "alert_email" {
   description = "Where this cog's DLQ alarm goes."
   type        = string
+
+  # transcription-cog's first apply subscribed the example's placeholder,
+  # and the alarm would have told nobody. SNS accepts any address; this
+  # does not accept that one.
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email)) && !endswith(lower(var.alert_email), "@example.com")
+    error_message = "alert_email must be a real address, not the example.com placeholder from terraform.tfvars.example."
+  }
 }
 
 variable "create_account_budget" {
