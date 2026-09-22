@@ -175,9 +175,11 @@ resource "aws_lambda_event_source_mapping" "jobs" {
 
   function_response_types = ["ReportBatchItemFailures"]
 
-  # At AWS's floor of 2. The function's reserved concurrency of 1 is the
-  # real limit; see var.reserved_concurrency for what happens between them.
-  scaling_config {
-    maximum_concurrency = var.max_concurrency
-  }
+  # No scaling_config. Its maximum_concurrency cannot go below 2, and AWS
+  # refuses to create a mapping whose maximum exceeds the function's
+  # reserved concurrency ("MaximumConcurrency: 2 is greater than Function
+  # Reserved Concurrency: 1"). This mapping predates the reservation, so it
+  # was never refused — but recreating it would have been. The reservation
+  # of 1 is the ceiling, and PIPE-018 accepts either. See
+  # var.reserved_concurrency.
 }

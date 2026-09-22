@@ -142,3 +142,18 @@ def test_a_failing_report_does_not_turn_a_retry_into_a_delete(
 @pytest.mark.parametrize("event", [{}, {"Records": []}, None, "junk"])
 def test_an_empty_or_malformed_event_is_not_an_error(event: object) -> None:
     assert worker.lambda_handler(event, None) == {"batchItemFailures": []}  # type: ignore[arg-type]
+
+
+def test_an_unprocessable_message_is_reported_once_not_per_receive(
+    flows: dict[str, MagicMock], reported: MagicMock
+) -> None:
+    """A redelivery fails the same way; the DLQ alarm covers where it ends."""
+    event = _event("not json")
+    event["Records"][0]["attributes"]["ApproximateReceiveCount"] = "2"
+
+    result = worker.lambda_handler(event, None)
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}]}
+    reported.assert_not_called()
+    for flow in flows.values():
+        flow.assert_not_called()
