@@ -42,6 +42,7 @@ import sentry_sdk
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.environment import current_environment
 
+from deejay_cog._deadline import deadline
 from deejay_cog._pipeline_eval import post_run_finding
 from deejay_cog.ingest_live_history import ingest_live_history
 from deejay_cog.process_new_files import process_new_csv_files_flow
@@ -158,7 +159,7 @@ def _flow_name_for(body: str) -> str:
         return "deejay-cog"
 
 
-def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ARG001
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Run each record's flow, and name the records that must come back.
 
     Never raises. An exception escaping here fails the whole batch; at
@@ -176,7 +177,12 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # no
         attempt = (record.get("attributes") or {}).get("ApproximateReceiveCount", "?")
 
         try:
-            process_message(body, run_id=message_id)
+            # A run that outlives the function's timeout is killed outright —
+            # no report, and the message comes back with nobody told why.
+            # This stops it a margin early so the failure is the ordinary
+            # kind (PIPE-020).
+            with deadline(context):
+                process_message(body, run_id=message_id)
         except UnprocessableMessage as exc:
             log.error("worker: unprocessable message (attempt %s): %s", attempt, exc)
             # Once, on the first receive. Every later receive fails the same
