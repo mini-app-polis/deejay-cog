@@ -1,3 +1,10 @@
+# [2.2.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.1.2...v2.2.0) (2026-09-23)
+
+
+### Features
+
+* **worker:** stop a run before the function timeout ([0c7c98d](https://github.com/mini-app-polis/deejay-cog/commit/0c7c98db5074415f251e1710906afcbc6e00859a))
+
 ## [2.1.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.1.1...v2.1.2) (2026-09-22)
 
 
