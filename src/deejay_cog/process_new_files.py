@@ -449,7 +449,7 @@ def _ingest_set_to_api(
         return
 
     try:
-        from mini_app_polis.api.errors import KaianoApiError  # type: ignore
+        from mini_app_polis.api.errors import KaianoApiError
 
         from .api_client import api_client
     except Exception as e:
@@ -739,10 +739,10 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
     # Normalize any leftover status prefixes before processing
     normalize_prefixes_in_source(g.drive)
 
-    files = g.drive.list_files(
+    listed = g.drive.list_files(
         config.CSV_SOURCE_FOLDER_ID, include_folders=False, trashed=False
     )
-    files = [{"id": f.id, "name": f.name} for f in files]
+    files = [{"id": f.id, "name": f.name} for f in listed]
     logger.info(f"Found {len(files)} files in source folder")
 
     stats = CsvPipelineStats()

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from mini_app_polis import logger as logger_mod
-from mini_app_polis.api import KaianoApiError  # type: ignore
+from mini_app_polis.api import KaianoApiError
 from mini_app_polis.spotify import SpotifyAPI
 
 from .api_client import api_client
