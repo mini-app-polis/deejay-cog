@@ -1,3 +1,10 @@
+## [2.2.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.2.0...v2.2.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **retag:** call Mp3Renamer.rename; apply() never existed ([6a1917b](https://github.com/mini-app-polis/deejay-cog/commit/6a1917b4d02cd9bd2d702c982ba4618425c283ba))
+
 # [2.2.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.1.2...v2.2.0) (2026-09-23)
 
 
