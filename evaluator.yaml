@@ -4,9 +4,6 @@
 type: pipeline-cog
 
 exemptions:
-  - rule: TEST-011
-    reason: "Evaluator false positive — check_mock_assertions regex only matches .assert_called* and misses .assert_not_called() (line 182 in test_ingest_to_api.py) and .call_count comparisons (line 149). Both are valid mock interrogation patterns. To remove this exemption, update check_mock_assertions in evaluator-cog to accept the full mock-assertion family."
-
   - rule: PIPE-005
     reason: >
       The flagged call (g.drive.delete_file in

@@ -157,3 +157,74 @@ def test_an_unprocessable_message_is_reported_once_not_per_receive(
     reported.assert_not_called()
     for flow in flows.values():
         flow.assert_not_called()
+
+
+# ── the deadline ─────────────────────────────────────────────────────────
+
+
+class _Context:
+    """Lambda's context, as far as the worker reads it."""
+
+    def __init__(self, remaining_ms: int) -> None:
+        self._remaining_ms = remaining_ms
+
+    def get_remaining_time_in_millis(self) -> int:
+        return self._remaining_ms
+
+
+def test_a_run_that_outlives_the_deadline_fails_the_ordinary_way(
+    flows: dict[str, MagicMock],
+    reported: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stopped before Lambda kills it, so the failure is reported and the
+    message comes back — rather than a hard kill that tells nobody
+    anything."""
+    import time
+
+    from deejay_cog import _deadline
+
+    monkeypatch.setattr(_deadline, "DEADLINE_MARGIN_SECONDS", 0)
+    raised: list[BaseException] = []
+
+    def _slow(*_args: object, **_kwargs: object) -> None:
+        try:
+            time.sleep(2)
+        except BaseException as exc:
+            raised.append(exc)
+            raise
+
+    flows["process-new-files"].side_effect = _slow
+
+    result = worker.lambda_handler(_event(_body()), _Context(remaining_ms=100))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}]}
+    assert len(raised) == 1
+    assert isinstance(raised[0], _deadline.RunOutOfTime)
+    # This cog's flows do not report themselves, so the consumer is the only
+    # witness and must say something.
+    assert reported.called
+
+
+def test_the_deadline_is_cleared_after_a_run(
+    flows: dict[str, MagicMock], reported: MagicMock
+) -> None:
+    import signal
+
+    result = worker.lambda_handler(_event(_body()), _Context(remaining_ms=900_000))
+
+    assert result == {"batchItemFailures": []}
+    flows["process-new-files"].assert_called_once()
+    reported.assert_not_called()
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+
+
+def test_no_time_left_to_start_is_a_retry_not_a_run(
+    flows: dict[str, MagicMock], reported: MagicMock
+) -> None:
+    """Below the margin there is not enough left to run and report, so the
+    message goes back rather than starting something that will be killed."""
+    result = worker.lambda_handler(_event(_body()), _Context(remaining_ms=1_000))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}]}
+    flows["process-new-files"].assert_not_called()
