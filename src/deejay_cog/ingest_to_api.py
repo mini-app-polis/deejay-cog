@@ -1,62 +1,16 @@
+import contextlib
 import dataclasses
-import json
 import os
 import re
-import urllib.error
-import urllib.request
 from typing import Any
 
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.api import KaianoApiError
 from mini_app_polis.google import GoogleAPI
 
+from .api_client import api_client
+
 log = logger_mod.get_logger()
-
-
-try:
-    # Provided by common-python-utils (per ecosystem standards).
-    from mini_app_polis.api import KaianoApiClient, KaianoApiError  # type: ignore
-
-    from .api_client import api_client
-except Exception:  # pragma: no cover
-
-    class KaianoApiError(Exception):
-        """TODO: describe this class."""
-
-        pass
-
-    class KaianoApiClient:  # minimal fallback
-        """TODO: describe this class."""
-
-        def __init__(self, base_url: str):
-            self.base_url = base_url
-
-        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-            """TODO: describe this function."""
-            url = f"{self.base_url.rstrip('/')}{path}"
-            body = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                url,
-                data=body,
-                method="POST",
-                headers={"Content-Type": "application/json"},
-            )
-            try:
-                with urllib.request.urlopen(
-                    req, timeout=float(os.getenv("DEEJAY_HTTP_TIMEOUT_SECS", "30"))
-                ) as resp:
-                    data = resp.read().decode("utf-8") if resp else ""
-                    return json.loads(data) if data else {}
-            except urllib.error.HTTPError as e:  # pragma: no cover
-                raise KaianoApiError(
-                    f"HTTP {e.code}: {e.read().decode('utf-8')}"
-                ) from e
-            except Exception as e:  # pragma: no cover
-                raise KaianoApiError(str(e)) from e
-
-    def api_client(base_url: str | None = None) -> KaianoApiClient:
-        """Fallback builder — no machine identity available without the
-        shared library, so this path cannot authenticate anyway."""
-        return KaianoApiClient(base_url or "")
 
 
 @dataclasses.dataclass
@@ -182,10 +136,10 @@ def build_ingest_payload(
         play_time = _parse_play_time(str(t.get("play_time") or "").strip())
 
         play_order = t.get("play_order")
-        try:
-            play_order_int = int(play_order)
-        except Exception:
-            play_order_int = len(out_tracks) + 1
+        play_order_int = len(out_tracks) + 1
+        if play_order is not None:
+            with contextlib.suppress(Exception):
+                play_order_int = int(play_order)
 
         out_tracks.append(
             {

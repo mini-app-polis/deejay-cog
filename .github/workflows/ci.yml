@@ -29,6 +29,10 @@ jobs:
     with:
       # fmt and validate only; applying stays on the workstation.
       terraform-dir: infra
+      # TEST-012. Without this input the shared workflow skips its
+      # typecheck step and says nothing, which is how this repo went
+      # untyped.
+      typecheck: "uv run mypy src/"
 
   release:
     needs: [test, security]

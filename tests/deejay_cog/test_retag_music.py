@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from mini_app_polis.mp3.rename import Mp3Renamer
+
 import deejay_cog.retag_music as retag
 
 # ---------------------------------------------------------------------------
@@ -45,10 +47,6 @@ def _make_metadata(
     title: str = "Track Title", artist: str = "Artist", year: str = "2020"
 ) -> SimpleNamespace:
     return SimpleNamespace(title=title, artist=artist, year=year)
-
-
-def _make_rename_result(dest_path: str, dest_name: str) -> SimpleNamespace:
-    return SimpleNamespace(dest_path=dest_path, dest_name=dest_name)
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +133,7 @@ def test_retag_music_file_skips_missing_file_id() -> None:
         file,
         identifier=MagicMock(),
         tagger=MagicMock(),
-        renamer=MagicMock(),
+        renamer=MagicMock(spec=Mp3Renamer),
         dest_folder_id="dest",
         min_confidence=0.90,
     )
@@ -155,7 +153,7 @@ def test_retag_music_file_update_in_place_on_no_candidates(tmp_path) -> None:
 
     tagger = MagicMock()
     tagger.dump.return_value = {}
-    renamer = MagicMock()
+    renamer = MagicMock(spec=Mp3Renamer)
 
     with patch(
         "deejay_cog.retag_music.tempfile.gettempdir", return_value=str(tmp_path)
@@ -191,7 +189,7 @@ def test_retag_music_file_update_in_place_on_low_confidence(tmp_path) -> None:
 
     tagger = MagicMock()
     tagger.dump.return_value = {}
-    renamer = MagicMock()
+    renamer = MagicMock(spec=Mp3Renamer)
 
     with patch(
         "deejay_cog.retag_music.tempfile.gettempdir", return_value=str(tmp_path)
@@ -225,11 +223,8 @@ def test_retag_music_file_moves_to_dest_on_high_confidence(tmp_path) -> None:
     tagger = MagicMock()
     tagger.dump.return_value = {}
 
-    renamed_path = str(tmp_path / "Artist - Track Title.mp3")
-    renamer = MagicMock()
-    renamer.apply.return_value = _make_rename_result(
-        renamed_path, "Artist - Track Title.mp3"
-    )
+    renamer = MagicMock(spec=Mp3Renamer)
+    renamer.rename.return_value = "Artist - Track Title.mp3"
 
     with patch(
         "deejay_cog.retag_music.tempfile.gettempdir", return_value=str(tmp_path)
@@ -252,9 +247,13 @@ def test_retag_music_file_moves_to_dest_on_high_confidence(tmp_path) -> None:
     tagger.write.assert_called_once_with(
         str(tmp_path / "fid-3_track.mp3"), metadata, ensure_virtualdj_compat=True
     )
-    renamer.apply.assert_called_once()
+    renamer.rename.assert_called_once_with(
+        str(tmp_path / "fid-3_track.mp3"), metadata=metadata
+    )
     drive.upload_file.assert_called_once_with(
-        renamed_path, parent_id="dest-folder", dest_name="Artist - Track Title.mp3"
+        str(tmp_path / "fid-3_track.mp3"),
+        parent_id="dest-folder",
+        dest_name="Artist - Track Title.mp3",
     )
     drive.delete_file.assert_called_once_with("fid-3")
     drive.update_file.assert_not_called()
@@ -276,11 +275,8 @@ def test_retag_music_file_tags_but_updates_in_place_when_metadata_but_low_confid
     tagger = MagicMock()
     tagger.dump.return_value = {}
 
-    renamed_path = str(tmp_path / "Artist - Track Title.mp3")
-    renamer = MagicMock()
-    renamer.apply.return_value = _make_rename_result(
-        renamed_path, "Artist - Track Title.mp3"
-    )
+    renamer = MagicMock(spec=Mp3Renamer)
+    renamer.rename.return_value = "Artist - Track Title.mp3"
 
     with patch(
         "deejay_cog.retag_music.tempfile.gettempdir", return_value=str(tmp_path)
@@ -317,7 +313,7 @@ def test_retag_music_file_records_failure_on_exception(tmp_path) -> None:
             file,
             identifier=MagicMock(),
             tagger=MagicMock(),
-            renamer=MagicMock(),
+            renamer=MagicMock(spec=Mp3Renamer),
             dest_folder_id="dest",
             min_confidence=0.90,
         )
@@ -362,11 +358,8 @@ def test_retag_music_flow_processes_files_and_returns_summary(
     tagger = MagicMock()
     tagger.dump.return_value = {}
 
-    renamed_path = str(tmp_path / "Artist - Track Title.mp3")
-    renamer = MagicMock()
-    renamer.apply.return_value = _make_rename_result(
-        renamed_path, "Artist - Track Title.mp3"
-    )
+    renamer = MagicMock(spec=Mp3Renamer)
+    renamer.rename.return_value = "Artist - Track Title.mp3"
 
     with (
         patch.object(retag.GoogleAPI, "from_env", return_value=g),
@@ -408,11 +401,8 @@ def test_retag_music_post_run_finding_success_when_zero_failures(
     tagger = MagicMock()
     tagger.dump.return_value = {}
 
-    renamed_path = str(tmp_path / "Artist - Track Title.mp3")
-    renamer = MagicMock()
-    renamer.apply.return_value = _make_rename_result(
-        renamed_path, "Artist - Track Title.mp3"
-    )
+    renamer = MagicMock(spec=Mp3Renamer)
+    renamer.rename.return_value = "Artist - Track Title.mp3"
 
     with (
         patch.object(retag.GoogleAPI, "from_env", return_value=g),
@@ -445,7 +435,7 @@ def test_retag_music_post_run_finding_warn_when_files_fail(
 
     identifier = MagicMock()
     tagger = MagicMock()
-    renamer = MagicMock()
+    renamer = MagicMock(spec=Mp3Renamer)
 
     with (
         patch.object(retag.GoogleAPI, "from_env", return_value=g),
@@ -480,11 +470,8 @@ def test_retag_music_flow_respects_max_uploads_per_run(monkeypatch, tmp_path) ->
     tagger = MagicMock()
     tagger.dump.return_value = {}
 
-    renamed_path = str(tmp_path / "Artist - Track Title.mp3")
-    renamer = MagicMock()
-    renamer.apply.return_value = _make_rename_result(
-        renamed_path, "Artist - Track Title.mp3"
-    )
+    renamer = MagicMock(spec=Mp3Renamer)
+    renamer.rename.return_value = "Artist - Track Title.mp3"
 
     with (
         patch.object(

@@ -25,7 +25,7 @@ keeping it available would have kept that ambiguity available.
 
 from __future__ import annotations
 
-from mini_app_polis.api import KaianoApiClient  # type: ignore[import-untyped]
+from mini_app_polis.api import KaianoApiClient
 
 #: This cog's name in api-kaianolevine-com's identity_registry.MACHINES.
 MACHINE_NAME = "deejay-cog"

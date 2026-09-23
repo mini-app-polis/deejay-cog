@@ -226,11 +226,14 @@ def retag_music_file(
             _print_all_tags(logger, tagger, temp_path)
             delta["tagged"] += 1
 
-            rename_result = renamer.apply(path_out, metadata=id_result.metadata)
-            old_basename = os.path.basename(path_out)
-            path_out = rename_result.dest_path
-            desired_filename = rename_result.dest_name
-            logger.info("[RENAME] %s -> %s", old_basename, os.path.basename(path_out))
+            # Mp3Renamer computes a name and touches nothing on disk, so the
+            # tagged temp file is what uploads, under the computed name. This
+            # called a renamer.apply() that does not exist; every file with
+            # metadata raised here and was counted as failed.
+            desired_filename = renamer.rename(path_out, metadata=id_result.metadata)
+            logger.info(
+                "[RENAME] %s -> %s", os.path.basename(path_out), desired_filename
+            )
 
         if not identified:
             reason = (
@@ -387,7 +390,7 @@ def retag_music_flow() -> RetagSummary:
         summary.failed,
     )
 
-    _post_kwargs = {
+    _post_kwargs: dict[str, Any] = {
         "flow_name": "retag-music",
         "production_only": False,
         "sets_imported": summary.uploaded,
