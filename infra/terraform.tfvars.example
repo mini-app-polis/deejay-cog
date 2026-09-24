@@ -1,9 +1,7 @@
 # Copy to terraform.tfvars (gitignored) and fill in.
 #
-# Only what Doppler does not hold. The secrets come from Doppler through
-# ./tf, which refuses to run if any of them is also set here —
-# terraform.tfvars wins over the environment, which is how the first apply
-# shipped this file's placeholders. See README.md.
+# Non-secret settings only. Secrets live in Doppler, sync to SSM Parameter
+# Store, and are read by the worker at cold start — see secrets.tf.
 
 alert_email = "you@example.com"
 
