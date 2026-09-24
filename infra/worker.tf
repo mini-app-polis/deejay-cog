@@ -36,6 +36,15 @@ data "aws_iam_policy_document" "worker" {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.worker.arn}:*"]
   }
+
+  # Its own secrets, by name (secrets.tf). GetParameters and nothing wider:
+  # not GetParametersByPath, which would reach every secret Doppler syncs.
+  # No KMS grant — SecureStrings under the AWS-managed aws/ssm key are
+  # decryptable by any principal in the account that may read them via SSM.
+  statement {
+    actions   = ["ssm:GetParameters"]
+    resources = local.ssm_parameter_arns
+  }
 }
 
 resource "aws_iam_role_policy" "worker" {
@@ -115,22 +124,17 @@ resource "aws_lambda_function" "worker" {
   # 1: runs are serialised. See var.reserved_concurrency.
   reserved_concurrent_executions = var.reserved_concurrency
 
-  # Lambda caps the whole map at 4 KB, keys included, and the service
-  # account JSON is most of it. An apply that exceeds it fails with an
-  # error naming the limit; README.md says how to check before applying.
+  # Configuration only. Secrets are not here: the SSM_* entries name the
+  # parameters the worker loads itself at cold start (secrets.tf).
   environment {
     variables = {
-      KAIANO_API_BASE_URL       = var.kaiano_api_base_url
-      DEEJAY_COG_API_KEY        = var.deejay_cog_api_key
-      GOOGLE_CREDENTIALS_JSON   = var.google_credentials_json
-      SPOTIPY_CLIENT_ID         = var.spotipy_client_id
-      SPOTIPY_CLIENT_SECRET     = var.spotipy_client_secret
-      SPOTIPY_REFRESH_TOKEN     = var.spotipy_refresh_token
-      SPOTIPY_REDIRECT_URI      = "http://127.0.0.1:8888/callback"
-      SPOTIFY_RADIO_PLAYLIST_ID = var.spotify_radio_playlist_id
-      VDJ_HISTORY_FOLDER_ID     = var.vdj_history_folder_id
-      SENTRY_DSN                = var.sentry_dsn
-      ENVIRONMENT               = "production"
+      KAIANO_API_BASE_URL     = var.kaiano_api_base_url
+      SPOTIPY_REDIRECT_URI    = "http://127.0.0.1:8888/callback"
+      VDJ_HISTORY_FOLDER_ID   = var.vdj_history_folder_id
+      ENVIRONMENT             = "production"
+      SSM_PREFIX              = local.ssm_prefix
+      SSM_PARAMETERS          = jsonencode(local.ssm_parameters)
+      SSM_OPTIONAL_PARAMETERS = jsonencode(local.ssm_optional_parameters)
     }
   }
 

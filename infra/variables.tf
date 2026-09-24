@@ -136,64 +136,6 @@ variable "kaiano_api_base_url" {
   type        = string
 }
 
-variable "deejay_cog_api_key" {
-  description = "This cog's own named API key (CD-019), DEEJAY_COG_API_KEY. No fallback — unset or wrong means 401 on every ingest."
-  type        = string
-  sensitive   = true
-
-  # The first apply shipped the example's "..." and every call 401'd,
-  # including the failure report that would have said so.
-  validation {
-    condition     = length(var.deejay_cog_api_key) >= 20 && !strcontains(var.deejay_cog_api_key, "...")
-    error_message = "deejay_cog_api_key looks like the placeholder from terraform.tfvars.example."
-  }
-}
-
-variable "google_credentials_json" {
-  description = "Service-account JSON as a string, GOOGLE_CREDENTIALS_JSON. Drive and Sheets for both flows."
-  type        = string
-  sensitive   = true
-
-  # The first apply shipped the example's placeholder, which the Google
-  # client rejected before falling back to a credentials.json that does not
-  # exist on Lambda. Parsing here fails the plan instead of every run.
-  validation {
-    condition = (
-      can(jsondecode(var.google_credentials_json)) &&
-      try(jsondecode(var.google_credentials_json).type, "") == "service_account" &&
-      can(jsondecode(var.google_credentials_json).private_key)
-    )
-    error_message = "google_credentials_json must be a service-account JSON document (type = service_account, with a private_key)."
-  }
-}
-
-variable "spotipy_client_id" {
-  description = "SPOTIPY_CLIENT_ID. Unset skips the playlist sync and says so in the run report."
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
-variable "spotipy_client_secret" {
-  description = "SPOTIPY_CLIENT_SECRET."
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
-variable "spotipy_refresh_token" {
-  description = "SPOTIPY_REFRESH_TOKEN."
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
-variable "spotify_radio_playlist_id" {
-  description = "SPOTIFY_RADIO_PLAYLIST_ID. Unset leaves the radio playlist untouched and reports it."
-  type        = string
-  default     = ""
-}
-
 variable "vdj_history_folder_id" {
   description = <<-DESC
     VDJ_HISTORY_FOLDER_ID, for ingest-live-history. Required even though
@@ -202,13 +144,6 @@ variable "vdj_history_folder_id" {
   DESC
   type        = string
   default     = "1HGxEr5ocY9JLtXcJqDRIOD95rXU6QLUW"
-}
-
-variable "sentry_dsn" {
-  description = "Sentry DSN for the worker, SENTRY_DSN."
-  type        = string
-  sensitive   = true
-  default     = ""
 }
 
 variable "create_github_oidc_provider" {

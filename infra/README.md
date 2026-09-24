@@ -1,5 +1,11 @@
 # deejay-cog on AWS: one queue, one function
 
+> **Secrets no longer pass through Terraform.** Doppler syncs them to SSM
+> Parameter Store (`/mini-app-polis/prd/`) and the worker loads the names in
+> `secrets.tf` at cold start. The `./tf` wrapper is gone; run `terraform`
+> directly. Anything below about the wrapper, `TF_VAR_*` or secret variables
+> describes the old arrangement. This directory moves to `mini-app-polis/infra`.
+
 deejay-cog's queue, dead-letter queue, alarm, Lambda function and CI deploy
 role. A copy of evaluator-cog's `infra/` with `name_prefix = "deejay"`.
 
@@ -63,8 +69,8 @@ throttled and redelivered, which is why `max_receive_count` is 5.
 cp terraform.tfvars.example terraform.tfvars   # alert_email; no secrets
 doppler setup --project <deejay-cog project> --config prd   # once per machine, in this directory
 terraform init && terraform fmt -check && terraform validate
-./tf plan -out tfplan    # expect: no budget, no OIDC provider, no producer user
-./tf apply tfplan
+terraform plan -out tfplan    # expect: no budget, no OIDC provider, no producer user
+terraform apply tfplan
 ```
 
 **Always go through `./tf`.** It reads the secrets from Doppler into
