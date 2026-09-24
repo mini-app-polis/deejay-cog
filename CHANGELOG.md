@@ -1,3 +1,10 @@
+# [2.3.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.2.1...v2.3.0) (2026-09-24)
+
+
+### Features
+
+* load worker secrets from SSM Parameter Store ([c6291db](https://github.com/mini-app-polis/deejay-cog/commit/c6291dbc82629c888f96bdc24eba14c3c3c56d0f))
+
 ## [2.2.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.2.0...v2.2.1) (2026-09-23)
 
 
