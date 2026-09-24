@@ -8,7 +8,7 @@ Processes DJ set CSV files from Google Drive into Google Sheets (organized by ye
 
 This repository is the backend cog for a Drive-based DJ set pipeline. It reads CSV files (and optionally other files) from a configured Google Drive source folder, normalizes and uploads them as Google Sheets into year-based folders, and can maintain collection and summary artifacts for cross-checks during the PostgreSQL migration.
 
-**Production** runs on AWS Lambda behind its own SQS queue, `deejay-jobs` — see [ADR-006](docs/decisions/ADR-006-lambda-behind-sqs.md) and [infra/](infra/README.md). **watcher-cog** detects Drive changes and POSTs `/v1/deejay/runs` with a `mode` (`process-new-files` or `ingest-live-history`); api-kaianolevine-com enqueues one message, and `deejay_cog.worker.lambda_handler` runs the matching flow. Nothing runs between triggers.
+**Production** runs on AWS Lambda behind its own SQS queue, `deejay-jobs` — see [ADR-006](docs/decisions/ADR-006-lambda-behind-sqs.md). The queue, function and alarm are declared in [`mini-app-polis/infra`](https://github.com/mini-app-polis/infra). **watcher-cog** detects Drive changes and POSTs `/v1/deejay/runs` with a `mode` (`process-new-files` or `ingest-live-history`); api-kaianolevine-com enqueues one message, and `deejay_cog.worker.lambda_handler` runs the matching flow. Nothing runs between triggers.
 
 ---
 
@@ -78,7 +78,7 @@ Required for Drive/Sheets and logging:
 
 Layout and behavior keys live in **common-python-utils** / `config` (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
 
-API (production — on Lambda these come from `infra/`, not Doppler):
+API (production — on Lambda, secrets are loaded from SSM Parameter Store at cold start, synced from Doppler; the names are listed in mini-app-polis/infra `cogs.tf`):
 
 | Variable | Description |
 |----------|-------------|

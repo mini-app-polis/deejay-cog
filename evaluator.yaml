@@ -3,6 +3,30 @@
 
 type: pipeline-cog
 
+deferrals:
+  # Infrastructure moved out of this repository into mini-app-polis/infra
+  # (one Terraform root, one shared cog-worker module). These rules still
+  # read a local infra/*.tf that no longer exists; they are to be retargeted
+  # at the infra repository and the module. Nothing they check was removed:
+  # the queue, dead-letter queue, redrive policy, ReportBatchItemFailures,
+  # concurrency ceiling (now a module validation), limits and the DLQ alarm
+  # with an action are all declared there.
+  - rule: PIPE-016
+    reason: "Queue, function and event source mapping are declared in mini-app-polis/infra (cogs.tf, modules/cog-worker), not a local infra/."
+    until: null
+  - rule: PIPE-017
+    reason: "Redrive policy, DLQ and ReportBatchItemFailures are fixed by modules/cog-worker in mini-app-polis/infra for every cog."
+    until: null
+  - rule: PIPE-018
+    reason: "The concurrency ceiling is set in mini-app-polis/infra cogs.tf, and modules/cog-worker refuses a plan that states it zero or two times."
+    until: null
+  - rule: CD-010
+    reason: "The dead-letter-queue alarm and its SNS action are declared by modules/cog-worker in mini-app-polis/infra."
+    until: null
+  - rule: CD-024
+    reason: "Function memory and timeout are set in mini-app-polis/infra cogs.tf."
+    until: null
+
 exemptions:
   - rule: PIPE-005
     reason: >
