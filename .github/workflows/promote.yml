@@ -1,0 +1,18 @@
+# Keeps a dev → main pull request open whenever dev has something to
+# release. The logic lives in the shared workflow; see its header in
+# mini-app-polis/.github for the details.
+name: promote
+
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    uses: mini-app-polis/.github/.github/workflows/promote.yml@v3
+    # The shared workflow opens the pull request as the promote GitHub App,
+    # whose credentials are org secrets.
+    secrets: inherit
