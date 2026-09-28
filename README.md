@@ -176,3 +176,5 @@ Hooks match CI (ruff and related checks).
 ## License
 
 MIT © Kaiano Levine
+
+<!-- auto-merge test -->
