@@ -12,35 +12,67 @@
 # unprefixed subject both trips VER-001 and cuts no release — the fix
 # would land on main and never reach the registry.
 #
-# Minor and patch updates are grouped into one pull request per
-# ecosystem per week. Majors arrive on their own, because a major is a
-# decision rather than a bump.
+# Version updates arrive as at most three pull requests per ecosystem,
+# because a failing bump is easiest to fix when it is not tangled with
+# unrelated ones:
+#   - `commons`: the fleet's own shared packages, every update type,
+#     majors included. We always want the latest commons, so they are
+#     exempt from the cooldown below and land the day they publish.
+#   - `majors`: every third-party major in one pull request. Majors are
+#     what break tests; keeping them together and apart from routine bumps
+#     means routine bumps never wait on a migration. If one major is hard,
+#     `@dependabot ignore <dependency> major version` on the pull request
+#     drops it and lets the rest through.
+#   - `minor-and-patch`: everything else.
+# Dependabot puts a dependency in the first group that matches, which is
+# why `commons` is listed first.
 #
-# `target-branch` points these at `dev`, not `main`. An upgrade should land
-# where it can be exercised before a release cuts: `dev` publishes to the
-# Cloudflare preview URL and to the Railway development environment, so a
-# bad bump surfaces there instead of in production.
+# The schedule is daily so commons are picked up immediately; the
+# cooldown holds third-party releases until they are a week old, so the
+# daily run does not churn on every fresh publish and a release that gets
+# yanked in its first days never reaches us.
+#
+# GitHub Actions stay in their own pull request so they keep the
+# `ci(deps)` prefix, which cuts no release.
+#
+# `target-branch` points version updates at `dev`, not `main`. An upgrade
+# should land where it can be exercised before a release cuts: `dev`
+# publishes to the Cloudflare preview URL and to the Railway development
+# environment, so a bad bump surfaces there instead of in production.
 #
 # Two asymmetries are worth knowing. Dependabot reads this file from the
 # *default* branch only, so this config has to be on `main` to take effect
-# even though every pull request it opens targets `dev`. And Dependabot
-# security updates ignore `target-branch` entirely — those always open
-# against the default branch, and GitHub gives no way to move them.
+# even though every version-update pull request targets `dev`. And
+# Dependabot security updates ignore `target-branch` entirely — they
+# always open against the default branch, and take their settings only
+# from an entry without a non-default `target-branch`. The last entry
+# exists for that reason alone: version updates are switched off there
+# (`open-pull-requests-limit: 0`), and it groups every security fix into
+# one pull request.
 version: 2
 updates:
   - package-ecosystem: "uv"
     directory: "/"
     target-branch: "dev"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "daily"
+    cooldown:
+      default-days: 7
+      exclude: ["miniapppolis-*"]
     open-pull-requests-limit: 5
     groups:
-      python-minor-and-patch:
+      commons:
+        patterns: ["miniapppolis-*"]
+      majors:
+        patterns: ["*"]
+        update-types: ["major"]
+      minor-and-patch:
+        patterns: ["*"]
         update-types: ["minor", "patch"]
     commit-message:
       prefix: "fix(deps)"
       prefix-development: "chore(deps)"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     target-branch: "dev"
@@ -53,3 +85,16 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: "ci(deps)"
+
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 0
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "chore(deps)"
