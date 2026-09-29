@@ -1,3 +1,10 @@
+## [2.3.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.3.2...v2.3.3) (2026-09-29)
+
+
+### Bug Fixes
+
+* **deps): move to common 5.14.1 and oauthlib 4.0.0 for CVE-2026-49265, refactor(api:** build API payloads from common's contract models ([f507bac](https://github.com/mini-app-polis/deejay-cog/commit/f507bac25031092385ae22dee7f1d46cac51f562))
+
 ## [2.3.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.3.1...v2.3.2) (2026-09-28)
 
 
