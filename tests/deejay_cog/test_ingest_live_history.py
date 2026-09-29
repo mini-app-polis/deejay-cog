@@ -11,7 +11,7 @@ def test_build_live_plays_payload_parses_entries_correctly(monkeypatch) -> None:
         SimpleNamespace(dt="2024-06-01 14:30", title="Song A", artist="Artist A"),
         SimpleNamespace(dt="2024-06-01 15:00", title="Song B", artist="Artist B"),
     ]
-    payload = live.build_live_plays_payload(entries)
+    payload = live.build_live_plays_payload(entries).model_dump(mode="json")
     assert "plays" in payload
     assert len(payload["plays"]) == 2
     assert payload["plays"][0]["title"] == "Song A"
@@ -28,7 +28,7 @@ def test_build_live_plays_payload_skips_unparseable_dt(monkeypatch) -> None:
         SimpleNamespace(dt="not-a-datetime", title="Song", artist="Artist"),
         SimpleNamespace(dt="2024-06-01 12:00", title="Good", artist="Artist"),
     ]
-    payload = live.build_live_plays_payload(entries)
+    payload = live.build_live_plays_payload(entries).model_dump(mode="json")
     assert len(payload["plays"]) == 1
     assert payload["plays"][0]["title"] == "Good"
 
@@ -40,7 +40,7 @@ def test_build_live_plays_payload_skips_missing_title_or_artist(monkeypatch) -> 
         SimpleNamespace(dt="2024-06-01 12:01", title="Song", artist=""),
         SimpleNamespace(dt="2024-06-01 12:02", title="Ok", artist="OkArtist"),
     ]
-    payload = live.build_live_plays_payload(entries)
+    payload = live.build_live_plays_payload(entries).model_dump(mode="json")
     assert len(payload["plays"]) == 1
     assert payload["plays"][0]["title"] == "Ok"
 
@@ -54,7 +54,7 @@ def test_build_live_plays_payload_shape(monkeypatch) -> None:
         SimpleNamespace(dt="2024-06-01 14:30", title="Song A", artist="Artist A"),
     ]
 
-    payload = live.build_live_plays_payload(entries)
+    payload = live.build_live_plays_payload(entries).model_dump(mode="json")
 
     assert set(payload.keys()) == {"plays"}
     assert isinstance(payload["plays"], list)
@@ -71,7 +71,7 @@ def test_build_live_plays_payload_empty_entries_shape(monkeypatch) -> None:
     """Shape assertion holds even when all entries are filtered out."""
     monkeypatch.setattr(live.config, "TIMEZONE", "America/Chicago")
 
-    payload = live.build_live_plays_payload([])
+    payload = live.build_live_plays_payload([]).model_dump(mode="json")
 
     assert set(payload.keys()) == {"plays"}
     assert payload["plays"] == []
@@ -118,7 +118,9 @@ def test_ingest_live_history_skips_when_no_api_url(monkeypatch) -> None:
     assert summary.files_failed == 0
 
 
-def test_ingest_live_history_sends_plays_and_returns_summary(monkeypatch) -> None:
+def test_ingest_live_history_sends_plays_and_returns_summary(
+    monkeypatch, typed_client, envelope
+) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://example.test")
 
     fake_entries = [
@@ -137,7 +139,9 @@ def test_ingest_live_history_sends_plays_and_returns_summary(monkeypatch) -> Non
         )
     )
 
-    client = SimpleNamespace(post=MagicMock(return_value={"ok": True}))
+    client = typed_client(
+        MagicMock(return_value=envelope({"inserted": 1, "skipped": 0}))
+    )
 
     with (
         patch.object(live.GoogleAPI, "from_env", return_value=fake_g),
@@ -166,7 +170,9 @@ def test_ingest_live_history_sends_plays_and_returns_summary(monkeypatch) -> Non
     assert summary.files_failed == 0
 
 
-def test_ingest_live_history_sends_all_parsed_entries(monkeypatch) -> None:
+def test_ingest_live_history_sends_all_parsed_entries(
+    monkeypatch, typed_client, envelope
+) -> None:
     """Parser returns oldest-first; every parsed entry is posted."""
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://example.test")
 
@@ -189,7 +195,9 @@ def test_ingest_live_history_sends_all_parsed_entries(monkeypatch) -> None:
         )
     )
 
-    client = SimpleNamespace(post=MagicMock(return_value={"ok": True}))
+    client = typed_client(
+        MagicMock(return_value=envelope({"inserted": 6, "skipped": 0}))
+    )
 
     with (
         patch.object(live.GoogleAPI, "from_env", return_value=fake_g),

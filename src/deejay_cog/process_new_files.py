@@ -468,7 +468,7 @@ def _ingest_set_to_api(
             source_file=label,
             tracks=tracks,
         )
-        final_tracks = payload.get("tracks") or []
+        final_tracks = payload.tracks
         if not final_tracks:
             logger.warning("⚠️ No tracks to ingest for %s", label)
             if stats is not None:
@@ -478,7 +478,7 @@ def _ingest_set_to_api(
         if stats is not None:
             stats.ingest_attempted += 1
         client = api_client()
-        client.post("/v1/ingest", payload)
+        client.ingest(payload)
         logger.info("✅ Ingested to API: %s (%d tracks)", label, len(final_tracks))
     except KaianoApiError as e:
         if stats is not None:

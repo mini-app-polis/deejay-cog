@@ -8,6 +8,10 @@ on:
     # Every workflow here that runs on pull_request.
     workflows: [CI]
     types: [completed]
+    # Only runs on other branches can be a pull request into dev (in
+    # practice Dependabot's). Pushes to main and dev, and the promotion pull
+    # request, whose head is dev, would only start a run that skips (CD-035).
+    branches-ignore: [main, dev]
 
 permissions:
   contents: read
