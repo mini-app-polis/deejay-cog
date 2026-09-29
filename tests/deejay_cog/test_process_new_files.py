@@ -3,6 +3,8 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from mini_app_polis.api.contract import IngestSet
+
 import deejay_cog.process_new_files as process_new_files
 from deejay_cog.spotify_sync import SyncOutcome
 
@@ -303,7 +305,7 @@ def test_ingest_set_to_api_posts_payload(monkeypatch):
     class FakeApiError(Exception):
         pass
 
-    client = SimpleNamespace(post=MagicMock())
+    client = SimpleNamespace(ingest=MagicMock())
 
     class FakeClient:
         @classmethod
@@ -329,12 +331,14 @@ def test_ingest_set_to_api_posts_payload(monkeypatch):
         mock_read_tracks.return_value = [
             {"play_order": 1, "title": "Song", "artist": "Artist", "length": "01:00"}
         ]
-        mock_build.return_value = {
-            "set_date": "2024-01-01",
-            "venue": "Venue",
-            "source_file": "2024-01-01 Venue",
-            "tracks": [{"play_order": 1, "title": "Song", "artist": "Artist"}],
-        }
+        mock_build.return_value = IngestSet.model_validate(
+            {
+                "set_date": "2024-01-01",
+                "venue": "Venue",
+                "source_file": "2024-01-01 Venue",
+                "tracks": [{"play_order": 1, "title": "Song", "artist": "Artist"}],
+            }
+        )
 
         process_new_files._ingest_set_to_api(
             spreadsheet_id="ssid",
@@ -346,9 +350,8 @@ def test_ingest_set_to_api_posts_payload(monkeypatch):
 
     mock_read_tracks.assert_called_once_with(g, "ssid")
     mock_build.assert_called_once()
-    client.post.assert_called_once()
-    path, payload = client.post.call_args.args
-    assert path == "/v1/ingest"
+    client.ingest.assert_called_once()
+    payload = client.ingest.call_args.args[0].model_dump(mode="json")
     assert payload["set_date"] == "2024-01-01"
     assert payload["venue"] == "Venue"
     assert payload["source_file"] == "2024-01-01 Venue"
@@ -366,7 +369,7 @@ def test_ingest_set_to_api_logs_error_on_api_error(monkeypatch):
         def from_env(cls):
             return cls()
 
-        def post(self, *_args, **_kwargs):
+        def ingest(self, *_args, **_kwargs):
             raise FakeApiError("nope")
 
     sys.modules["mini_app_polis.api"] = SimpleNamespace(KaianoApiClient=FakeClient)
@@ -390,7 +393,14 @@ def test_ingest_set_to_api_logs_error_on_api_error(monkeypatch):
         patch.object(
             process_new_files,
             "build_ingest_payload",
-            return_value={"tracks": [{"title": "t", "artist": "a"}]},
+            return_value=IngestSet.model_validate(
+                {
+                    "set_date": "2024-01-01",
+                    "venue": "Venue",
+                    "source_file": "label",
+                    "tracks": [{"title": "t", "artist": "a"}],
+                }
+            ),
         ),
     ):
         mock_log = MagicMock()
@@ -406,6 +416,8 @@ def test_ingest_set_to_api_logs_error_on_api_error(monkeypatch):
             )
 
         mock_log.error.assert_called()
+        # The API refusing the set, not a failure to build it.
+        assert "API ingest failed" in mock_log.error.call_args.args[0]
 
 
 # -- severity when the ingest never happened -----------------------------------

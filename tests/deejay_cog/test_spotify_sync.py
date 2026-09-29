@@ -100,7 +100,9 @@ def test_push_playlists_to_api_skips_when_kaiano_base_url_missing(
     assert "KAIANO_API_BASE_URL" in caplog.text
 
 
-def test_push_playlists_to_api_posts_expected_payload(monkeypatch) -> None:
+def test_push_playlists_to_api_posts_expected_payload(
+    monkeypatch, typed_client, envelope
+) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
     raw = [
         {
@@ -116,8 +118,9 @@ def test_push_playlists_to_api_posts_expected_payload(monkeypatch) -> None:
             "owner": {"id": "oid", "display_name": "Owner"},
         }
     ]
-    mock_client = MagicMock()
-    mock_client.post.return_value = {"data": {"upserted": 1, "unchanged": 2}}
+    mock_client = typed_client(
+        MagicMock(return_value=envelope({"upserted": 1, "unchanged": 2}))
+    )
     mock_cls = MagicMock(return_value=mock_client)
     mock_cls.from_env = MagicMock(return_value=mock_client)
 
@@ -149,7 +152,7 @@ def test_push_playlists_to_api_posts_expected_payload(monkeypatch) -> None:
 
 
 def test_push_playlists_to_api_defaults_public_collaborative_tracks_total(
-    monkeypatch,
+    monkeypatch, typed_client, envelope
 ) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
     raw = [
@@ -165,8 +168,9 @@ def test_push_playlists_to_api_defaults_public_collaborative_tracks_total(
             "owner": {"id": "o1"},
         }
     ]
-    mock_client = MagicMock()
-    mock_client.post.return_value = {"data": {"upserted": 0, "unchanged": 1}}
+    mock_client = typed_client(
+        MagicMock(return_value=envelope({"upserted": 0, "unchanged": 1}))
+    )
     mock_cls = MagicMock(return_value=mock_client)
     mock_cls.from_env = MagicMock(return_value=mock_client)
 
@@ -183,13 +187,18 @@ def test_push_playlists_to_api_defaults_public_collaborative_tracks_total(
     assert pl["tracks_total"] == 0
 
 
-def test_push_playlists_to_api_raises_on_kaiano_api_error(monkeypatch, caplog) -> None:
+def test_push_playlists_to_api_raises_on_kaiano_api_error(
+    monkeypatch, caplog, typed_client
+) -> None:
     import logging
 
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    mock_client = MagicMock()
-    mock_client.post.side_effect = ss.KaianoApiError(
-        502, "upstream failed", "/v1/spotify/playlists"
+    mock_client = typed_client(
+        MagicMock(
+            side_effect=ss.KaianoApiError(
+                502, "upstream failed", "/v1/spotify/playlists"
+            )
+        )
     )
     mock_cls = MagicMock(return_value=mock_client)
     mock_cls.from_env = MagicMock(return_value=mock_client)
@@ -206,13 +215,13 @@ def test_push_playlists_to_api_raises_on_kaiano_api_error(monkeypatch, caplog) -
 
 
 def test_push_playlists_to_api_raises_when_upserted_count_missing(
-    monkeypatch, caplog
+    monkeypatch, caplog, typed_client, envelope
 ) -> None:
+    """An answer outside the contract is a failed push, not a silent one."""
     import logging
 
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    mock_client = MagicMock()
-    mock_client.post.return_value = {"data": {"unchanged": 1}}
+    mock_client = typed_client(MagicMock(return_value=envelope({"unchanged": 1})))
     mock_cls = MagicMock(return_value=mock_client)
     mock_cls.from_env = MagicMock(return_value=mock_client)
 
@@ -220,11 +229,11 @@ def test_push_playlists_to_api_raises_when_upserted_count_missing(
     with (
         patch.object(ss, "fetch_all_playlists", return_value=[]),
         patch("deejay_cog.spotify_sync.api_client", mock_cls),
-        pytest.raises(ValueError, match="missing upserted count"),
+        pytest.raises(ValueError, match="upserted"),
     ):
         ss.push_playlists_to_api(object())
 
-    assert "missing upserted count" in caplog.text
+    assert "Spotify playlist push to API failed" in caplog.text
 
 
 def test_update_spotify_radio_playlist_adds_and_trims() -> None:

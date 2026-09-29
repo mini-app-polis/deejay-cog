@@ -3,6 +3,15 @@ from unittest.mock import MagicMock, patch
 
 import deejay_cog.ingest_to_api as ingest
 
+#: A valid POST /v1/ingest answer; the client validates it against the contract.
+_INGESTED = {
+    "set_id": "00000000-0000-0000-0000-000000000001",
+    "tracks_created": 1,
+    "catalog_new": 1,
+    "catalog_updated": 0,
+    "catalog_unchanged": 0,
+}
+
 
 def test_read_tracks_from_sheet_handles_missing_columns_gracefully():
     g = SimpleNamespace()
@@ -35,7 +44,7 @@ def test_build_ingest_payload_converts_mmss_length_and_skips_empty_title_or_arti
         venue="Venue",
         source_file="label",
         tracks=raw_tracks,
-    )
+    ).model_dump(mode="json")
     assert payload["set_date"] == "2024-01-01"
     assert payload["venue"] == "Venue"
     assert payload["source_file"] == "label"
@@ -43,7 +52,9 @@ def test_build_ingest_payload_converts_mmss_length_and_skips_empty_title_or_arti
     assert payload["tracks"][0]["length_secs"] == 150
 
 
-def test_ingest_new_sets_to_api_posts_each_set_with_correct_payload_shape(monkeypatch):
+def test_ingest_new_sets_to_api_posts_each_set_with_correct_payload_shape(
+    monkeypatch, typed_client, envelope
+):
     g = SimpleNamespace()
     g.sheets = SimpleNamespace(
         get_metadata=MagicMock(
@@ -60,7 +71,7 @@ def test_ingest_new_sets_to_api_posts_each_set_with_correct_payload_shape(monkey
 
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://example.test")
 
-    client = SimpleNamespace(post=MagicMock(return_value={"ok": True}))
+    client = typed_client(MagicMock(return_value=envelope(_INGESTED)))
 
     with patch.object(ingest, "api_client", return_value=client) as mock_client:
         summary = ingest.ingest_new_sets_to_api(
@@ -100,7 +111,9 @@ def test_ingest_new_sets_to_api_posts_each_set_with_correct_payload_shape(monkey
     assert summary.failures == []
 
 
-def test_ingest_new_sets_to_api_failure_on_one_set_does_not_abort(monkeypatch):
+def test_ingest_new_sets_to_api_failure_on_one_set_does_not_abort(
+    monkeypatch, typed_client, envelope
+):
     g = SimpleNamespace()
     g.sheets = SimpleNamespace(
         get_metadata=MagicMock(
@@ -122,9 +135,9 @@ def test_ingest_new_sets_to_api_failure_on_one_set_does_not_abort(monkeypatch):
     def post_side_effect(path, payload):
         if payload["source_file"] == "bad":
             raise FakeError(status_code=500, message="nope", path="/v1/ingest")
-        return {"ok": True}
+        return envelope(_INGESTED)
 
-    client = SimpleNamespace(post=MagicMock(side_effect=post_side_effect))
+    client = typed_client(MagicMock(side_effect=post_side_effect))
 
     with patch.object(ingest, "api_client", return_value=client):
         summary = ingest.ingest_new_sets_to_api(
@@ -153,7 +166,7 @@ def test_ingest_new_sets_to_api_failure_on_one_set_does_not_abort(monkeypatch):
     assert summary.sets_sent + summary.sets_failed == 2
 
 
-def test_ingest_new_sets_to_api_skips_empty_sheet(monkeypatch):
+def test_ingest_new_sets_to_api_skips_empty_sheet(monkeypatch, typed_client):
     g = SimpleNamespace()
     g.sheets = SimpleNamespace(
         get_metadata=MagicMock(
@@ -163,7 +176,7 @@ def test_ingest_new_sets_to_api_skips_empty_sheet(monkeypatch):
     )
 
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://example.test")
-    client = SimpleNamespace(post=MagicMock())
+    client = typed_client(MagicMock())
 
     with patch.object(ingest, "api_client", return_value=client):
         summary = ingest.ingest_new_sets_to_api(
@@ -183,3 +196,37 @@ def test_ingest_new_sets_to_api_skips_empty_sheet(monkeypatch):
     assert summary.sets_sent == 0
     assert summary.sets_failed == 0
     assert summary.failures == []
+
+
+def test_ingest_new_sets_to_api_counts_a_set_the_api_would_refuse(
+    monkeypatch, typed_client, envelope
+):
+    """No date is a 422 at the API; it now fails before the POST, counted the same."""
+    g = SimpleNamespace()
+    g.sheets = SimpleNamespace(
+        get_metadata=MagicMock(
+            return_value={"sheets": [{"properties": {"title": "Sheet1"}}]}
+        ),
+        read_values=MagicMock(return_value=[["Title", "Artist"], ["Song", "Artist"]]),
+    )
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://example.test")
+    client = typed_client(MagicMock(return_value=envelope(_INGESTED)))
+
+    with patch.object(ingest, "api_client", return_value=client):
+        summary = ingest.ingest_new_sets_to_api(
+            g,
+            new_spreadsheet_ids=["no-date", "ok"],
+            set_metadata=[
+                {"spreadsheet_id": "no-date", "venue": "V", "label": "no-date"},
+                {
+                    "spreadsheet_id": "ok",
+                    "date": "2024-01-02",
+                    "venue": "V2",
+                    "label": "ok",
+                },
+            ],
+        )
+
+    assert client.post.call_count == 1
+    assert (summary.sets_sent, summary.sets_failed) == (1, 1)
+    assert summary.failures[0]["label"] == "no-date"

@@ -6,7 +6,9 @@ from typing import Any
 
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.api import KaianoApiError
+from mini_app_polis.api.contract import IngestSet, IngestTrack
 from mini_app_polis.google import GoogleAPI
+from pydantic import ValidationError
 
 from .api_client import api_client
 
@@ -104,15 +106,12 @@ def read_tracks_from_sheet(g: GoogleAPI, spreadsheet_id: str) -> list[dict[str, 
     return raw_tracks
 
 
-def build_ingest_payload(
-    *,
-    set_date: str,
-    venue: str,
-    source_file: str,
-    tracks: list[dict],
-) -> dict[str, Any]:
-    """Build POST /v1/ingest payload from raw track dicts."""
-    out_tracks: list[dict[str, Any]] = []
+def build_ingest_tracks(tracks: list[dict]) -> list[IngestTrack]:
+    """The tracks of a POST /v1/ingest payload, from raw track dicts.
+
+    A row without a title or an artist is not a track and is skipped.
+    """
+    out_tracks: list[IngestTrack] = []
     for t in tracks:
         title = str(t.get("title") or "").strip()
         artist = str(t.get("artist") or "").strip()
@@ -142,27 +141,46 @@ def build_ingest_payload(
                 play_order_int = int(play_order)
 
         out_tracks.append(
-            {
-                "play_order": play_order_int,
-                "label": (str(t.get("label") or "").strip() or None),
-                "title": title,
-                "remix": (str(t.get("remix") or "").strip() or None),
-                "artist": artist,
-                "comment": (str(t.get("comment") or "").strip() or None),
-                "genre": (str(t.get("genre") or "").strip() or None),
-                "length_secs": length_secs,
-                "bpm": bpm,
-                "release_year": release_year,
-                "play_time": play_time,
-            }
+            IngestTrack.model_validate(
+                {
+                    "play_order": play_order_int,
+                    "label": (str(t.get("label") or "").strip() or None),
+                    "title": title,
+                    "remix": (str(t.get("remix") or "").strip() or None),
+                    "artist": artist,
+                    "comment": (str(t.get("comment") or "").strip() or None),
+                    "genre": (str(t.get("genre") or "").strip() or None),
+                    "length_secs": length_secs,
+                    "bpm": bpm,
+                    "release_year": release_year,
+                    "play_time": play_time,
+                }
+            )
         )
 
-    return {
-        "set_date": set_date,
-        "venue": venue,
-        "source_file": source_file,
-        "tracks": out_tracks,
-    }
+    return out_tracks
+
+
+def build_ingest_payload(
+    *,
+    set_date: str | None,
+    venue: str | None,
+    source_file: str,
+    tracks: list[dict],
+) -> IngestSet:
+    """Build the POST /v1/ingest payload from raw track dicts.
+
+    Raises pydantic's ValidationError for a set the API would refuse — no
+    date, say — before anything is sent.
+    """
+    return IngestSet.model_validate(
+        {
+            "set_date": set_date,
+            "venue": venue,
+            "source_file": source_file,
+            "tracks": build_ingest_tracks(tracks),
+        }
+    )
 
 
 def ingest_new_sets_to_api(
@@ -193,27 +211,29 @@ def ingest_new_sets_to_api(
         meta = meta_by_id.get(ssid) or {}
         label = meta.get("label") or ssid
         raw_tracks = read_tracks_from_sheet(g, ssid)
-        payload = build_ingest_payload(
-            set_date=meta.get("date") or "",
-            venue=meta.get("venue") or "",
-            source_file=label,
-            tracks=raw_tracks,
-        )
-        tracks = payload.get("tracks") or []
+        tracks = build_ingest_tracks(raw_tracks)
         if not tracks:
             log.warning(f"⚠️ Empty or unreadable sheet; skipping: {label}")
             continue
 
         total_tracks += len(tracks)
         log.info(f"🚀 Sending to API: {label} ({len(tracks)} tracks)")
-        payload["set_date"] = meta.get("date") or None
-        payload["venue"] = meta.get("venue") or None
 
         try:
-            client.post("/v1/ingest", payload)
+            # A set with no date or venue fails here rather than as a 422,
+            # and is counted the same way.
+            payload = IngestSet.model_validate(
+                {
+                    "set_date": meta.get("date") or None,
+                    "venue": meta.get("venue") or None,
+                    "source_file": label,
+                    "tracks": tracks,
+                }
+            )
+            client.ingest(payload)
             sets_sent += 1
             log.info(f"✅ Ingested: {label}")
-        except KaianoApiError as e:
+        except (KaianoApiError, ValidationError) as e:
             sets_failed += 1
             err = str(e)
             log.info(f"❌ Failed to ingest: {label} — {err}")

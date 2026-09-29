@@ -110,3 +110,36 @@ def _production_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.delenv("PREFECT_TRIGGER_ENABLED", raising=False)
     monkeypatch.delenv("HEALTHCHECKS_ENABLED", raising=False)
+
+
+@pytest.fixture
+def typed_client():
+    """A real KaianoApiClient whose ``post`` is the mock you pass in.
+
+    The cog calls the API through the shared client's typed methods, which
+    build the body from the request model and validate the answer against
+    the response model. Only the HTTP call is replaced, so that path runs
+    exactly as it does in production and a test can still assert on the
+    path and body that were posted.
+    """
+    # From the defining module, not the package: some process_new_files
+    # tests replace sys.modules["mini_app_polis.api"] with a fake and do not
+    # put it back, and this must be the real client whatever ran first.
+    from mini_app_polis.api.client import KaianoApiClient
+
+    def make(post):
+        client = KaianoApiClient(base_url="https://example.test", api_key="k")
+        client.post = post  # type: ignore[method-assign]
+        return client
+
+    return make
+
+
+@pytest.fixture
+def envelope():
+    """Wrap ``data`` the way every Kaiano API response is wrapped."""
+
+    def wrap(data):
+        return {"data": data, "meta": {"count": 1, "total": 1, "version": "test"}}
+
+    return wrap

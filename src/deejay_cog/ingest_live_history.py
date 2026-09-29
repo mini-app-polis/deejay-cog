@@ -9,6 +9,7 @@ from typing import Any
 import pytz
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.api import KaianoApiError
+from mini_app_polis.api.contract import LivePlayIngest, LivePlaysIngest
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.vdj.m3u import M3UToolbox
 
@@ -47,7 +48,7 @@ def _success_text(
     return "Run completed successfully."
 
 
-def build_live_plays_payload(entries: list) -> dict[str, Any]:
+def build_live_plays_payload(entries: list) -> LivePlaysIngest:
     """
     Convert parsed M3U entries into a POST /v1/live-plays payload.
     Each entry has .dt (datetime string), .title, .artist.
@@ -59,7 +60,6 @@ def build_live_plays_payload(entries: list) -> dict[str, Any]:
             played_at = datetime.datetime.strptime(entry.dt, "%Y-%m-%d %H:%M")
             tz = pytz.timezone(config.TIMEZONE)
             played_at = tz.localize(played_at)
-            played_at_iso = played_at.isoformat()
         except Exception:
             log.warning("Skipping entry with unparseable dt: %s", entry.dt)
             continue
@@ -69,14 +69,14 @@ def build_live_plays_payload(entries: list) -> dict[str, Any]:
             continue
 
         plays.append(
-            {
-                "played_at": played_at_iso,
-                "title": entry.title,
-                "artist": entry.artist,
-            }
+            LivePlayIngest(
+                played_at=played_at,
+                title=entry.title,
+                artist=entry.artist,
+            )
         )
 
-    return {"plays": plays}
+    return LivePlaysIngest(plays=plays)
 
 
 def process_m3u_file(
@@ -94,28 +94,26 @@ def process_m3u_file(
     m3u_tool = M3UToolbox()
     filename = m3u_file.get("name", "")
     logger.info("Processing: %s", filename)
-    payload: dict[str, Any] | None = None
+    payload: LivePlaysIngest | None = None
     try:
         lines = g.drive.download_m3u_file_data(m3u_file["id"])
         file_date_str = filename.replace(".m3u", "").strip()
         parsed_entries = m3u_tool.parse.parse_m3u_lines(lines, set(), file_date_str)
 
         payload = build_live_plays_payload(parsed_entries)
-        if not payload["plays"]:
+        if not payload.plays:
             logger.info("No valid plays in %s, skipping", filename)
             return (0, 0, True)
 
-        logger.info(
-            "Sending %d plays from %s to API...", len(payload["plays"]), filename
-        )
+        logger.info("Sending %d plays from %s to API...", len(payload.plays), filename)
 
-        client.post("/v1/live-plays", payload)
-        logger.info("✅ Sent %d plays from %s", len(payload["plays"]), filename)
-        return (len(payload["plays"]), 0, True)
+        client.ingest_live_plays(payload)
+        logger.info("✅ Sent %d plays from %s", len(payload.plays), filename)
+        return (len(payload.plays), 0, True)
 
     except KaianoApiError as e:
         logger.error("❌ API error for %s: %s", filename, e)
-        n_failed = len(payload.get("plays", [])) if payload is not None else 0
+        n_failed = len(payload.plays) if payload is not None else 0
         return (0, n_failed, False)
     except Exception as e:
         logger.error("❌ Failed to process %s: %s", filename, e)

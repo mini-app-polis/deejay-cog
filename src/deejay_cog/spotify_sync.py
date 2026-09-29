@@ -12,7 +12,12 @@ from typing import Any
 
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.api import KaianoApiError
+from mini_app_polis.api.contract import (
+    SpotifyPlaylistIngest,
+    SpotifyPlaylistsIngest,
+)
 from mini_app_polis.spotify import SpotifyAPI
+from pydantic import ValidationError
 
 from .api_client import api_client
 
@@ -178,9 +183,10 @@ def push_playlists_to_api(sp: Any) -> tuple[int, int] | None:
 
     A ``KaianoApiError`` from the POST is re-raised after logging (callers
     used to read a ``None`` return as success and log "None playlists
-    pushed"). A response with no ``upserted`` count is also a failed
-    push: this raises ``ValueError`` rather than returning ``None`` or a
-    sentinel, so the caller cannot claim the sync completed.
+    pushed"). A response outside the contract — no ``upserted`` count,
+    say — is also a failed push: the client raises pydantic's
+    ``ValidationError``, a ``ValueError``, rather than returning ``None`` or
+    a sentinel, so the caller cannot claim the sync completed.
     """
     if not os.getenv("KAIANO_API_BASE_URL"):
         log.warning(
@@ -193,57 +199,44 @@ def push_playlists_to_api(sp: Any) -> tuple[int, int] | None:
         _normalize_playlist_item(p) for p in raw_playlists if isinstance(p, dict)
     ]
 
-    payload = {
-        "playlists": [
-            {
-                "id": p["id"],
-                "name": p["name"],
-                "url": p["url"],
-                "uri": p["uri"],
-                "type": p["type"],
-                "public": p["public"] if p["public"] is not None else True,
-                "collaborative": p["collaborative"]
+    payload = SpotifyPlaylistsIngest(
+        playlists=[
+            SpotifyPlaylistIngest(
+                id=p["id"],
+                name=p["name"],
+                url=p["url"],
+                uri=p["uri"],
+                type=p["type"],
+                public=p["public"] if p["public"] is not None else True,
+                collaborative=p["collaborative"]
                 if p["collaborative"] is not None
                 else False,
-                "snapshot_id": p["snapshot_id"],
-                "tracks_total": p["tracks_total"]
-                if p["tracks_total"] is not None
-                else 0,
-                "owner_id": p["owner"]["id"],
-                "owner_name": p["owner"].get("display_name"),
-            }
+                snapshot_id=p["snapshot_id"],
+                tracks_total=p["tracks_total"] if p["tracks_total"] is not None else 0,
+                owner_id=p["owner"]["id"],
+                owner_name=p["owner"].get("display_name"),
+            )
             for p in normalized
             if p.get("id") and p.get("name")
         ]
-    }
+    )
 
     try:
         client = api_client()
-        response = client.post("/v1/spotify/playlists", payload)
-    except KaianoApiError as e:
+        result = client.ingest_spotify_playlists(payload)
+    except (KaianoApiError, ValidationError) as e:
         log.error("Spotify playlist push to API failed: %s", e)
         # Raised, not returned. Both call sites read None as success and
         # the flow logged "complete: None playlists pushed" on a total
         # failure. The callers below now count it.
         raise
 
-    data = response.get("data") if isinstance(response, dict) else None
-    if not isinstance(data, dict):
-        log.error("Spotify playlist API response missing data: %s", response)
-        raise ValueError("Spotify playlist API response missing data")
-
-    upserted = data.get("upserted")
-    unchanged = data.get("unchanged", 0)
-    if upserted is None:
-        log.error("Spotify playlist API response missing upserted count: %s", response)
-        raise ValueError("Spotify playlist API response missing upserted count")
-
     log.info(
         "✅ Spotify playlists pushed to API: %s upserted, %s unchanged",
-        upserted,
-        unchanged,
+        result.upserted,
+        result.unchanged,
     )
-    return int(upserted), int(unchanged or 0)
+    return result.upserted, result.unchanged
 
 
 def update_spotify_radio_playlist(
