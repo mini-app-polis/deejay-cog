@@ -105,8 +105,9 @@ def test_post_run_finding_goes_to_notify_not_evaluations(monkeypatch) -> None:
     ) as from_env:
         pe.post_run_finding("f", "SUCCESS", production_only=True, notable=True)
     from_env.assert_called_once_with(machine_name="deejay-cog")
-    client.notify.assert_called_once()
+    client.send_notification.assert_called_once()
     client.post.assert_not_called()
+    client.create_evaluation.assert_not_called()
 
 
 def test_post_run_finding_explicit_source_is_forwarded(monkeypatch) -> None:
