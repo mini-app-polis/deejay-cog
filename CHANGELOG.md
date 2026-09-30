@@ -1,3 +1,10 @@
+## [2.3.5](https://github.com/mini-app-polis/deejay-cog/compare/v2.3.4...v2.3.5) (2026-09-30)
+
+
+### Bug Fixes
+
+* **deps:** patch vulnerable dependencies (virtualenv) ([df566e5](https://github.com/mini-app-polis/deejay-cog/commit/df566e5439047f80979347379d82768e48d93328))
+
 ## [2.3.4](https://github.com/mini-app-polis/deejay-cog/compare/v2.3.3...v2.3.4) (2026-09-30)
 
 
