@@ -1,3 +1,11 @@
+## [2.3.4](https://github.com/mini-app-polis/deejay-cog/compare/v2.3.3...v2.3.4) (2026-09-30)
+
+
+### Bug Fixes
+
+* **deps:** bump urllib3 to 2.8.0 for CVE-2026-97687, CVE-2026-97688, CVE-2026-97689 ([516eb16](https://github.com/mini-app-polis/deejay-cog/commit/516eb1674edee3ec365b6677b3e27a530730718b))
+* **deps:** require common 5.15.2 and assert run reports use send_notification ([fbcba81](https://github.com/mini-app-polis/deejay-cog/commit/fbcba813d4643e8f1bdef48e2808a9c377562dcf))
+
 ## [2.3.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.3.2...v2.3.3) (2026-09-29)
 
 
