@@ -654,7 +654,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "miniapppolis-common-utils", specifier = ">=5.14.1,<6" },
+    { name = "miniapppolis-common-utils", specifier = ">=5.15.2,<6" },
     { name = "music-tag", specifier = ">=0.4.3" },
     { name = "musicbrainzngs", specifier = ">=0.7.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.2" },
@@ -1017,7 +1017,7 @@ wheels = [
 
 [[package]]
 name = "miniapppolis-common-utils"
-version = "5.14.1"
+version = "5.15.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "google-api-python-client" },
@@ -1029,15 +1029,16 @@ dependencies = [
     { name = "music-tag" },
     { name = "musicbrainzngs" },
     { name = "mutagen" },
+    { name = "oauthlib" },
     { name = "pyacoustid" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "spotipy" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5d/bf/6774be395fd1099b1e581191f4efc4a80156fecd95173d875c1816e40e13/miniapppolis_common_utils-5.14.1.tar.gz", hash = "sha256:6064011dfe383c195eebb1f130d7b30956263afb6afc94069c8d4269ebe45253", size = 303113, upload-time = "2026-09-29T18:58:21.664Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/9d/5f6468a0403192bc144c5211afcb00f018fe2a4f80784d519e9c701b4cdd/miniapppolis_common_utils-5.15.2.tar.gz", hash = "sha256:a3da2d0cd60f4a1695f0e7d21680ca33fc8263ba9a1c0d699151c9eae602eed2", size = 310016, upload-time = "2026-09-29T22:39:31.496Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f3/ba/a1a8fe76d0c8f5ad1450091fb08d595d43e152001832e76ac48294bdf9dc/miniapppolis_common_utils-5.14.1-py3-none-any.whl", hash = "sha256:3a41067865a8b59e06faa39832cac39ba06a7594244524fd2da7f1eab67d5375", size = 126250, upload-time = "2026-09-29T18:58:20.208Z" },
+    { url = "https://files.pythonhosted.org/packages/27/83/96297cf4b03e0fc17cc1df7fa00d0f5af8bbc49bb1b7909aaea0ed903488/miniapppolis_common_utils-5.15.2-py3-none-any.whl", hash = "sha256:ec1b3bcefd7bdabef841063480629c9bb7c67485c8aeaac513c9a0e96dbde318", size = 130972, upload-time = "2026-09-29T22:39:30Z" },
 ]
 
 [[package]]
@@ -1896,11 +1897,11 @@ wheels = [
 
 [[package]]
 name = "urllib3"
-version = "2.7.0"
+version = "2.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e3/05/b17359e1cefb4f909b5e40b1b90a496d987258916dbbf88e842c729f510e/urllib3-2.8.0.tar.gz", hash = "sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63", size = 458972, upload-time = "2026-09-15T19:29:36.253Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
+    { url = "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl", hash = "sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3", size = 135717, upload-time = "2026-09-15T19:29:34.577Z" },
 ]
 
 [[package]]
