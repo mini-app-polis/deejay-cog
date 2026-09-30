@@ -40,15 +40,17 @@
 # publishes to the Cloudflare preview URL and to the Railway development
 # environment, so a bad bump surfaces there instead of in production.
 #
-# Two asymmetries are worth knowing. Dependabot reads this file from the
-# *default* branch only, so this config has to be on `main` to take effect
-# even though every version-update pull request targets `dev`. And
-# Dependabot security updates ignore `target-branch` entirely — they
-# always open against the default branch, and take their settings only
-# from an entry without a non-default `target-branch`. The last entry
-# exists for that reason alone: version updates are switched off there
-# (`open-pull-requests-limit: 0`), and it groups every security fix into
-# one pull request.
+# Dependabot reads this file from the *default* branch only, so this
+# config has to be on `main` to take effect even though every
+# version-update pull request targets `dev`.
+#
+# There is deliberately no security-updates entry. Dependabot security
+# updates ignore `target-branch` and open against `main`, where automerge
+# never merges. Security fixes come from dependency-fix.yml in
+# mini-app-polis/.github instead: it runs the same audit CI runs, re-locks
+# what it flags, and opens its pull request into `dev`. Dependabot alerts
+# stay on in the repository settings as an independent list of open
+# advisories.
 version: 2
 updates:
   - package-ecosystem: "uv"
@@ -85,16 +87,3 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: "ci(deps)"
-
-  - package-ecosystem: "uv"
-    directory: "/"
-    schedule:
-      interval: "daily"
-    open-pull-requests-limit: 0
-    groups:
-      security:
-        applies-to: security-updates
-        patterns: ["*"]
-    commit-message:
-      prefix: "fix(deps)"
-      prefix-development: "chore(deps)"
