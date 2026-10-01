@@ -654,7 +654,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "miniapppolis-common-utils", specifier = ">=5.15.2,<6" },
+    { name = "miniapppolis-common-utils", specifier = ">=5,<6" },
     { name = "music-tag", specifier = ">=0.4.3" },
     { name = "musicbrainzngs", specifier = ">=0.7.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.2" },
@@ -1017,7 +1017,7 @@ wheels = [
 
 [[package]]
 name = "miniapppolis-common-utils"
-version = "5.15.2"
+version = "5.17.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "google-api-python-client" },
@@ -1029,16 +1029,15 @@ dependencies = [
     { name = "music-tag" },
     { name = "musicbrainzngs" },
     { name = "mutagen" },
-    { name = "oauthlib" },
     { name = "pyacoustid" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "spotipy" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/52/9d/5f6468a0403192bc144c5211afcb00f018fe2a4f80784d519e9c701b4cdd/miniapppolis_common_utils-5.15.2.tar.gz", hash = "sha256:a3da2d0cd60f4a1695f0e7d21680ca33fc8263ba9a1c0d699151c9eae602eed2", size = 310016, upload-time = "2026-09-29T22:39:31.496Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/76/d0/f7c2eb0372cd5bcff62bd13d77698f13913b9deb8dc7a75aef0cf46f000b/miniapppolis_common_utils-5.17.0.tar.gz", hash = "sha256:11f3c61e69415f5dd9991341ffb5135d5258f37cf47f929cce79b3360d06c93a", size = 312364, upload-time = "2026-09-30T18:42:41.821Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/83/96297cf4b03e0fc17cc1df7fa00d0f5af8bbc49bb1b7909aaea0ed903488/miniapppolis_common_utils-5.15.2-py3-none-any.whl", hash = "sha256:ec1b3bcefd7bdabef841063480629c9bb7c67485c8aeaac513c9a0e96dbde318", size = 130972, upload-time = "2026-09-29T22:39:30Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/c5/40bb53b1a33f94d17cf234158438b5e0d5fe6b47effef88021c8c64cd3bc/miniapppolis_common_utils-5.17.0-py3-none-any.whl", hash = "sha256:89dbc36d1ad2839c0ae220d80193c5d51d9211f4c4912ab955e1e935079e17b9", size = 132435, upload-time = "2026-09-30T18:42:40.522Z" },
 ]
 
 [[package]]
