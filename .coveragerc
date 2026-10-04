@@ -1,9 +1,0 @@
-[run]
-branch = True
-source = src
-
-[report]
-fail_under = 0
-show_missing = True
-skip_empty = True
-ignore_errors = True
