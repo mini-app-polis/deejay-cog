@@ -223,15 +223,18 @@ class FakeDrive:
         self._sheets.values[sheet_id] = rows
         return sheet_id
 
-    def get_all_m3u_files(self) -> list[dict]:
-        # The facade swallows a listing failure and answers []. Mirrored,
-        # so the flow is tested against what it will actually be given.
-        try:
-            files = self.list_files(
-                VDJ_HISTORY_FOLDER, include_folders=False, name_contains=".m3u"
+    def get_all_m3u_files(self, folder_id: str | None = None) -> list[dict]:
+        # The facade's semantics since common-python-utils 5.19: a failed
+        # listing raises, only names ending in .m3u count, newest first.
+        if not folder_id:
+            raise ValueError("No VirtualDJ history folder")
+        files = [
+            f
+            for f in self.list_files(
+                folder_id, include_folders=False, name_contains=".m3u"
             )
-        except Exception:
-            return []
+            if (f.name or "").lower().endswith(".m3u")
+        ]
         files.sort(key=lambda f: f.name or "", reverse=True)
         return [{"id": f.id, "name": f.name} for f in files]
 

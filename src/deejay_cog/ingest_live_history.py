@@ -150,7 +150,10 @@ def ingest_live_history(*, run_id: str | None = None) -> LiveIngestSummary:
         )
     else:
         client = api_client(base_url=base_url)
-        m3u_files = list(g.drive.get_all_m3u_files() or [])
+        # Raises when Drive cannot be listed (common-python-utils >= 5.19),
+        # so an outage fails the run and the message is redelivered rather
+        # than passing for an empty history folder and an idle tick.
+        m3u_files = g.drive.get_all_m3u_files(config.VDJ_HISTORY_FOLDER_ID)
         if not m3u_files:
             logger.info("No .m3u files found. Nothing to ingest.")
             summary = LiveIngestSummary(

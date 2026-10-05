@@ -101,7 +101,7 @@ them. Each run re-sends that file's plays; the API deduplicates.
 | What failed | What happens |
 |-------------|--------------|
 | One file (upload, ingest, move) | Contained. Counted, the file is renamed where that helps a retry, the sweep carries on, and the run reports WARN. The message is deleted. |
-| The run itself (e.g. the drop zone cannot be listed) | The flow raises. The worker reports ERROR and returns the message in `batchItemFailures`, so SQS redelivers it. |
+| The run itself (e.g. the drop zone or the history folder cannot be listed) | The flow raises. The worker reports ERROR and returns the message in `batchItemFailures`, so SQS redelivers it. |
 | The deadline | 30 s before the function's timeout the run is stopped (`_deadline.RunOutOfTime`). A sheet uploaded but not yet ingested is deleted, the worker reports ERROR, and the message is redelivered. |
 | An unrecognised message (bad JSON, version, type or mode) | Reported once, on its first receive, then returned until it reaches the dead-letter queue, where its own alarm fires. |
 

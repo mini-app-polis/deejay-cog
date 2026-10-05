@@ -127,6 +127,34 @@ def test_a_history_file_with_no_plays_is_reported(
     assert api.severities() == ["SUCCESS"]
 
 
+def test_a_drive_outage_is_reported_and_redelivered(
+    google: FakeGoogle, api: FakeApi, handler
+) -> None:
+    """Drive being down is not "no history yet": the message comes back."""
+    google.drive.add_file(VDJ_HISTORY_FOLDER, "2025-10-04.m3u", TONIGHT)
+    google.drive.fail("list_files", RuntimeError("503 backendError"), times=None)
+
+    result = handler(_event("msg-7"))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "msg-7"}]}
+    assert api.bodies("/v1/live-plays") == []
+    [report] = api.reports()
+    assert api.severities() == ["ERROR"]
+    assert "ingest-live-history" in report["title"]
+    assert "503 backendError" in report["description"]
+
+
+def test_only_m3u_files_are_considered(
+    google: FakeGoogle, api: FakeApi, handler
+) -> None:
+    google.drive.add_file(VDJ_HISTORY_FOLDER, "2025-09-27.m3u", TONIGHT)
+    google.drive.add_file(VDJ_HISTORY_FOLDER, "2025-10-04.m3u8", LAST_WEEK)
+
+    handler(_event())
+
+    assert "2025-09-27.m3u" in api.reports()[0]["description"]
+
+
 def test_an_unreadable_history_file_warns(
     google: FakeGoogle, api: FakeApi, handler
 ) -> None:
