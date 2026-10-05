@@ -312,14 +312,20 @@ def test_ingest_set_to_api_posts_payload(monkeypatch):
         def from_env(cls):
             return client
 
-    sys.modules["mini_app_polis.api"] = SimpleNamespace(KaianoApiClient=FakeClient)
+    monkeypatch.setitem(
+        sys.modules, "mini_app_polis.api", SimpleNamespace(KaianoApiClient=FakeClient)
+    )
     # The cog builds its client through deejay_cog.api_client so every call
     # site presents the same machine identity; that is what to intercept.
-    sys.modules["deejay_cog.api_client"] = SimpleNamespace(
-        api_client=lambda *_a, **_k: client
+    monkeypatch.setitem(
+        sys.modules,
+        "deejay_cog.api_client",
+        SimpleNamespace(api_client=lambda *_a, **_k: client),
     )
-    sys.modules["mini_app_polis.api.errors"] = SimpleNamespace(
-        KaianoApiError=FakeApiError
+    monkeypatch.setitem(
+        sys.modules,
+        "mini_app_polis.api.errors",
+        SimpleNamespace(KaianoApiError=FakeApiError),
     )
 
     g = SimpleNamespace()
@@ -372,14 +378,20 @@ def test_ingest_set_to_api_logs_error_on_api_error(monkeypatch):
         def ingest(self, *_args, **_kwargs):
             raise FakeApiError("nope")
 
-    sys.modules["mini_app_polis.api"] = SimpleNamespace(KaianoApiClient=FakeClient)
+    monkeypatch.setitem(
+        sys.modules, "mini_app_polis.api", SimpleNamespace(KaianoApiClient=FakeClient)
+    )
     # The cog builds its client through deejay_cog.api_client so every call
     # site presents the same machine identity; that is what to intercept.
-    sys.modules["deejay_cog.api_client"] = SimpleNamespace(
-        api_client=lambda *_a, **_k: FakeClient()
+    monkeypatch.setitem(
+        sys.modules,
+        "deejay_cog.api_client",
+        SimpleNamespace(api_client=lambda *_a, **_k: FakeClient()),
     )
-    sys.modules["mini_app_polis.api.errors"] = SimpleNamespace(
-        KaianoApiError=FakeApiError
+    monkeypatch.setitem(
+        sys.modules,
+        "mini_app_polis.api.errors",
+        SimpleNamespace(KaianoApiError=FakeApiError),
     )
 
     g = SimpleNamespace()
@@ -489,11 +501,15 @@ def test_failure_before_the_post_is_counted(monkeypatch):
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.test")
     stats = process_new_files.CsvPipelineStats()
 
-    sys.modules["deejay_cog.api_client"] = SimpleNamespace(
-        api_client=lambda *_a, **_k: SimpleNamespace(post=MagicMock())
+    monkeypatch.setitem(
+        sys.modules,
+        "deejay_cog.api_client",
+        SimpleNamespace(api_client=lambda *_a, **_k: SimpleNamespace(post=MagicMock())),
     )
-    sys.modules["mini_app_polis.api.errors"] = SimpleNamespace(
-        KaianoApiError=type("FakeApiError", (Exception,), {})
+    monkeypatch.setitem(
+        sys.modules,
+        "mini_app_polis.api.errors",
+        SimpleNamespace(KaianoApiError=type("FakeApiError", (Exception,), {})),
     )
 
     with patch.object(
