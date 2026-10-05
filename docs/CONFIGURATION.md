@@ -1,416 +1,108 @@
 # Configuration reference
 
-This document lists every environment variable and config value used by **deejay-cog**, where they come from, and which scripts use them.
+Every environment variable **deejay-cog** reads, where it comes from in
+production, and what reads it.
+
+**In production** the Lambda gets its configuration from two places, both
+declared in `mini-app-polis/infra` (`cogs.tf` and `modules/cog-worker`):
+
+- **Secrets** are loaded from SSM Parameter Store at cold start, synced from
+  Doppler (`mini_app_polis.load_secrets`, called when the package is first
+  imported). Required ones fail the cold start when missing; optional ones
+  are left unset.
+- **Plain settings** are set on the function's environment.
+
+**Locally**, run under `doppler run` or put values in `.env`, which
+`config.py` loads. See `.env.example`.
 
 ---
 
-## System dependencies
+## Environment and API
 
-The `retag-music` flow (`retag_music.py`) requires two runtime binaries that are not Python packages:
+| Variable | Production source | Required | Description |
+|----------|-------------------|----------|-------------|
+| `ENVIRONMENT` | Function env (`production`) | No | Which environment this process is in. Unset resolves to `local`. Selects which API variables are read, and prefixes non-production report titles. |
+| `KAIANO_API_BASE_URL` | Function env | Yes in production | api-kaianolevine-com base URL, read **in production only**. |
+| `KAIANO_API_BASE_URL_DEV` | — | No | The base URL read **everywhere else**. There is no fallback between the two, so a dev process never reaches production by forgetting a variable. |
+| `DEEJAY_COG_API_KEY` | SSM (required) | Yes | This cog's own API key. The API attributes every call to `deejay-cog` by it. The shared client falls back to `KAIANO_API_KEY` when it is unset. |
 
-- `ffmpeg` (used by `pyacoustid` for audio decoding)
-- `fpcalc` (used by `pyacoustid` for audio fingerprinting; provided by `chromaprint` / `libchromaprint-tools`)
+Every API call resolves the base URL the same way
+(`mini_app_polis.environment.api_base_url()`): ingest, live plays, the
+Spotify snapshot and the run report. With no URL resolved:
 
-Install on Ubuntu/Debian:
+- **process-new-files** counts each set as a failed ingest. The CSV is not
+  archived, and the sheet uploaded for it is removed.
+- **ingest-live-history** skips.
+- **Run reports** are logged, not sent.
+
+---
+
+## Google
+
+| Variable | Production source | Required | Description |
+|----------|-------------------|----------|-------------|
+| `GOOGLE_CREDENTIALS_JSON` | SSM (required) | Yes | Service-account JSON for Drive and Sheets (`GoogleAPI.from_env()`). |
+| `CSV_SOURCE_FOLDER_ID` | Code default | No | Drop zone swept by process-new-files. |
+| `DJ_SETS_FOLDER_ID` | Code default | No | Parent of the year folders (each with an `Archive` subfolder) and the `Summary` folder. |
+| `VDJ_HISTORY_FOLDER_ID` | Function env | No | VirtualDJ history folder read by ingest-live-history. The shared Drive facade reads it from common-python-utils' config. |
+| `TIMEZONE` | Code default (`America/Chicago`) | No | Timezone live plays are stamped in. |
+
+The folder IDs default to the production folders in `config.py`; there is
+no separate development Drive.
+
+---
+
+## Spotify
+
+| Variable | Production source | Required | Description |
+|----------|-------------------|----------|-------------|
+| `SPOTIPY_CLIENT_ID` | SSM (optional) | For Spotify | Spotify app client ID. |
+| `SPOTIPY_CLIENT_SECRET` | SSM (optional) | For Spotify | Spotify app client secret. |
+| `SPOTIPY_REFRESH_TOKEN` | SSM (optional) | For Spotify | OAuth refresh token. Generated once with `scripts/get_spotify_refresh_token.py`; see [SPOTIFY_SETUP.md](SPOTIFY_SETUP.md). |
+| `SPOTIPY_REDIRECT_URI` | Function env | No | Read by common-python-utils' Spotify client. Defaults to `http://127.0.0.1:8888/callback`. Must match the Spotify dashboard. |
+| `SPOTIFY_RADIO_PLAYLIST_ID` | SSM (optional) | No | The standing radio playlist. When unset, every synced set counts a Spotify failure. |
+
+All three credentials must be set, or every Spotify step is skipped (logged,
+not counted as a failure).
+
+---
+
+## Observability
+
+| Variable | Production source | Required | Description |
+|----------|-------------------|----------|-------------|
+| `SENTRY_DSN` | SSM (optional) | No | Sentry DSN, initialised once per cold start in `worker.py`. |
+| `LOGGING_LEVEL` | — | No | Log level (`DEBUG`, `INFO`, …), read by the shared logger. Defaults to `INFO`. |
+
+---
+
+## Local-only flows
+
+| Variable | Default | Used by |
+|----------|---------|---------|
+| `OUTPUT_NAME` | `DJ Set Collection` | update-dj-set-collection: the collection spreadsheet. |
+| `TEMP_TAB_NAME` | `TempClear` | update-dj-set-collection: the scratch tab. |
+| `SUMMARY_TAB_NAME` | `Summary_Tab` | update-dj-set-collection |
+| `SUMMARY_FOLDER_NAME` | `Summary` | generate-summaries: folder under `DJ_SETS_FOLDER_ID`. |
+| `DEEJAY_SET_COLLECTION_JSON_PATH` | `v1/deejay-sets/deejay_set_collection.json` | update-dj-set-collection: where the JSON snapshot is written. |
+| `MUSIC_UPLOAD_SOURCE_FOLDER_ID` | Code default | retag-music: folder of files to identify. |
+| `MUSIC_TAGGING_OUTPUT_FOLDER_ID` | Code default | retag-music: where identified files go. |
+| `ACOUSTID_API_KEY` | — | retag-music: required. |
+| `RETAG_MIN_CONFIDENCE` | `0.90` | retag-music: minimum match confidence. |
+| `RETAG_MAX_CANDIDATES` | `5` | retag-music: candidates inspected per file. |
+| `MAX_UPLOADS_PER_RUN` | `200` | retag-music: per-run upload ceiling. |
+
+The columns and column order of summary sheets (`ALLOWED_HEADERS`,
+`desiredOrder`) are constants in `config.py`, not environment variables.
+
+### retag-music system dependencies
+
+retag-music needs two binaries that are not Python packages: `ffmpeg` (audio
+decoding) and `fpcalc` (fingerprinting, from chromaprint).
 
 ```bash
-sudo apt-get install -y ffmpeg libchromaprint-tools
+sudo apt-get install -y ffmpeg libchromaprint-tools   # Ubuntu/Debian
+brew install ffmpeg chromaprint                       # macOS
 ```
 
-These dependencies are specific to `retag-music` and must be explicitly provisioned in the runtime environment when registering that deployment (for example via a custom Dockerfile or `nixpacks` config on Railway). No other deejay-cog flow requires these binaries.
-
----
-
-## Environment variables
-
-### GOOGLE_CREDENTIALS_JSON
-
-| | |
-|--|--|
-| **Required** | Yes (for any script that talks to Drive/Sheets) |
-| **Description** | Full JSON body of the Google credentials (service account or OAuth) used for Drive and Sheets API. |
-| **Example** | `{"type": "service_account", "project_id": "...", ...}` |
-| **Source** | GitHub Actions: **secret** `GOOGLE_CREDENTIALS_JSON`. Locally: set in env or `.env` (not committed). |
-| **Used by** | `process_new_files.py`, `update_deejay_set_collection.py`, `generate_summaries.py`, `deduplicate_summary.py` (via kaiano `GoogleAPI.from_env()`). |
-
----
-
-### LOGGING_LEVEL
-
-| | |
-|--|--|
-| **Required** | No (defaults from common-python-utils) |
-| **Description** | Log level for the application (e.g. `DEBUG`, `INFO`, `WARNING`). |
-| **Example** | `INFO` |
-| **Source** | GitHub Actions: **variable** `LOGGING_LEVEL`. Locally: env or config. |
-| **Used by** | All scripts (via kaiano logger). |
-
----
-
-### ANTHROPIC_API_KEY
-
-| | |
-|--|--|
-| **Required** | No |
-| **Description** | Anthropic API key. Reserved for the LLM-backed paths in **evaluator-cog**. Self-reported `pipeline_consistency` findings from `deejay_cog._pipeline_eval.post_run_finding` POST directly to `/v1/evaluations` and do **not** consult this key. |
-| **Example** | `sk-antropic-...` |
-| **Source** | GitHub Actions: **secret** `ANTHROPIC_API_KEY` |
-| **Used by** | `evaluator-cog` LLM paths only. |
-
----
-
-### CSV_SOURCE_FOLDER_ID
-
-| | |
-|--|--|
-| **Required** | Yes for ingestion |
-| **Description** | Google Drive folder ID of the “drop zone” where CSV and other files are placed for processing. |
-| **Example** | `1abc...xyz` |
-| **Source** | Set in **common-python-utils** config (e.g. env or repo variables) and read as `config.CSV_SOURCE_FOLDER_ID`. |
-| **Used by** | `process_new_files.py` |
-
----
-
-### DJ_SETS_FOLDER_ID
-
-| | |
-|--|--|
-| **Required** | Yes |
-| **Description** | Google Drive folder ID of the main DJ Sets folder that contains year subfolders and the Summary subfolder. |
-| **Example** | `1def...uvw` |
-| **Source** | common-python-utils config (`config.DJ_SETS_FOLDER_ID`). |
-| **Used by** | `process_new_files.py`, `update_deejay_set_collection.py`, `generate_summaries.py` |
-
----
-
-### OUTPUT_NAME
-
-| | |
-|--|--|
-| **Required** | Yes for collection build |
-| **Description** | Name of the master “DJ Set Collection” Google Sheet. |
-| **Example** | `DJ Set Collection` |
-| **Source** | common-python-utils config (`config.OUTPUT_NAME`). |
-| **Used by** | `update_deejay_set_collection.py` |
-
----
-
-### TEMP_TAB_NAME
-
-| | |
-|--|--|
-| **Required** | Yes for collection build |
-| **Description** | Name of the temporary tab used while building the collection spreadsheet. |
-| **Example** | `Temp` |
-| **Source** | common-python-utils config (`config.TEMP_TAB_NAME`). |
-| **Used by** | `update_deejay_set_collection.py` |
-
----
-
-### SUMMARY_TAB_NAME
-
-| | |
-|--|--|
-| **Required** | Yes for collection build |
-| **Description** | Name of the Summary tab in the collection spreadsheet. |
-| **Example** | `Summary` |
-| **Source** | common-python-utils config (`config.SUMMARY_TAB_NAME`). |
-| **Used by** | `update_deejay_set_collection.py` |
-
----
-
-### SUMMARY_FOLDER_NAME
-
-| | |
-|--|--|
-| **Required** | Yes for summaries |
-| **Description** | Name of the Summary subfolder under the DJ Sets folder (e.g. where “{Year} Summary” sheets live). |
-| **Example** | `Summary` |
-| **Source** | common-python-utils config (`config.SUMMARY_FOLDER_NAME`). |
-| **Used by** | `generate_summaries.py` |
-
----
-
-### ALLOWED_HEADERS
-
-| | |
-|--|--|
-| **Required** | Yes for summaries |
-| **Description** | List of column names (from set sheets) to include in summary sheets. |
-| **Example** | `["Title", "Artist", "Length", "BPM", "Genre", "Year", "Comment"]` |
-| **Source** | common-python-utils config (`config.ALLOWED_HEADERS`). |
-| **Used by** | `generate_summaries.py` |
-
----
-
-### desiredOrder
-
-| | |
-|--|--|
-| **Required** | No (order can default) |
-| **Description** | Order of columns in summary sheets (subset of allowed headers). |
-| **Example** | `["Title", "Artist", "Length", "BPM", "Genre", "Year", "Comment"]` |
-| **Source** | common-python-utils config (`config.desiredOrder`). |
-| **Used by** | `generate_summaries.py` |
-
----
-
-### DEEJAY_SET_COLLECTION_JSON_PATH
-
-| | |
-|--|--|
-| **Required** | No |
-| **Description** | File path where the DJ set collection JSON snapshot is written. |
-| **Example** | `v1/deejay-sets/deejay_set_collection.json` |
-| **Default** | `v1/deejay-sets/deejay_set_collection.json` (if not set in config). |
-| **Source** | common-python-utils config (`config.DEEJAY_SET_COLLECTION_JSON_PATH`), or hardcoded default in `update_deejay_set_collection.py`. |
-| **Used by** | `update_deejay_set_collection.py` |
-
----
-
-### KAIANO_API_BASE_URL
-
-| | |
-|--|--|
-| **Required** | No — API ingest and pipeline evaluation are both skipped if unset. |
-| **Description** | Base URL for the deejay-marvel-api instance. Used to POST new sets, live history plays, the full Spotify playlist catalog (`POST /v1/spotify/playlists` from `spotify_sync.push_playlists_to_api` after CSV Spotify sync), and self-reported pipeline evaluations (`POST /v1/evaluations` from `deejay_cog._pipeline_eval`). |
-| **Example** | `https://your-api.railway.app` |
-| **Source** | GitHub Actions: **variable** `KAIANO_API_BASE_URL`. Locally: `.env`. |
-| **Used by** | `process_new_files.py`, `ingest_live_history.py`, `ingest_to_api.py`, `spotify_sync.py`, and `deejay_cog._pipeline_eval` (production evaluation gating). |
-
----
-
-### KAIANO_API_OWNER_ID
-
-| | |
-|--|--|
-| **Required** | No (falls back to `OWNER_ID` if not set) |
-| **Description** | Owner ID sent with API requests to deejay-marvel-api. |
-| **Example** | `your-owner-id` |
-| **Source** | GitHub Actions: **variable** `KAIANO_API_OWNER_ID`. Locally: `.env`. |
-| **Used by** | `process_new_files.py`, `ingest_live_history.py` |
-
----
-
-### OWNER_ID
-
-| | |
-|--|--|
-| **Required** | No (fallback for `KAIANO_API_OWNER_ID`) |
-| **Description** | Fallback owner ID if `KAIANO_API_OWNER_ID` is not set. |
-| **Source** | GitHub Actions: **variable** `OWNER_ID`. Locally: `.env`. |
-| **Used by** | `process_new_files.py`, `ingest_live_history.py` |
-
----
-
-### SPOTIPY_CLIENT_ID
-
-| | |
-|--|--|
-| **Required** | Yes (all Spotify features) |
-| **Description** | Spotify application client ID from the Spotify Developer Dashboard. |
-| **Source** | GitHub Actions: **secret** `SPOTIPY_CLIENT_ID`. Locally: `.env`. |
-| **Used by** | `spotify_sync.py`, `process_new_files.py` |
-
----
-
-### SPOTIPY_CLIENT_SECRET
-
-| | |
-|--|--|
-| **Required** | Yes (all Spotify features) |
-| **Description** | Spotify application client secret from the Spotify Developer Dashboard. |
-| **Source** | GitHub Actions: **secret** `SPOTIPY_CLIENT_SECRET`. Locally: `.env`. |
-| **Used by** | `spotify_sync.py`, `process_new_files.py` |
-
----
-
-### SPOTIPY_REFRESH_TOKEN
-
-| | |
-|--|--|
-| **Required** | Yes (all Spotify features) |
-| **Description** | OAuth refresh token for the Spotify account. Generated once locally using `scripts/get_spotify_refresh_token.py` — see `docs/SPOTIFY_SETUP.md` for full instructions. |
-| **Source** | GitHub Actions: **secret** `SPOTIPY_REFRESH_TOKEN`. Locally: `.env`. |
-| **Used by** | `spotify_sync.py`, `process_new_files.py` |
-
----
-
-### SPOTIPY_REDIRECT_URI
-
-| | |
-|--|--|
-| **Required** | No (defaults to `http://127.0.0.1:8888/callback`) |
-| **Description** | OAuth redirect URI — must match what is registered in the Spotify Developer Dashboard. |
-| **Source** | GitHub Actions: **variable** `SPOTIPY_REDIRECT_URI`. Locally: `.env`. |
-| **Used by** | `spotify_sync.py` |
-
----
-
-### SPOTIFY_RADIO_PLAYLIST_ID
-
-| | |
-|--|--|
-| **Required** | No (radio playlist updates are skipped if unset) |
-| **Description** | Spotify playlist ID for the standing radio playlist that matched tracks are appended to on every sync. |
-| **Source** | GitHub Actions: **variable** `SPOTIFY_RADIO_PLAYLIST_ID`. Locally: `.env`. |
-| **Used by** | `spotify_sync.py`, `process_new_files.py` |
-
----
-
-### ACOUSTID_API_KEY
-
-| | |
-|--|--|
-| **Required** | Yes (retag-music flow) |
-| **Description** | AcoustID application API key used to fingerprint and identify audio files via AcoustID/MusicBrainz. |
-| **Source** | GitHub Actions / Railway env / `.env`. |
-| **Used by** | `retag_music.py` |
-
----
-
-### RETAG_MIN_CONFIDENCE
-
-| | |
-|--|--|
-| **Required** | No (defaults to `0.90`) |
-| **Description** | Minimum identification confidence required before treating a match as high-confidence and moving to destination. |
-| **Source** | GitHub Actions / Railway env / `.env`. |
-| **Used by** | `retag_music.py` |
-
----
-
-### RETAG_MAX_CANDIDATES
-
-| | |
-|--|--|
-| **Required** | No (defaults to `5`) |
-| **Description** | Maximum AcoustID candidates to inspect when selecting a match. |
-| **Source** | GitHub Actions / Railway env / `.env`. |
-| **Used by** | `retag_music.py` |
-
----
-
-### MAX_UPLOADS_PER_RUN
-
-| | |
-|--|--|
-| **Required** | No (defaults to `200`) |
-| **Description** | Per-run ceiling for uploads performed by the retag-music flow. |
-| **Source** | GitHub Actions / Railway env / `.env`. |
-| **Used by** | `retag_music.py` |
-
----
-
-## Prefect
-
-### PREFECT_API_KEY
-
-| | |
-|--|--|
-| **Required** | Yes (Prefect flow execution) |
-| **Description** | API key for authenticating with Prefect Cloud. |
-| **Source** | GitHub Actions: **secret** `PREFECT_API_KEY`. Locally: `.env`. |
-| **Used by** | All flow scripts via `prefect cloud login`. |
-
----
-
-### PREFECT_API_URL
-
-| | |
-|--|--|
-| **Required** | Yes (Prefect flow execution) |
-| **Description** | Prefect Cloud workspace API URL. |
-| **Example** | `https://api.prefect.cloud/api/accounts/<account-id>/workspaces/<workspace-id>` |
-| **Source** | GitHub Actions: **variable** `PREFECT_API_URL`. Locally: `.env`. |
-| **Used by** | All flow scripts via `prefect cloud login`. |
-
----
-
-### PREFECT_ACCOUNT_SLUG
-
-| | |
-|--|--|
-| **Required** | Yes (Prefect login step in workflows) |
-| **Description** | Prefect Cloud account slug used in the workspace login command. |
-| **Source** | GitHub Actions: **variable** `PREFECT_ACCOUNT_SLUG`. |
-| **Used by** | All workflows (login step only — not read by Python scripts directly). |
-
----
-
-### PREFECT_WORKSPACE_SLUG
-
-| | |
-|--|--|
-| **Required** | Yes (Prefect login step in workflows) |
-| **Description** | Prefect Cloud workspace slug used in the workspace login command. |
-| **Source** | GitHub Actions: **variable** `PREFECT_WORKSPACE_SLUG`. |
-| **Used by** | All workflows (login step only — not read by Python scripts directly). |
-
----
-
-### SERVE_RETRY_MAX_SECONDS
-
-| | |
-|--|--|
-| **Required** | No |
-| **Description** | Wall-clock ceiling, in seconds, for retrying Prefect deployment registration at startup. Defaults to `1800` (30 minutes). On give-up the process posts one `source="startup"` CRITICAL finding and exits non-zero so Railway's `ON_FAILURE` restart policy takes over — see [ADR-005](decisions/ADR-005-serve-startup-resilience.md). An unparseable or non-positive value is logged and ignored rather than crashing startup. |
-| **Example** | `3600` |
-| **Source** | Railway env var. Not set by default — the library default applies. |
-| **Used by** | `main.py`, indirectly: read by `mini_app_polis.serve_resilience.serve_with_retry` via `os.environ`. |
-
-> Deliberately **not** listed in `.env.example`. CFG-002 requires every
-> `.env.example` key to be a declared field on this repo's `Settings`
-> class, and nothing in deejay-cog reads this variable — the shared
-> library does. Declaring it in `Settings` would imply an ownership this
-> repo does not have. It is an operator override, documented here.
-
----
-
-## GitHub-only (workflows)
-
-### KAIANO_API_REPO_TOKEN
-
-| | |
-|--|--|
-| **Required** | Yes (workflows that push to kaiano-api) |
-| **Description** | GitHub personal access token used to clone and push the kaiano-api repo when copying JSON snapshots. Not read by Python scripts directly. |
-| **Source** | GitHub Actions: **secret** `KAIANO_API_REPO_TOKEN`. |
-| **Used by** | `update_dj_set_collection` workflow, `process_new_csv_files` workflow. |
-
----
-
-## Summary table
-
-| Variable | Required | Source (typical) | Scripts |
-|----------|----------|------------------|--------|
-| GOOGLE_CREDENTIALS_JSON | Yes | GitHub secret / env | All |
-| LOGGING_LEVEL | No | GitHub variable / env | All |
-| ANTHROPIC_API_KEY | No | GitHub secret / env | process_new_files, update_deejay_set_collection, generate_summaries, ingest_live_history (evaluation) |
-| CSV_SOURCE_FOLDER_ID | Yes (ingestion) | kaiano config | process_new_files |
-| DJ_SETS_FOLDER_ID | Yes | kaiano config | process_new_files, update_deejay_set_collection, generate_summaries |
-| OUTPUT_NAME | Yes (collection) | kaiano config | update_deejay_set_collection |
-| TEMP_TAB_NAME | Yes (collection) | kaiano config | update_deejay_set_collection |
-| SUMMARY_TAB_NAME | Yes (collection) | kaiano config | update_deejay_set_collection |
-| SUMMARY_FOLDER_NAME | Yes (summaries) | kaiano config | generate_summaries |
-| ALLOWED_HEADERS | Yes (summaries) | kaiano config | generate_summaries |
-| desiredOrder | No | kaiano config | generate_summaries |
-| DEEJAY_SET_COLLECTION_JSON_PATH | No | kaiano config / default | update_deejay_set_collection |
-| KAIANO_API_BASE_URL | No | GitHub variable / `.env` | process_new_files, update_deejay_set_collection, generate_summaries, ingest_live_history (API ingest, Spotify playlist catalog push, evaluation gating) |
-| KAIANO_API_OWNER_ID | No | GitHub variable / `.env` | process_new_files, ingest_live_history |
-| OWNER_ID | No | GitHub variable / `.env` | process_new_files, ingest_live_history |
-| SPOTIPY_CLIENT_ID | Yes (Spotify) | GitHub secret / `.env` | spotify_sync, process_new_files |
-| SPOTIPY_CLIENT_SECRET | Yes (Spotify) | GitHub secret / `.env` | spotify_sync, process_new_files |
-| SPOTIPY_REFRESH_TOKEN | Yes (Spotify) | GitHub secret / `.env` | spotify_sync, process_new_files |
-| SPOTIPY_REDIRECT_URI | No | GitHub variable / `.env` | spotify_sync |
-| SPOTIFY_RADIO_PLAYLIST_ID | No | GitHub variable / `.env` | spotify_sync, process_new_files |
-| ACOUSTID_API_KEY | Yes (retag-music) | GitHub variable / Railway env / `.env` | retag_music |
-| RETAG_MIN_CONFIDENCE | No | GitHub variable / Railway env / `.env` | retag_music |
-| RETAG_MAX_CANDIDATES | No | GitHub variable / Railway env / `.env` | retag_music |
-| MAX_UPLOADS_PER_RUN | No | GitHub variable / Railway env / `.env` | retag_music |
-| PREFECT_API_KEY | Yes (flows) | GitHub secret / `.env` | flow scripts (Prefect login) |
-| PREFECT_API_URL | Yes (flows) | GitHub variable / `.env` | flow scripts (Prefect login) |
-| PREFECT_ACCOUNT_SLUG | Yes (workflows) | GitHub variable | workflows (Prefect login) |
-| PREFECT_WORKSPACE_SLUG | Yes (workflows) | GitHub variable | workflows (Prefect login) |
-| SERVE_RETRY_MAX_SECONDS | No | Railway env / library default | `main.py` (via `mini_app_polis.serve_resilience`) |
-| KAIANO_API_REPO_TOKEN | Yes (kaiano-api push) | GitHub secret | update_dj_set_collection, process_new_csv_files |
+No other flow needs them, and the Lambda runtime does not have them.

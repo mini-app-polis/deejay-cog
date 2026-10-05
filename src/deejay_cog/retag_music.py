@@ -1,20 +1,19 @@
 """
 retag_music — WORK IN PROGRESS, LOCAL ONLY
 
-Not served by main.py. Blocked on system dependencies (ffmpeg, fpcalc
-from libchromaprint-tools) which are not currently available in the
-Railway deploy environment. See module body docstring for details.
+Not run by the Lambda worker. Needs system binaries (ffmpeg, fpcalc
+from libchromaprint-tools) that the Lambda runtime does not have. See
+below for details.
 
 Run locally: uv run python -m deejay_cog.retag_music
 (requires ffmpeg and fpcalc binaries on PATH)
 
-Findings from this module are never posted to pipeline_evaluations.
-The failure hook fires and logs locally, but the production_only=False
-flag passed to the pipeline_eval helpers prevents any API call.
+Its run report is logged and never sent: it calls post_run_finding with
+production_only=False, which is a no-op whatever the environment.
 
 ---
 
-Prefect flow: retag-music
+Flow: retag-music
 
 Downloads audio files from a source Google Drive folder, identifies them via
 AcoustID → MusicBrainz, writes corrected tags, renames, then uploads to a
@@ -31,11 +30,10 @@ System dependencies (must be present in the runtime environment):
   fpcalc   – required by pyacoustid for audio fingerprinting
              (provided by the chromaprint / libchromaprint-tools package)
 
-  These are NOT standard Railway/Python deps and must be installed separately.
+  These are not Python packages and must be installed separately.
   On Ubuntu/Debian: sudo apt-get install -y ffmpeg libchromaprint-tools
-  When registering the retag-music deployment, confirm both binaries are
-  available in the Railway environment (e.g. via a custom Dockerfile or
-  nixpacks config). The other deejay-cog flows do not require these.
+  On macOS: brew install ffmpeg chromaprint
+  The other deejay-cog flows do not require these.
 """
 
 from __future__ import annotations

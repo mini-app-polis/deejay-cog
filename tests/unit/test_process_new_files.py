@@ -36,7 +36,7 @@ def test_main_posts_single_success_finding_when_llm_and_api_configured(
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     mock_post.assert_called_once()
     report = mock_post.call_args.args[0]
@@ -70,7 +70,7 @@ def test_main_skips_evaluate_without_anthropic(monkeypatch) -> None:
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     mock_post.assert_called_once()
 
@@ -100,7 +100,7 @@ def test_main_posts_single_warn_finding_when_sets_failed(monkeypatch) -> None:
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     mock_post.assert_called_once()
     report = mock_post.call_args.args[0]
@@ -695,7 +695,7 @@ def test_main_flow_continues_after_single_file_failure(monkeypatch) -> None:
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     # Both valid files were attempted — the failing one did not abort the loop
     assert call_count == 2
@@ -828,7 +828,7 @@ def test_flow_level_failure_after_import_is_not_counted_as_failed(monkeypatch):
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     stats = captured["stats"]
     assert stats.sets_imported == 1
@@ -863,7 +863,7 @@ def test_flow_level_failure_before_import_still_counts_as_failed(monkeypatch):
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     stats = captured["stats"]
     assert stats.sets_imported == 0
@@ -1017,7 +1017,7 @@ def test_a_failed_push_is_counted_not_logged_as_none(monkeypatch) -> None:
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     mock_post.assert_called_once()
     report = mock_post.call_args.args[0]

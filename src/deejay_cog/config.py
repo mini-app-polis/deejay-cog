@@ -12,14 +12,6 @@ DJ_SETS_FOLDER_ID = os.getenv("DJ_SETS_FOLDER_ID", "1A0tKQ2DBXI1Bt9h--olFwnBNne3
 VDJ_HISTORY_FOLDER_ID = os.getenv(
     "VDJ_HISTORY_FOLDER_ID", "1HGxEr5ocY9JLtXcJqDRIOD95rXU6QLUW"
 )
-LIVE_HISTORY_SPREADSHEET_ID = os.getenv(
-    "LIVE_HISTORY_SPREADSHEET_ID",
-    "1DpUCQWK3vGGdzUC5JmXVeojqsM_hp7U2DcSEGq6cF-U",
-)
-PRIVATE_HISTORY_SPREADSHEET_ID = os.getenv(
-    "PRIVATE_HISTORY_SPREADSHEET_ID",
-    "1z9ZtI5mscyR0sP4KzD2FJjLkSUhR9XBtt8U9PLpBj3M",
-)
 MUSIC_UPLOAD_SOURCE_FOLDER_ID = os.getenv(
     "MUSIC_UPLOAD_SOURCE_FOLDER_ID",
     "1Iu5TwzOXVqCDef2X8S5TZcFo1NdSHpRU",
@@ -44,15 +36,10 @@ DEEJAY_SET_COLLECTION_JSON_PATH = os.getenv(
 # Live history timezone (ingest_live_history)
 TIMEZONE = os.getenv("TIMEZONE", "America/Chicago")
 
-# Spotify (OAuth redirect; SpotifyAPI.from_env reads env / mini_app_polis.config)
-SPOTIPY_REDIRECT_URI = os.getenv(
-    "SPOTIPY_REDIRECT_URI",
-    "http://127.0.0.1:8888/callback",
-)
+# SPOTIPY_REDIRECT_URI and LOGGING_LEVEL are read by common-python-utils
+# (mini_app_polis.config, mini_app_polis.logger), not here.
 
-# Other
-SEP_CHARACTERS = "__"
-LOGGING_LEVEL = os.getenv("LOGGING_LEVEL", "DEBUG").upper()
+# Summary sheet columns (generate_summaries)
 ALLOWED_HEADERS = [
     "title",
     "artist",

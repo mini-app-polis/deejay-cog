@@ -1,28 +1,12 @@
 import contextlib
-import dataclasses
 import re
 from typing import Any
 
 from mini_app_polis import logger as logger_mod
-from mini_app_polis.api import KaianoApiError
 from mini_app_polis.api.contract import IngestSet, IngestTrack
-from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
-from pydantic import ValidationError
-
-from .api_client import api_client
 
 log = logger_mod.get_logger()
-
-
-@dataclasses.dataclass
-class IngestSummary:
-    """TODO: describe this class."""
-
-    sets_sent: int
-    sets_failed: int
-    total_tracks: int
-    failures: list[dict]  # {"label": str, "error": str}
 
 
 def _parse_length_secs(value: str | None) -> int | None:
@@ -180,68 +164,4 @@ def build_ingest_payload(
             "source_file": source_file,
             "tracks": build_ingest_tracks(tracks),
         }
-    )
-
-
-def ingest_new_sets_to_api(
-    g: GoogleAPI,
-    new_spreadsheet_ids: list[str],
-    set_metadata: list[dict],
-) -> IngestSummary:
-    """
-    For each newly processed set, read track data from Google Sheets
-    and send to deejay-marvel-api via POST /v1/ingest.
-
-    new_spreadsheet_ids: list of Google Sheets IDs for sets processed
-                         in this pipeline run
-    set_metadata: list of dicts with keys:
-                  spreadsheet_id, date (YYYY-MM-DD), venue, label
-    """
-    base_url = api_base_url().strip()
-    client = api_client(base_url=base_url)
-
-    meta_by_id = {m.get("spreadsheet_id"): m for m in set_metadata}
-
-    sets_sent = 0
-    sets_failed = 0
-    total_tracks = 0
-    failures: list[dict] = []
-
-    for ssid in new_spreadsheet_ids:
-        meta = meta_by_id.get(ssid) or {}
-        label = meta.get("label") or ssid
-        raw_tracks = read_tracks_from_sheet(g, ssid)
-        tracks = build_ingest_tracks(raw_tracks)
-        if not tracks:
-            log.warning(f"⚠️ Empty or unreadable sheet; skipping: {label}")
-            continue
-
-        total_tracks += len(tracks)
-        log.info(f"🚀 Sending to API: {label} ({len(tracks)} tracks)")
-
-        try:
-            # A set with no date or venue fails here rather than as a 422,
-            # and is counted the same way.
-            payload = IngestSet.model_validate(
-                {
-                    "set_date": meta.get("date") or None,
-                    "venue": meta.get("venue") or None,
-                    "source_file": label,
-                    "tracks": tracks,
-                }
-            )
-            client.ingest(payload)
-            sets_sent += 1
-            log.info(f"✅ Ingested: {label}")
-        except (KaianoApiError, ValidationError) as e:
-            sets_failed += 1
-            err = str(e)
-            log.info(f"❌ Failed to ingest: {label} — {err}")
-            failures.append({"label": label, "error": err})
-
-    return IngestSummary(
-        sets_sent=sets_sent,
-        sets_failed=sets_failed,
-        total_tracks=total_tracks,
-        failures=failures,
     )

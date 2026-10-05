@@ -52,26 +52,27 @@ Copy that token — you only need to do this once.
 
 ---
 
-## 4. Add secrets and variables to GitHub Actions
+## 4. Store the credentials
 
-In your GitHub repo settings, add the following:
+**Production.** Add these to Doppler; they sync to SSM Parameter Store, and
+the Lambda loads them at cold start (all optional — declared in
+`mini-app-polis/infra` `cogs.tf`):
 
-**Secrets** (Settings → Secrets and variables → Actions → Secrets):
-
-| Secret | Value |
-|--------|-------|
+| Name | Value |
+|------|-------|
 | `SPOTIPY_CLIENT_ID` | Your Spotify app client ID |
 | `SPOTIPY_CLIENT_SECRET` | Your Spotify app client secret |
 | `SPOTIPY_REFRESH_TOKEN` | The refresh token from step 3 |
-
-**Variables** (Settings → Secrets and variables → Actions → Variables):
-
-| Variable | Value |
-|----------|-------|
-| `SPOTIPY_REDIRECT_URI` | `http://127.0.0.1:8888/callback` |
 | `SPOTIFY_RADIO_PLAYLIST_ID` | Spotify playlist ID for the radio playlist |
 
-The full Spotify playlist catalog is pushed to deejay-marvel-api when **`KAIANO_API_BASE_URL`** is set (see `docs/CONFIGURATION.md`); no separate snapshot path is required.
+`SPOTIPY_REDIRECT_URI` is set on the function's environment in the same
+file (`http://127.0.0.1:8888/callback`).
+
+**Locally.** Put the same names in `.env`, or run under `doppler run`.
+
+The full playlist catalog is pushed to api-kaianolevine-com
+(`POST /v1/spotify/playlists`) whenever an API base URL resolves; see
+`docs/CONFIGURATION.md`.
 
 To find a playlist ID: open the playlist in Spotify, click the three-dot
 menu → Share → Copy link. The ID is the string after `/playlist/` and
@@ -81,12 +82,12 @@ before any `?`.
 
 ## 5. Verify
 
-Trigger the **Process New CSV Files** workflow manually via `workflow_dispatch`.
-Check the logs for:
+Run the CSV flow locally:
 
-```
-✅ Spotify API initialized
+```bash
+uv run python -u src/deejay_cog/process_new_files.py
 ```
 
-If you see credential errors, double-check that the secret names exactly
-match those listed above.
+The log should show the Spotify playlist sync completing, with no
+"Spotify credentials incomplete" warning. If you see credential errors,
+check that the names match those listed above exactly.

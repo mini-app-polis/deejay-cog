@@ -434,6 +434,8 @@ def test_spotify_gets_a_set_playlist_the_radio_tracks_and_a_snapshot(
     [snapshot] = api.bodies("/v1/spotify/playlists")
     assert {p["name"] for p in snapshot["playlists"]} == {"WCS Radio", SET_NAME}
     assert api.severities() == ["SUCCESS"]
+    # Ingest, counters and Spotify share one read of the new sheet.
+    assert len(google.sheets.reads) == 1
 
 
 def test_a_rejected_playlist_snapshot_warns_without_failing_the_run(

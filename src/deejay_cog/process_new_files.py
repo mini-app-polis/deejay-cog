@@ -29,9 +29,6 @@ from deejay_cog.spotify_sync import (
 
 log = logger_mod.get_logger()
 
-os.environ.setdefault("CSV_SOURCE_FOLDER_ID", "1t4d_8lMC3ZJfSyainbpwInoDta7n69hC")
-os.environ.setdefault("DJ_SETS_FOLDER_ID", "1A0tKQ2DBXI1Bt9h--olFwnBNne3am-rL")
-
 
 @dataclass
 class CsvPipelineStats:
@@ -447,6 +444,7 @@ def _ingest_set_to_api(
     label: str,
     g: GoogleAPI,
     stats: CsvPipelineStats | None = None,
+    tracks: list[dict] | None = None,
 ) -> IngestOutcome:
     """Send one newly uploaded set to api-kaianolevine-com.
 
@@ -455,6 +453,9 @@ def _ingest_set_to_api(
     was nothing to send (no tracks); ``"failed"`` when the set should have
     reached the API and did not — including no base URL or no client,
     which send nothing just as surely as a 5xx does.
+
+    ``tracks`` are the sheet's rows when the caller has already read them;
+    otherwise they are read here.
     """
     logger = get_prefect_logger()
 
@@ -488,7 +489,8 @@ def _ingest_set_to_api(
     # like a rejected POST.
     attempted = False
     try:
-        tracks = read_tracks_from_sheet(g, spreadsheet_id)
+        if tracks is None:
+            tracks = read_tracks_from_sheet(g, spreadsheet_id)
         payload = build_ingest_payload(
             set_date=set_date,
             venue=venue,
@@ -532,6 +534,7 @@ def _sync_set_to_spotify(
     label: str,
     g: GoogleAPI,
     stats: CsvPipelineStats | None = None,
+    tracks: list[dict] | None = None,
 ) -> None:
     logger = get_prefect_logger()
 
@@ -549,9 +552,8 @@ def _sync_set_to_spotify(
         sp = get_spotify_client()
         if sp is None:
             # Credentials are present, so this is a client that would not
-            # build. This used to return with no log line at all: the only
-            # message came from get_spotify_client's module logger, which
-            # does not reach the Prefect run logger.
+            # build, and it says so here rather than only in
+            # get_spotify_client's own log line.
             logger.error(
                 "❌ Spotify client could not be initialized — "
                 "skipping Spotify sync for %s",
@@ -561,7 +563,8 @@ def _sync_set_to_spotify(
                 stats.spotify_failed += 1
             return
 
-        tracks = read_tracks_from_sheet(g, sheet_id)
+        if tracks is None:
+            tracks = read_tracks_from_sheet(g, sheet_id)
         outcome = sync_set_to_spotify(sp, set_name, tracks)
         if not outcome.ok:
             logger.error(
@@ -695,6 +698,19 @@ def process_csv_file(
         # API has the set: archived first, a rejected POST left the set in
         # Sheets and nowhere else, with nothing that would ever retry it.
         try:
+            # Read once: the ingest, the run's counters and the Spotify sync
+            # all work from these rows. None leaves each to read its own.
+            tracks: list[dict] | None
+            try:
+                tracks = read_tracks_from_sheet(g, sheet_id)
+            except Exception as track_exc:
+                logger.warning(
+                    "Could not read tracks from new sheet %s: %s", sheet_id, track_exc
+                )
+                if stats is not None:
+                    stats.track_read_failed += 1
+                tracks = None
+
             set_date, venue = _extract_date_and_venue(base_name)
             if set_date and venue:
                 outcome = _ingest_set_to_api(
@@ -704,6 +720,7 @@ def process_csv_file(
                     label=base_name,
                     g=g,
                     stats=stats,
+                    tracks=tracks,
                 )
             else:
                 logger.warning(
@@ -727,14 +744,7 @@ def process_csv_file(
 
         if stats is not None:
             stats.sets_imported += 1
-            try:
-                tracks = read_tracks_from_sheet(g, sheet_id)
-                stats.total_tracks += len(tracks or [])
-            except Exception as track_exc:
-                logger.warning(
-                    "Could not read tracks from new sheet for stats: %s", track_exc
-                )
-                stats.track_read_failed += 1
+            stats.total_tracks += len(tracks or [])
 
         # The set is in the API now; a failed move costs a duplicate flag
         # on the next run, not the set.
@@ -770,6 +780,7 @@ def process_csv_file(
                     label=base_name,
                     g=g,
                     stats=stats,
+                    tracks=tracks,
                 )
             except Exception as post_exc:
                 logger.error(
@@ -955,10 +966,6 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
             report.issue(reason, note if index == 0 else None)
 
     report.send(notable=saw_input)
-
-
-# Backwards-compatible alias for tests and callers that import main
-main = process_new_csv_files_flow
 
 
 if __name__ == "__main__":

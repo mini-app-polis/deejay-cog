@@ -1,6 +1,6 @@
 # deejay-cog
 
-Processes DJ set CSV files from Google Drive into Google Sheets (organized by year), can build a master collection spreadsheet and JSON snapshot, generates per-year summary sheets for local validation, and integrates with **api-kaianolevine-com** for ingest and evaluations.
+Processes DJ set CSV files from Google Drive into Google Sheets (organized by year), can build a master collection spreadsheet and JSON snapshot, generates per-year summary sheets for local validation, and sends sets, live plays and run reports to **api-kaianolevine-com**.
 
 ---
 
@@ -49,7 +49,7 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 - **Google Sheets in year folders** — Each processed CSV becomes a Sheet under `DJ_SETS_FOLDER_ID`; originals go to each year’s `Archive` folder.
 - **Master collection** (local flow) — `update_deejay_set_collection.py` can rebuild the master spreadsheet and JSON snapshot (`DEEJAY_SET_COLLECTION_JSON_PATH`).
 - **Summary sheets** (local flow) — `generate_summaries.py` builds “{Year} Summary” sheets using `deduplicate_summary.py`.
-- **API** — When configured, CSV ingest and live plays POST to **api-kaianolevine-com**; pipeline evaluations use the same base URL plus Anthropic for gated production posts.
+- **API** — Sets go to `POST /v1/ingest`, live plays to `POST /v1/live-plays`, the Spotify playlist catalog to `POST /v1/spotify/playlists`, and one run report per production run to `POST /v1/notify`.
 
 ---
 
@@ -82,9 +82,8 @@ API (production — on Lambda, secrets are loaded from SSM Parameter Store at co
 
 | Variable | Description |
 |----------|-------------|
-| **ANTHROPIC_API_KEY** | With **`KAIANO_API_BASE_URL`**, enables **production** `post_run_finding` posts to pipeline evaluations. |
-| **KAIANO_API_BASE_URL** | api-kaianolevine-com base URL; required for API ingest and for gated evaluation posts. |
-| **DEEJAY_COG_API_KEY** | This cog's own named key, used by the API client to authenticate to api-kaianolevine-com. No fallback — unset means 401. |
+| **KAIANO_API_BASE_URL** | api-kaianolevine-com base URL, read in production. Every other environment reads **`KAIANO_API_BASE_URL_DEV`**, with no fallback. Unset, nothing is ingested and run reports are not sent. |
+| **DEEJAY_COG_API_KEY** | This cog's own named key, used by the API client to authenticate to api-kaianolevine-com. The shared client falls back to the generic `KAIANO_API_KEY` when it is unset; with neither, every call fails. |
 
 Spotify variables (`SPOTIPY_*`, `SPOTIFY_RADIO_PLAYLIST_ID`) are optional; if incomplete, Spotify steps are skipped.
 
@@ -109,7 +108,7 @@ uv run python -u src/deejay_cog/process_new_files.py
 uv run python -u src/deejay_cog/ingest_live_history.py
 ```
 
-**Local-only / WIP flows** — run modules directly. These call `post_run_finding(..., production_only=False)` and **do not** write to the production `pipeline_evaluations` API, **even if** `KAIANO_API_BASE_URL` and `ANTHROPIC_API_KEY` are set in your shell:
+**Local-only / WIP flows** — run modules directly. These call `post_run_finding(..., production_only=False)`, so their run reports are logged and never sent, whatever is set in your shell:
 
 ```bash
 uv run python -m deejay_cog.generate_summaries
@@ -132,6 +131,10 @@ uv run python -u src/deejay_cog/deduplicate_summary.py <spreadsheet_id> [spreads
 ---
 
 ## Running tests
+
+`tests/unit/` holds the unit tests; `tests/integration/` runs the Lambda
+handler end to end on SQS events, with the API stubbed by respx and Drive,
+Sheets and Spotify by in-memory fakes. One `uv run pytest` runs both.
 
 ```bash
 uv sync --all-extras
@@ -169,7 +172,6 @@ Hooks match CI (ruff and related checks).
 ## Dependencies
 
 - **common-python-utils** — shared Google helpers and config ([GitHub](https://github.com/mini-app-polis/common-python-utils)).
-- **evaluator-cog** — pipeline evaluation client (used from `deejay_cog._pipeline_eval` for production posts).
 
 ---
 

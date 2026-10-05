@@ -51,6 +51,7 @@ class FakeSheets:
     def __init__(self) -> None:
         self.values: dict[str, list[list[str]]] = {}
         self.formatted: list[str] = []
+        self.reads: list[str] = []
         self.formatter = SimpleNamespace(apply_formatting_to_sheet=self._format)
 
     def _format(self, spreadsheet_id: str) -> None:
@@ -62,6 +63,7 @@ class FakeSheets:
         return {"sheets": [{"properties": {"title": "Sheet1"}}]}
 
     def read_values(self, spreadsheet_id: str, a1_range: str) -> list[list[str]]:  # noqa: ARG002
+        self.reads.append(spreadsheet_id)
         return [list(row) for row in self.values.get(spreadsheet_id, [])]
 
 
