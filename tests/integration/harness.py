@@ -275,9 +275,13 @@ class FakeApi:
     auth: list[str] = field(default_factory=list)
     hosts: list[str] = field(default_factory=list)
     _faults: dict[str, list[int]] = field(default_factory=dict)
+    _delays: dict[str, float] = field(default_factory=dict)
 
     def fail(self, path: str, status: int, *, times: int = 1) -> None:
         self._faults.setdefault(path, []).extend([status] * times)
+
+    def slow(self, path: str, seconds: float) -> None:
+        self._delays[path] = seconds
 
     def bodies(self, path: str) -> list[dict]:
         return self.calls.get(path, [])
@@ -295,6 +299,9 @@ class FakeApi:
             self.calls.setdefault(path, []).append(body)
             self.auth.append(request.headers.get("Authorization", ""))
             self.hosts.append(request.url.host)
+            delay = self._delays.get(path)
+            if delay:
+                time.sleep(delay)
             pending = self._faults.get(path)
             if pending:
                 status = pending.pop(0)

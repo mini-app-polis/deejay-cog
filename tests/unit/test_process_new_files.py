@@ -767,19 +767,19 @@ def test_archive_move_failure_is_a_warn():
 
 
 def test_post_import_failure_does_not_mark_the_set_failed():
-    """An imported, archived set must not be renamed FAILED_."""
+    """An ingested, archived set must not be renamed FAILED_ by Spotify."""
     g = _drive_for_post_upload()
     file_meta = {"id": "file-1", "name": "2024-01-03 Venue.csv"}
     stats = process_new_files.CsvPipelineStats()
 
     with (
         patch.object(process_new_files, "read_tracks_from_sheet", return_value=[]),
+        patch.object(process_new_files, "_ingest_set_to_api", return_value="sent"),
         patch.object(
             process_new_files,
-            "_ingest_set_to_api",
-            side_effect=RuntimeError("prefect timeout"),
+            "_sync_set_to_spotify",
+            side_effect=RuntimeError("spotify blew up"),
         ),
-        patch.object(process_new_files, "_sync_set_to_spotify") as mock_sync,
     ):
         result = process_new_files.process_csv_file(g, file_meta, "2024", stats)
 
@@ -788,7 +788,6 @@ def test_post_import_failure_does_not_mark_the_set_failed():
     assert stats.sets_failed == 0
     assert stats.failed_set_labels == []
     assert stats.post_import_failed == 1
-    mock_sync.assert_not_called()
     for call in g.drive.rename_file.call_args_list:
         assert not str(call.args[1]).startswith("FAILED_")
 

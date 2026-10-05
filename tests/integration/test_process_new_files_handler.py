@@ -242,27 +242,75 @@ def test_a_failed_csv_is_retried_by_the_next_run(
     assert api.severities() == ["WARN", "SUCCESS"]
 
 
-def test_an_api_rejection_leaves_the_set_imported_but_never_ingested(
+def test_an_api_rejection_rolls_the_set_back_for_the_next_run(
     google: FakeGoogle, api: FakeApi, handler
 ) -> None:
-    """The set is archived before the POST, so nothing retries it.
+    """Ingest before archive: a set the API refused stays in the drop zone.
 
-    Documents current behaviour, and the gap in it: the WARN is the only
-    trace. The message is not redelivered (the flow returned), and a
-    redelivery would not help — the CSV is no longer in the drop zone.
+    The sheet uploaded for it is removed and the CSV renamed FAILED_, so
+    the next run — which strips the prefix — imports it from scratch.
     """
     drive = google.drive
     drive.add_file(SOURCE_FOLDER, f"{SET_NAME}.csv", SET_CSV)
     api.fail("/v1/ingest", 503)
 
     first = handler(_event("msg-1"))
-    second = handler(_event("msg-1", receive_count=2))
 
-    assert first == second == {"batchItemFailures": []}
-    assert drive.names_in(drive.path("2025", "Archive")) == [f"{SET_NAME}.csv"]
-    assert len(api.bodies("/v1/ingest")) == 1  # the rejected attempt, only
+    assert first == {"batchItemFailures": []}
+    assert drive.names_in(SOURCE_FOLDER) == [f"FAILED_{SET_NAME}.csv"]
+    assert drive.sheets_in(drive.path("2025")) == []
+    assert drive.path("2025", "Archive") is None
     assert api.severities() == ["WARN"]
-    assert "ingest_failed=1" in api.reports()[0]["description"]
+    description = api.reports()[0]["description"]
+    assert "ingest_failed=1" in description
+    assert "sets_failed=1" in description
+
+    handler(_event("msg-2"))
+
+    assert len(api.bodies("/v1/ingest")) == 2  # refused, then accepted
+    assert drive.names_in(SOURCE_FOLDER) == []
+    assert len(drive.sheets_in(drive.path("2025"))) == 1
+    assert drive.names_in(drive.path("2025", "Archive")) == [f"{SET_NAME}.csv"]
+    assert api.severities() == ["WARN", "SUCCESS"]
+
+
+def test_a_rollback_that_cannot_delete_the_sheet_says_so(
+    google: FakeGoogle, api: FakeApi, handler
+) -> None:
+    drive = google.drive
+    drive.add_file(SOURCE_FOLDER, f"{SET_NAME}.csv", SET_CSV)
+    api.fail("/v1/ingest", 503)
+    drive.fail("delete_file", RuntimeError("403 insufficientPermissions"))
+
+    handler(_event())
+
+    assert drive.names_in(SOURCE_FOLDER) == [f"FAILED_{SET_NAME}.csv"]
+    assert len(drive.sheets_in(drive.path("2025"))) == 1
+    assert api.severities() == ["WARN"]
+    assert "rollback_failed" in api.reports()[0]["description"]
+
+
+def test_a_run_stopped_mid_ingest_leaves_the_csv_for_the_redelivery(
+    google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from deejay_cog import _deadline
+
+    monkeypatch.setattr(_deadline, "DEADLINE_MARGIN_SECONDS", 0)
+    drive = google.drive
+    drive.add_file(SOURCE_FOLDER, f"{SET_NAME}.csv", SET_CSV)
+    api.slow("/v1/ingest", 1.0)
+
+    result = handler(_event("msg-late"), LambdaContext(remaining_ms=300))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
+    assert drive.names_in(SOURCE_FOLDER) == [f"{SET_NAME}.csv"]
+    assert drive.sheets_in(drive.path("2025")) == []
+    assert api.severities() == ["ERROR"]
+
+    # The redelivery, with time to spare, imports it.
+    api.slow("/v1/ingest", 0)
+    handler(_event("msg-late", receive_count=2))
+    assert drive.names_in(drive.path("2025", "Archive")) == [f"{SET_NAME}.csv"]
 
 
 def test_an_archive_failure_still_ingests_and_the_next_run_does_not_double_ingest(

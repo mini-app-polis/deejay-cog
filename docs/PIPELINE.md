@@ -76,8 +76,9 @@ View runs: [app.prefect.cloud](https://app.prefect.cloud)
 
 ## Error handling behavior
 
-- **FAILED_ prefix** — Failed CSV processing renames the source file to `FAILED_<original_name>` for inspection and retry.
+- **FAILED_ prefix** — Failed CSV processing renames the source file to `FAILED_<original_name>`. The next run strips the prefix and retries it.
+- **Ingest before archive** — A CSV is archived only once the API has its set. If the ingest fails (API error, no base URL, no client), the sheet uploaded for it is deleted and the CSV is renamed `FAILED_`, so the next run imports it from scratch.
 - **possible_duplicate_ prefix** — When a basename collision occurs in the year folder, the new file is renamed with this prefix.
 - **Summary generation** — Skips years that still contain `FAILED_` or `_Cleaned` set files until cleaned up.
-- **Archive subfolder** — After a successful Sheet upload, the original CSV is moved under that year’s `Archive` folder.
+- **Archive subfolder** — After a successful Sheet upload and API ingest, the original CSV is moved under that year’s `Archive` folder.
 - **Spotify sync** — Runs only when **SPOTIPY_CLIENT_ID**, **SPOTIPY_CLIENT_SECRET**, and **SPOTIPY_REFRESH_TOKEN** are all set; otherwise it is skipped (not a hard error for the rest of the CSV pipeline).
