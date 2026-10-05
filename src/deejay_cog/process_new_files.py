@@ -91,6 +91,11 @@ class CsvPipelineStats:
 
     @property
     def repair_failed(self) -> int:
+        """How many repair jobs failed this run: one per entry in repair_failures.
+
+        A property rather than a counter field so the count and the named
+        list it is reported from cannot disagree.
+        """
         return len(self.repair_failures)
 
 
