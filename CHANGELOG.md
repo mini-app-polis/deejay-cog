@@ -1,3 +1,14 @@
+## [2.3.7](https://github.com/mini-app-polis/deejay-cog/compare/v2.3.6...v2.3.7) (2026-10-05)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils ([d93b005](https://github.com/mini-app-polis/deejay-cog/commit/d93b005f6daf63c35331b8001d1e37bce13d7533))
+* keep Drive file names out of download paths ([4ea98bb](https://github.com/mini-app-polis/deejay-cog/commit/4ea98bbf602ec1009b29de3816e2dce1c21903fe))
+* **live-history:** retry the run when the history folder cannot be listed ([52ddb60](https://github.com/mini-app-polis/deejay-cog/commit/52ddb608d5dea650db85ed6601bbfe6f2e3268ef))
+* **pipeline:** ingest each set before archiving its CSV ([e700bbb](https://github.com/mini-app-polis/deejay-cog/commit/e700bbb103196c9cacc09c2e63c46cd137eb7a83))
+* stop runs at the Lambda deadline instead of swallowing it, resolve the API base URL per environment ([d381731](https://github.com/mini-app-polis/deejay-cog/commit/d381731c7a7533675878a511c84b01ea39c0bd3c))
+
 ## [2.3.6](https://github.com/mini-app-polis/deejay-cog/compare/v2.3.5...v2.3.6) (2026-10-01)
 
 
