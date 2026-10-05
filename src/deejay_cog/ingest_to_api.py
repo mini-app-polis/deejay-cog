@@ -1,12 +1,12 @@
 import contextlib
 import dataclasses
-import os
 import re
 from typing import Any
 
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.api import KaianoApiError
 from mini_app_polis.api.contract import IngestSet, IngestTrack
+from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 from pydantic import ValidationError
 
@@ -197,7 +197,7 @@ def ingest_new_sets_to_api(
     set_metadata: list of dicts with keys:
                   spreadsheet_id, date (YYYY-MM-DD), venue, label
     """
-    base_url = os.getenv("KAIANO_API_BASE_URL", "").strip()
+    base_url = api_base_url().strip()
     client = api_client(base_url=base_url)
 
     meta_by_id = {m.get("spreadsheet_id"): m for m in set_metadata}

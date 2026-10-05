@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from time import monotonic
 
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.environment import api_base_url, env_var_name
 from mini_app_polis.google import GoogleAPI
 
 import deejay_cog.config as config
@@ -436,13 +437,16 @@ def _ingest_set_to_api(
     Skips gracefully if KAIANO_API_BASE_URL is not set.
     Logs success or failure but never raises — pipeline must continue.
     """
-    import os as _os
-
     logger = get_prefect_logger()
 
-    if not _os.environ.get("KAIANO_API_BASE_URL"):
+    # The same variable the client below will read: _DEV outside
+    # production. Gating on the unsuffixed name skipped every ingest in a
+    # correctly configured development run.
+    if not api_base_url():
         logger.warning(
-            "KAIANO_API_BASE_URL not set — skipping API ingest for %s", label
+            "%s not set — skipping API ingest for %s",
+            env_var_name("KAIANO_API_BASE_URL"),
+            label,
         )
         if stats is not None:
             stats.ingest_skipped_env_missing += 1

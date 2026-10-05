@@ -138,19 +138,11 @@ def test_an_unreadable_history_file_warns(
     assert api.severities() == ["WARN"]
 
 
-# ── known defects (strict: these turn red when fixed — then drop the mark) ─
+# ── regressions: the deadline and the per-environment API URL ───────────
 
 DEV_BASE = "https://dev.api.deejay.test"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "ingest_live_history gates on, and passes, the unsuffixed "
-        "KAIANO_API_BASE_URL, so a non-production run posts live plays to "
-        "the production API while its run report goes to dev."
-    ),
-)
 def test_a_development_run_sends_plays_to_the_development_api(
     google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
 ) -> None:

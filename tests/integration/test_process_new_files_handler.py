@@ -405,17 +405,9 @@ def test_a_rejected_playlist_snapshot_warns_without_failing_the_run(
     assert "spotify_failed" in api.reports()[0]["description"]
 
 
-# ── known defects (strict: these turn red when fixed — then drop the mark) ─
+# ── regressions: the deadline and the per-environment API URL ───────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "RunOutOfTime subclasses Exception, so process_csv_file's handler "
-        "catches it: the file is renamed FAILED_, the sweep carries on past "
-        "the deadline, and the handler reports success."
-    ),
-)
 def test_a_run_that_reaches_the_deadline_is_returned_to_the_queue(
     google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -433,14 +425,6 @@ def test_a_run_that_reaches_the_deadline_is_returned_to_the_queue(
     assert api.severities() == ["ERROR"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "_ingest_set_to_api gates on the unsuffixed KAIANO_API_BASE_URL while "
-        "the client it builds reads KAIANO_API_BASE_URL_DEV outside "
-        "production, so a correctly configured dev run never ingests."
-    ),
-)
 def test_a_development_run_ingests_to_the_development_api(
     google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
 ) -> None:
