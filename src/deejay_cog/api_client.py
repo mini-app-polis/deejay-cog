@@ -17,10 +17,14 @@ it.
 
 The shared client derives DEEJAY_COG_API_KEY from MACHINE_NAME, and the API
 derives the same variable from the same name — one convention, no mapping to
-keep in step. There is no fallback. The shared Clerk machine secret this replaced is gone:
-every cog holding one credential indistinguishable from every other cog's was
-the reason the API could tell that *a* cog called and never which one, so
-keeping it available would have kept that ambiguity available.
+keep in step. The shared Clerk machine secret this replaced is gone: every cog
+holding one credential indistinguishable from every other cog's was the reason
+the API could tell that *a* cog called and never which one.
+
+The shared client does fall back to the generic ``KAIANO_API_KEY`` when
+DEEJAY_COG_API_KEY is unset. Production sets this cog's own key (SSM,
+required), so that fallback is a local convenience, not a path the deployed
+worker takes.
 """
 
 from __future__ import annotations

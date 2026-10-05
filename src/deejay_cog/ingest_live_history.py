@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
-import os
 from time import monotonic
 from typing import Any
 
@@ -10,6 +9,7 @@ import pytz
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.api import KaianoApiError
 from mini_app_polis.api.contract import LivePlayIngest, LivePlaysIngest
+from mini_app_polis.environment import api_base_url, env_var_name
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.vdj.m3u import M3UToolbox
 
@@ -134,17 +134,26 @@ def ingest_live_history(*, run_id: str | None = None) -> LiveIngestSummary:
     processed_file = ""
     logger = get_prefect_logger()
     g = GoogleAPI.from_env()
-    base_url = os.getenv("KAIANO_API_BASE_URL", "").strip()
+    # Resolved the way the API client resolves it: KAIANO_API_BASE_URL in
+    # production, KAIANO_API_BASE_URL_DEV everywhere else. Reading the
+    # unsuffixed name here sent a development run's plays to production.
+    base_url = api_base_url().strip()
     m3u_files: list[dict[str, Any]] = []
 
     if not base_url:
-        logger.warning("KAIANO_API_BASE_URL not set — skipping live history ingest")
+        logger.warning(
+            "%s not set — skipping live history ingest",
+            env_var_name("KAIANO_API_BASE_URL"),
+        )
         summary = LiveIngestSummary(
             plays_sent=0, plays_failed=0, files_processed=0, files_failed=0
         )
     else:
         client = api_client(base_url=base_url)
-        m3u_files = list(g.drive.get_all_m3u_files() or [])
+        # Raises when Drive cannot be listed (common-python-utils >= 5.19),
+        # so an outage fails the run and the message is redelivered rather
+        # than passing for an empty history folder and an idle tick.
+        m3u_files = g.drive.get_all_m3u_files(config.VDJ_HISTORY_FOLDER_ID)
         if not m3u_files:
             logger.info("No .m3u files found. Nothing to ingest.")
             summary = LiveIngestSummary(

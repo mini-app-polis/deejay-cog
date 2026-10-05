@@ -36,7 +36,7 @@ def test_main_posts_single_success_finding_when_llm_and_api_configured(
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     mock_post.assert_called_once()
     report = mock_post.call_args.args[0]
@@ -70,7 +70,7 @@ def test_main_skips_evaluate_without_anthropic(monkeypatch) -> None:
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     mock_post.assert_called_once()
 
@@ -100,7 +100,7 @@ def test_main_posts_single_warn_finding_when_sets_failed(monkeypatch) -> None:
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     mock_post.assert_called_once()
     report = mock_post.call_args.args[0]
@@ -197,7 +197,8 @@ def _fake_drive_for_failure(tmp_path):
     return SimpleNamespace(drive=drive, sheets=sheets)
 
 
-def test_temp_file_is_removed_in_all_cases(tmp_path):
+def test_temp_file_is_removed_in_all_cases(tmp_path, monkeypatch):
+    monkeypatch.setattr(process_new_files.tempfile, "tempdir", str(tmp_path))
     g = _fake_drive_for_failure(tmp_path)
     file_meta = {"id": "file-temp", "name": "2024-01-03_WithTemp.csv"}
 
@@ -205,8 +206,27 @@ def test_temp_file_is_removed_in_all_cases(tmp_path):
 
     process_new_files.process_csv_file(g, file_meta, "2024")
 
-    temp_path = os.path.join("/tmp", file_meta["name"])
-    assert not os.path.exists(temp_path)
+    g.drive.download_file.assert_called_once()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_download_path_does_not_come_from_the_drive_name(tmp_path, monkeypatch):
+    """A "/" or ".." in a Drive file name must not reach the filesystem."""
+    monkeypatch.setattr(process_new_files.tempfile, "tempdir", str(tmp_path))
+    g = _fake_drive_for_failure(tmp_path)
+    file_meta = {"id": "file-temp", "name": "2024-01-03 ../../AC/DC Night.csv"}
+    g.drive.list_files = MagicMock(return_value=[])  # not a duplicate
+    g.drive.upload_csv_as_google_sheet.side_effect = RuntimeError("stop here")
+
+    process_new_files.process_csv_file(g, file_meta, "2024")
+
+    dest = g.drive.download_file.call_args.args[1]
+    assert os.path.dirname(os.path.dirname(dest)) == str(tmp_path)
+    assert os.path.basename(dest) == "set.csv"
+    assert (
+        g.drive.upload_csv_as_google_sheet.call_args.kwargs["dest_name"]
+        == (file_meta["name"])
+    )
 
 
 def test_file_already_in_folder_returns_true_when_parent_matches():
@@ -312,14 +332,20 @@ def test_ingest_set_to_api_posts_payload(monkeypatch):
         def from_env(cls):
             return client
 
-    sys.modules["mini_app_polis.api"] = SimpleNamespace(KaianoApiClient=FakeClient)
+    monkeypatch.setitem(
+        sys.modules, "mini_app_polis.api", SimpleNamespace(KaianoApiClient=FakeClient)
+    )
     # The cog builds its client through deejay_cog.api_client so every call
     # site presents the same machine identity; that is what to intercept.
-    sys.modules["deejay_cog.api_client"] = SimpleNamespace(
-        api_client=lambda *_a, **_k: client
+    monkeypatch.setitem(
+        sys.modules,
+        "deejay_cog.api_client",
+        SimpleNamespace(api_client=lambda *_a, **_k: client),
     )
-    sys.modules["mini_app_polis.api.errors"] = SimpleNamespace(
-        KaianoApiError=FakeApiError
+    monkeypatch.setitem(
+        sys.modules,
+        "mini_app_polis.api.errors",
+        SimpleNamespace(KaianoApiError=FakeApiError),
     )
 
     g = SimpleNamespace()
@@ -372,14 +398,20 @@ def test_ingest_set_to_api_logs_error_on_api_error(monkeypatch):
         def ingest(self, *_args, **_kwargs):
             raise FakeApiError("nope")
 
-    sys.modules["mini_app_polis.api"] = SimpleNamespace(KaianoApiClient=FakeClient)
+    monkeypatch.setitem(
+        sys.modules, "mini_app_polis.api", SimpleNamespace(KaianoApiClient=FakeClient)
+    )
     # The cog builds its client through deejay_cog.api_client so every call
     # site presents the same machine identity; that is what to intercept.
-    sys.modules["deejay_cog.api_client"] = SimpleNamespace(
-        api_client=lambda *_a, **_k: FakeClient()
+    monkeypatch.setitem(
+        sys.modules,
+        "deejay_cog.api_client",
+        SimpleNamespace(api_client=lambda *_a, **_k: FakeClient()),
     )
-    sys.modules["mini_app_polis.api.errors"] = SimpleNamespace(
-        KaianoApiError=FakeApiError
+    monkeypatch.setitem(
+        sys.modules,
+        "mini_app_polis.api.errors",
+        SimpleNamespace(KaianoApiError=FakeApiError),
     )
 
     g = SimpleNamespace()
@@ -489,11 +521,15 @@ def test_failure_before_the_post_is_counted(monkeypatch):
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.test")
     stats = process_new_files.CsvPipelineStats()
 
-    sys.modules["deejay_cog.api_client"] = SimpleNamespace(
-        api_client=lambda *_a, **_k: SimpleNamespace(post=MagicMock())
+    monkeypatch.setitem(
+        sys.modules,
+        "deejay_cog.api_client",
+        SimpleNamespace(api_client=lambda *_a, **_k: SimpleNamespace(post=MagicMock())),
     )
-    sys.modules["mini_app_polis.api.errors"] = SimpleNamespace(
-        KaianoApiError=type("FakeApiError", (Exception,), {})
+    monkeypatch.setitem(
+        sys.modules,
+        "mini_app_polis.api.errors",
+        SimpleNamespace(KaianoApiError=type("FakeApiError", (Exception,), {})),
     )
 
     with patch.object(
@@ -620,8 +656,6 @@ def test_process_csv_file_skips_when_duplicate_exists_in_year_folder():
     assert stats.duplicate_csv == 1
     assert stats.sets_imported == 0
 
-    assert not os.path.exists(os.path.join("/tmp", filename))
-
 
 # -- process_non_csv_file ------------------------------------------------------
 
@@ -679,7 +713,7 @@ def test_main_flow_continues_after_single_file_failure(monkeypatch) -> None:
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     # Both valid files were attempted — the failing one did not abort the loop
     assert call_count == 2
@@ -751,19 +785,19 @@ def test_archive_move_failure_is_a_warn():
 
 
 def test_post_import_failure_does_not_mark_the_set_failed():
-    """An imported, archived set must not be renamed FAILED_."""
+    """An ingested, archived set must not be renamed FAILED_ by Spotify."""
     g = _drive_for_post_upload()
     file_meta = {"id": "file-1", "name": "2024-01-03 Venue.csv"}
     stats = process_new_files.CsvPipelineStats()
 
     with (
         patch.object(process_new_files, "read_tracks_from_sheet", return_value=[]),
+        patch.object(process_new_files, "_ingest_set_to_api", return_value="sent"),
         patch.object(
             process_new_files,
-            "_ingest_set_to_api",
-            side_effect=RuntimeError("prefect timeout"),
+            "_sync_set_to_spotify",
+            side_effect=RuntimeError("spotify blew up"),
         ),
-        patch.object(process_new_files, "_sync_set_to_spotify") as mock_sync,
     ):
         result = process_new_files.process_csv_file(g, file_meta, "2024", stats)
 
@@ -772,7 +806,6 @@ def test_post_import_failure_does_not_mark_the_set_failed():
     assert stats.sets_failed == 0
     assert stats.failed_set_labels == []
     assert stats.post_import_failed == 1
-    mock_sync.assert_not_called()
     for call in g.drive.rename_file.call_args_list:
         assert not str(call.args[1]).startswith("FAILED_")
 
@@ -813,7 +846,7 @@ def test_flow_level_failure_after_import_is_not_counted_as_failed(monkeypatch):
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     stats = captured["stats"]
     assert stats.sets_imported == 1
@@ -848,7 +881,7 @@ def test_flow_level_failure_before_import_still_counts_as_failed(monkeypatch):
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     stats = captured["stats"]
     assert stats.sets_imported == 0
@@ -1002,7 +1035,7 @@ def test_a_failed_push_is_counted_not_logged_as_none(monkeypatch) -> None:
         patch.object(process_new_files, "config") as mock_cfg,
     ):
         mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
-        process_new_files.main()
+        process_new_files.process_new_csv_files_flow()
 
     mock_post.assert_called_once()
     report = mock_post.call_args.args[0]

@@ -1,15 +1,14 @@
 """
 generate_summaries — LOCAL ONLY
 
-Not served by main.py in production. Retained for ad-hoc local runs
+Not run by the Lambda worker. Retained for ad-hoc local runs
 during the PostgreSQL-as-source-of-truth transition. Will be retired
 when that cutover completes.
 
 Run locally: uv run python -m deejay_cog.generate_summaries
 
-Findings from this module are never posted to pipeline_evaluations.
-The failure hook fires and logs locally, but the production_only=False
-flag passed to the pipeline_eval helpers prevents any API call.
+Its run report is logged and never sent: it calls post_run_finding with
+production_only=False, which is a no-op whatever the environment.
 """
 
 from mini_app_polis import logger as logger_mod

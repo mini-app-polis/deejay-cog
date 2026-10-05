@@ -1,20 +1,18 @@
 """Deejay-cog wrappers around :mod:`mini_app_polis.pipeline_status`.
 
-This module is a thin shim: every cog in the Kaiano ecosystem self-reports
-the outcome of its runs the same way, and the actual machinery
-(``post_run_finding``, ``make_failure_hook``, ``get_run_id``,
-``get_prefect_logger``) lives in **common-python-utils** so it stays in
-sync across cogs.
+This module is a thin shim: every cog in the fleet reports the outcome of
+its runs the same way, and the machinery (``post_run_finding``,
+``RunReport``, ``get_prefect_logger``) lives in **common-python-utils** so it
+stays in sync across cogs. A report is a message to ``POST /v1/notify``;
+nothing is persisted.
 
-The shim provides two conveniences for deejay-cog callers:
+The shim provides three conveniences for deejay-cog callers:
 
-1. Pre-binds ``repo="deejay-cog"`` on ``post_run_finding`` and
-   ``make_failure_hook`` so call sites don't have to repeat it.
+1. Pre-binds ``repo="deejay-cog"`` on ``post_run_finding`` so call sites
+   don't have to repeat it.
 2. Filters out counters in ``_DEEJAY_ABSORBED_KWARGS`` before they reach
-   the library, so the finding text only surfaces the counters
-   deejay-cog actually wants in the human-readable suffix. Other cogs
-   are free to pass any counters they like — flexibility belongs to the
-   cog, not the library.
+   the library, so the message text only surfaces the counters deejay-cog
+   actually wants in the human-readable suffix.
 
    That filter applies to ``post_run_finding`` only. A flow that builds a
    :class:`RunReport` chooses what it carries by calling ``count()``, so
@@ -31,20 +29,22 @@ The shim provides two conveniences for deejay-cog callers:
    library skips its own stamp when the text already carries one, so
    nothing is stamped twice where the distribution is installed.
 
+``get_prefect_logger`` keeps its library name; outside a Prefect run, which
+is everywhere now, it is the shared module logger.
+
 See ``docs/decisions/ADR-004-best-effort-pipeline-eval.md`` for the
 decision record on best-effort posting.
 
-Production flows (``process_new_files``, ``ingest_live_history``) call
-these helpers with the default ``production_only=True``, which gates
-API posts behind both the flag AND ``KAIANO_API_BASE_URL``. Local-only
-and WIP flows (``generate_summaries``, ``update_deejay_set_collection``,
-``retag_music``) call with ``production_only=False`` so they never POST
-regardless of which env vars are set.
+Production flows (``process_new_files``, ``ingest_live_history``) report
+through :class:`RunReport` with the default ``production_only=True``, which
+sends only when an API base URL resolves for the environment. The worker
+reports a run that raised through ``post_run_finding``. Local-only and WIP
+flows (``generate_summaries``, ``update_deejay_set_collection``,
+``retag_music``) call with ``production_only=False`` so they never send.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -52,13 +52,9 @@ from mini_app_polis.pipeline_status import (
     DeliveryReport,
     Severity,
     get_prefect_logger,
-    get_run_id,
 )
 from mini_app_polis.pipeline_status import (
     RunReport as _RunReport,
-)
-from mini_app_polis.pipeline_status import (
-    make_failure_hook as _make_failure_hook,
 )
 from mini_app_polis.pipeline_status import (
     post_run_finding as _post_run_finding,
@@ -165,26 +161,12 @@ def post_run_finding(
     )
 
 
-def make_failure_hook(
-    flow_name: str,
-    *,
-    production_only: bool = True,
-) -> Callable[..., None]:
-    """Return a Prefect ``on_failure`` / ``on_crashed`` hook for this cog.
-
-    Pre-binds ``repo="deejay-cog"`` on the library helper.
-    """
-    return _make_failure_hook(flow_name, repo=REPO, production_only=production_only)
-
-
 __all__ = [
     "REPO",
     "VERSION_STAMP",
     "RunReport",
     "Severity",
     "get_prefect_logger",
-    "get_run_id",
-    "make_failure_hook",
     "post_run_finding",
     "stamp_version",
 ]

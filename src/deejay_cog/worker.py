@@ -42,7 +42,7 @@ import sentry_sdk
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.environment import current_environment
 
-from deejay_cog._deadline import deadline
+from deejay_cog._deadline import RunOutOfTime, deadline
 from deejay_cog._pipeline_eval import post_run_finding
 from deejay_cog.ingest_live_history import ingest_live_history
 from deejay_cog.process_new_files import process_new_csv_files_flow
@@ -192,6 +192,14 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 _report_failure(
                     "deejay-cog", "an unprocessable message", exc, message_id
                 )
+            failures.append({"itemIdentifier": message_id})
+        except RunOutOfTime as exc:
+            # A BaseException, so that no flow's ``except Exception``
+            # swallows it; caught here and nowhere else. The sweep stopped
+            # mid-way, and the redelivery picks up whatever it left in
+            # the drop zone.
+            log.error("worker: run stopped at the deadline (attempt %s)", attempt)
+            _report_failure(_flow_name_for(body), "a queued run", exc, message_id)
             failures.append({"itemIdentifier": message_id})
         except Exception as exc:  # noqa: BLE001 — every failure is a retry
             log.exception("worker: run failed (attempt %s)", attempt)

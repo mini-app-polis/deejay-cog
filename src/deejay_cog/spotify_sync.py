@@ -16,6 +16,7 @@ from mini_app_polis.api.contract import (
     SpotifyPlaylistIngest,
     SpotifyPlaylistsIngest,
 )
+from mini_app_polis.environment import api_base_url, env_var_name
 from mini_app_polis.spotify import SpotifyAPI
 from pydantic import ValidationError
 
@@ -188,9 +189,10 @@ def push_playlists_to_api(sp: Any) -> tuple[int, int] | None:
     ``ValidationError``, a ``ValueError``, rather than returning ``None`` or
     a sentinel, so the caller cannot claim the sync completed.
     """
-    if not os.getenv("KAIANO_API_BASE_URL"):
+    if not api_base_url():
         log.warning(
-            "KAIANO_API_BASE_URL not set — skipping Spotify playlist push to API",
+            "%s not set — skipping Spotify playlist push to API",
+            env_var_name("KAIANO_API_BASE_URL"),
         )
         return None
 

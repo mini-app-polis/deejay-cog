@@ -1,13 +1,17 @@
-import contextlib
 import os
 import re
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from time import monotonic
+from typing import Literal
 
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.environment import api_base_url, env_var_name
 from mini_app_polis.google import GoogleAPI
 
 import deejay_cog.config as config
+from deejay_cog._deadline import RunOutOfTime
 from deejay_cog._pipeline_eval import (
     REPO,
     RunReport,
@@ -25,9 +29,6 @@ from deejay_cog.spotify_sync import (
 )
 
 log = logger_mod.get_logger()
-
-os.environ.setdefault("CSV_SOURCE_FOLDER_ID", "1t4d_8lMC3ZJfSyainbpwInoDta7n69hC")
-os.environ.setdefault("DJ_SETS_FOLDER_ID", "1A0tKQ2DBXI1Bt9h--olFwnBNne3am-rL")
 
 
 @dataclass
@@ -76,6 +77,10 @@ class CsvPipelineStats:
     #: The duplicate check could not read the destination folder, so
     #: "is this already imported" has no answer this run.
     duplicate_check_failed: int = 0
+    #: The ingest failed and the sheet uploaded for it could not be
+    #: deleted. The CSV is FAILED_ and will be retried, but the leftover
+    #: sheet makes the retry see a duplicate.
+    rollback_failed: int = 0
 
 
 def _real_issue(stats: CsvPipelineStats) -> bool:
@@ -101,6 +106,7 @@ def _real_issue(stats: CsvPipelineStats) -> bool:
         or stats.non_csv_move_failed > 0
         or stats.duplicate_check_failed > 0
         or stats.post_import_failed > 0
+        or stats.rollback_failed > 0
     )
 
 
@@ -130,7 +136,12 @@ _ISSUE_FIELDS: tuple[tuple[str, str | None], ...] = (
         "duplicate_check_failed",
         "flagged possible_duplicate_ rather than risk a double import",
     ),
-    ("post_import_failed", "set imported; ingest or Spotify raised afterwards"),
+    ("post_import_failed", "set imported; Spotify sync raised afterwards"),
+    (
+        "rollback_failed",
+        "sheet left in the year folder after a failed ingest — delete it by "
+        "hand, or the retry will flag the CSV possible_duplicate_",
+    ),
 )
 
 
@@ -184,6 +195,7 @@ def _common_eval(stats: CsvPipelineStats) -> dict:
         "non_csv_move_failed": stats.non_csv_move_failed,
         "duplicate_check_failed": stats.duplicate_check_failed,
         "post_import_failed": stats.post_import_failed,
+        "rollback_failed": stats.rollback_failed,
     }
 
 
@@ -415,12 +427,18 @@ def _upload_csv_to_sheets(
 ) -> str:
     """Upload normalized CSV as a Google Sheet, apply formatting, invalidate summary."""
     logger = get_prefect_logger()
-    sheet_id = g.drive.upload_csv_as_google_sheet(temp_path, parent_id=year_folder_id)
+    # Named from the Drive file, not the temp path, which is a fixed name.
+    sheet_id = g.drive.upload_csv_as_google_sheet(
+        temp_path, parent_id=year_folder_id, dest_name=filename
+    )
     logger.debug("Uploaded sheet ID: %s", sheet_id)
     g.sheets.formatter.apply_formatting_to_sheet(sheet_id)
     remove_summary_file_for_year(g, year)
     logger.debug("upload-to-sheets complete for %s", filename)
     return sheet_id
+
+
+IngestOutcome = Literal["sent", "skipped", "failed"]
 
 
 def _ingest_set_to_api(
@@ -430,23 +448,33 @@ def _ingest_set_to_api(
     label: str,
     g: GoogleAPI,
     stats: CsvPipelineStats | None = None,
-) -> None:
-    """
-    Send a single newly processed set to deejay-marvel-api.
-    Skips gracefully if KAIANO_API_BASE_URL is not set.
-    Logs success or failure but never raises — pipeline must continue.
-    """
-    import os as _os
+    tracks: list[dict] | None = None,
+) -> IngestOutcome:
+    """Send one newly uploaded set to api-kaianolevine-com.
 
+    Never raises. Returns what happened, because the caller archives the
+    CSV only when the API has the set: ``"sent"``; ``"skipped"`` when there
+    was nothing to send (no tracks); ``"failed"`` when the set should have
+    reached the API and did not — including no base URL or no client,
+    which send nothing just as surely as a 5xx does.
+
+    ``tracks`` are the sheet's rows when the caller has already read them;
+    otherwise they are read here.
+    """
     logger = get_prefect_logger()
 
-    if not _os.environ.get("KAIANO_API_BASE_URL"):
+    # The same variable the client below will read: _DEV outside
+    # production. Gating on the unsuffixed name skipped every ingest in a
+    # correctly configured development run.
+    if not api_base_url():
         logger.warning(
-            "KAIANO_API_BASE_URL not set — skipping API ingest for %s", label
+            "%s not set — skipping API ingest for %s",
+            env_var_name("KAIANO_API_BASE_URL"),
+            label,
         )
         if stats is not None:
             stats.ingest_skipped_env_missing += 1
-        return
+        return "failed"
 
     try:
         from mini_app_polis.api.errors import KaianoApiError
@@ -458,10 +486,15 @@ def _ingest_set_to_api(
         )
         if stats is not None:
             stats.ingest_client_unavailable += 1
-        return
+        return "failed"
 
+    # Per call, not read off the run-wide counter: once any earlier set had
+    # been attempted, that counter made this set's pre-POST failure look
+    # like a rejected POST.
+    attempted = False
     try:
-        tracks = read_tracks_from_sheet(g, spreadsheet_id)
+        if tracks is None:
+            tracks = read_tracks_from_sheet(g, spreadsheet_id)
         payload = build_ingest_payload(
             set_date=set_date,
             venue=venue,
@@ -473,27 +506,30 @@ def _ingest_set_to_api(
             logger.warning("⚠️ No tracks to ingest for %s", label)
             if stats is not None:
                 stats.ingest_skipped_no_tracks += 1
-            return
+            return "skipped"
 
+        attempted = True
         if stats is not None:
             stats.ingest_attempted += 1
         client = api_client()
         client.ingest(payload)
         logger.info("✅ Ingested to API: %s (%d tracks)", label, len(final_tracks))
+        return "sent"
     except KaianoApiError as e:
         if stats is not None:
             stats.ingest_failed += 1
         logger.error("❌ API ingest failed for %s: %s", label, e)
+        return "failed"
     except Exception as e:
         if stats is not None:
             # Which side of the POST this landed on decides which counter
-            # moves, but both are failures. The old guard counted only the
-            # first case and dropped the second on the floor.
-            if stats.ingest_attempted > 0:
+            # moves, but both are failures.
+            if attempted:
                 stats.ingest_failed += 1
             else:
                 stats.ingest_prepare_failed += 1
         logger.error("❌ Unexpected error during API ingest for %s: %s", label, e)
+        return "failed"
 
 
 def _sync_set_to_spotify(
@@ -502,6 +538,7 @@ def _sync_set_to_spotify(
     label: str,
     g: GoogleAPI,
     stats: CsvPipelineStats | None = None,
+    tracks: list[dict] | None = None,
 ) -> None:
     logger = get_prefect_logger()
 
@@ -519,9 +556,8 @@ def _sync_set_to_spotify(
         sp = get_spotify_client()
         if sp is None:
             # Credentials are present, so this is a client that would not
-            # build. This used to return with no log line at all: the only
-            # message came from get_spotify_client's module logger, which
-            # does not reach the Prefect run logger.
+            # build, and it says so here rather than only in
+            # get_spotify_client's own log line.
             logger.error(
                 "❌ Spotify client could not be initialized — "
                 "skipping Spotify sync for %s",
@@ -531,7 +567,8 @@ def _sync_set_to_spotify(
                 stats.spotify_failed += 1
             return
 
-        tracks = read_tracks_from_sheet(g, sheet_id)
+        if tracks is None:
+            tracks = read_tracks_from_sheet(g, sheet_id)
         outcome = sync_set_to_spotify(sp, set_name, tracks)
         if not outcome.ok:
             logger.error(
@@ -575,6 +612,58 @@ def _file_already_in_folder(g: GoogleAPI, file_id: str, folder_id: str) -> bool:
         return False
 
 
+def _mark_failed(
+    g: GoogleAPI,
+    file_id: str,
+    filename: str,
+    stats: CsvPipelineStats | None,
+) -> None:
+    """Count a set as failed and rename its CSV FAILED_ for the next run.
+
+    Counted before the rename, not after. Whatever broke the set — a Drive
+    quota, an auth expiry — usually breaks the rename too, and a failed set
+    that reports SUCCESS is worse than a file left unrenamed.
+    """
+    logger = get_prefect_logger()
+    if stats is not None:
+        stats.sets_failed += 1
+        stats.failed_set_labels.append(os.path.splitext(filename)[0])
+    try:
+        failed_name = f"FAILED_{filename}"
+        g.drive.rename_file(file_id, failed_name)
+        logger.info(f"✏️ Renamed original to '{failed_name}'")
+    except Exception as rename_exc:
+        logger.error(f"Failed to rename original to FAILED_: {rename_exc}")
+
+
+def _roll_back_upload(
+    g: GoogleAPI,
+    sheet_id: str,
+    filename: str,
+    stats: CsvPipelineStats | None,
+) -> None:
+    """Delete a sheet this run uploaded for a set it did not finish.
+
+    The sheet is this run's own derivative of the CSV. Left behind, the
+    retry would find it, take the CSV for a duplicate and never ingest the
+    set — so a set is either uploaded, ingested and archived, or none of
+    them.
+    """
+    logger = get_prefect_logger()
+    try:
+        g.drive.delete_file(sheet_id)
+        logger.info("↩️ Removed the sheet uploaded for %s", filename)
+    except Exception as exc:
+        logger.error(
+            "Could not remove the sheet uploaded for %s (sheet_id=%s): %s",
+            filename,
+            sheet_id,
+            exc,
+        )
+        if stats is not None:
+            stats.rollback_failed += 1
+
+
 def process_csv_file(
     g: GoogleAPI,
     file_metadata: dict,
@@ -586,7 +675,11 @@ def process_csv_file(
     filename = file_metadata["name"]
     file_id = file_metadata["id"]
     logger.info(f"\n🚧 Processing: {filename}")
-    temp_path = os.path.join("/tmp", filename)
+    # A private directory and a fixed file name. The Drive name went into
+    # the path as-is: a "/" in it (a venue like "AC/DC Night") pointed the
+    # download at a directory that does not exist, and the set failed.
+    temp_dir = tempfile.mkdtemp(prefix="deejay-cog-")
+    temp_path = os.path.join(temp_dir, "set.csv")
 
     try:
         g.drive.download_file(file_id, temp_path)
@@ -609,25 +702,60 @@ def process_csv_file(
 
         sheet_id = _upload_csv_to_sheets(g, temp_path, year_folder_id, year, filename)
 
-        if stats is not None:
-            stats.sets_imported += 1
+        # Ingest before archive. The CSV leaves the drop zone only once the
+        # API has the set: archived first, a rejected POST left the set in
+        # Sheets and nowhere else, with nothing that would ever retry it.
+        try:
+            # Read once: the ingest, the run's counters and the Spotify sync
+            # all work from these rows. None leaves each to read its own.
+            tracks: list[dict] | None
             try:
                 tracks = read_tracks_from_sheet(g, sheet_id)
-                stats.total_tracks += len(tracks or [])
             except Exception as track_exc:
                 logger.warning(
-                    "Could not read tracks from new sheet for stats: %s", track_exc
+                    "Could not read tracks from new sheet %s: %s", sheet_id, track_exc
                 )
                 if stats is not None:
                     stats.track_read_failed += 1
+                tracks = None
 
-        # The archive move and the ingest are independent. They were in
-        # one try, so a Drive 5xx on the move also skipped the ingest and
-        # the Spotify sync — and the function still returned "imported"
-        # with sets_imported already incremented. The sheet existed, was
-        # never POSTed, and the CSV was still in the source folder, so
-        # the next run flagged it possible_duplicate_ and it was never
-        # ingested at all. Under a SUCCESS report.
+            set_date, venue = _extract_date_and_venue(base_name)
+            if set_date and venue:
+                outcome = _ingest_set_to_api(
+                    spreadsheet_id=sheet_id,
+                    set_date=set_date,
+                    venue=venue,
+                    label=base_name,
+                    g=g,
+                    stats=stats,
+                    tracks=tracks,
+                )
+            else:
+                logger.warning(
+                    "Could not extract date/venue from filename; "
+                    "skipping API ingest for %s",
+                    base_name,
+                )
+                if stats is not None:
+                    stats.bad_filename_in_file += 1
+                outcome = "skipped"
+        except RunOutOfTime:
+            # Stopped between upload and archive. Undo the upload so the
+            # redelivery finds the CSV, not a duplicate of it.
+            _roll_back_upload(g, sheet_id, filename, stats)
+            raise
+
+        if outcome == "failed":
+            _roll_back_upload(g, sheet_id, filename, stats)
+            _mark_failed(g, file_id, filename, stats)
+            return "failed"
+
+        if stats is not None:
+            stats.sets_imported += 1
+            stats.total_tracks += len(tracks or [])
+
+        # The set is in the API now; a failed move costs a duplicate flag
+        # on the next run, not the set.
         try:
             archive_folder_id = g.drive.ensure_folder(year_folder_id, "Archive")
             if _file_already_in_folder(g, file_id, archive_folder_id):
@@ -650,33 +778,17 @@ def process_csv_file(
             if stats is not None:
                 stats.archive_move_failed += 1
 
-        base_name = os.path.splitext(filename)[0]
-        set_date, venue = _extract_date_and_venue(base_name)
         if set_date and venue:
-            # Contained deliberately. By this point the sheet is uploaded,
-            # sets_imported is incremented and the CSV is archived — the
-            # set IS imported. Letting anything from here reach the outer
-            # handler would count it in sets_failed as well, append it to
-            # failed_set_labels, and rename the archived file FAILED_.
-            # Both calls swallow their own exceptions and record their own
-            # counters, so what lands here is the Prefect task machinery
-            # around them: a timeout, a result-persistence error. Rare,
-            # and destructive if it re-brands a good import.
+            # Contained deliberately: the set is imported, so nothing from
+            # here may reach the outer handler and re-brand it FAILED_.
             try:
-                _ingest_set_to_api(
-                    spreadsheet_id=sheet_id,
-                    set_date=set_date,
-                    venue=venue,
-                    label=base_name,
-                    g=g,
-                    stats=stats,
-                )
                 _sync_set_to_spotify(
                     sheet_id=sheet_id,
                     set_name=base_name,
                     label=base_name,
                     g=g,
                     stats=stats,
+                    tracks=tracks,
                 )
             except Exception as post_exc:
                 logger.error(
@@ -687,37 +799,15 @@ def process_csv_file(
                 )
                 if stats is not None:
                     stats.post_import_failed += 1
-        else:
-            logger.warning(
-                "Could not extract date/venue from filename; skipping API ingest for %s",
-                base_name,
-            )
-            if stats is not None:
-                stats.bad_filename_in_file += 1
 
         return "imported"
 
     except Exception as e:
         logger.error(f"❌ Failed to upload or format {filename}: {e}")
-        # Counted before the rename, not after. Whatever broke the upload
-        # — a Drive quota, an auth expiry — usually breaks the rename
-        # too, and the old order meant the set's failure was recorded
-        # only if the cleanup succeeded. A failed set that reports SUCCESS
-        # is worse than a file left unrenamed.
-        if stats is not None:
-            stats.sets_failed += 1
-            stats.failed_set_labels.append(os.path.splitext(filename)[0])
-        try:
-            failed_name = f"FAILED_{filename}"
-            g.drive.rename_file(file_id, failed_name)
-            logger.info(f"✏️ Renamed original to '{failed_name}'")
-        except Exception as rename_exc:
-            logger.error(f"Failed to rename original to FAILED_: {rename_exc}")
+        _mark_failed(g, file_id, filename, stats)
         return "failed"
     finally:
-        if os.path.exists(temp_path):
-            with contextlib.suppress(Exception):
-                os.remove(temp_path)
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
@@ -882,10 +972,6 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
             report.issue(reason, note if index == 0 else None)
 
     report.send(notable=saw_input)
-
-
-# Backwards-compatible alias for tests and callers that import main
-main = process_new_csv_files_flow
 
 
 if __name__ == "__main__":

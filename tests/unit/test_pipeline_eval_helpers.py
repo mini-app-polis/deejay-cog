@@ -13,7 +13,6 @@ live alongside the flow modules and don't need to know about the
 underlying library.
 """
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import mini_app_polis.pipeline_status as ps
@@ -22,8 +21,7 @@ import deejay_cog._pipeline_eval as pe
 
 
 def test_reexports_library_helpers() -> None:
-    """The shim re-exports get_run_id / get_prefect_logger unchanged."""
-    assert pe.get_run_id is ps.get_run_id
+    """The shim re-exports get_prefect_logger unchanged."""
     assert pe.get_prefect_logger is ps.get_prefect_logger
 
 
@@ -141,45 +139,6 @@ def test_post_run_finding_warn_includes_extras(monkeypatch) -> None:
     )
 
 
-def test_make_failure_hook_binds_repo_and_emits_warn(monkeypatch) -> None:
-    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    hook = pe.make_failure_hook("fl", production_only=True)
-    state = SimpleNamespace(name="Failed", type="FAILED")
-    with (
-        patch.object(ps, "_deliver", return_value=True),
-        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
-    ):
-        hook(None, None, state)
-    payload = post.call_args.kwargs
-    assert payload["repo"] == "deejay-cog"
-    assert payload["severity"] == "WARN"
-    assert payload["source"] == "flow_hook"
-
-
-def test_make_failure_hook_crashed_emits_error(monkeypatch) -> None:
-    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    hook = pe.make_failure_hook("fl", production_only=True)
-    state = SimpleNamespace(name="Crashed", type="CRASHED")
-    with (
-        patch.object(ps, "_deliver", return_value=True),
-        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
-    ):
-        hook(None, None, state)
-    assert post.call_args.kwargs["severity"] == "ERROR"
-
-
-def test_make_failure_hook_production_only_false_no_post(monkeypatch) -> None:
-    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    hook = pe.make_failure_hook("fl", production_only=False)
-    state = SimpleNamespace(name="Failed", type="FAILED")
-    with (
-        patch.object(ps, "_deliver", return_value=True),
-        patch.object(ps, "_build_message", wraps=ps._build_message) as post,
-    ):
-        hook(None, None, state)
-    post.assert_not_called()
-
-
 def test_post_run_finding_swallows_underlying_exceptions(monkeypatch) -> None:
     """The library is best-effort; the shim must not regress on that.
 
@@ -194,19 +153,6 @@ def test_post_run_finding_swallows_underlying_exceptions(monkeypatch) -> None:
     assert result.failed == 1
     assert result.sent == 0
     deliver.assert_called_once()
-
-
-def test_make_failure_hook_swallows_post_exception(monkeypatch) -> None:
-    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
-    hook = pe.make_failure_hook("fl", production_only=True)
-    state = SimpleNamespace(name="Failed", type="FAILED")
-    mock_log = MagicMock()
-    with (
-        patch.object(ps, "post_run_finding", side_effect=RuntimeError("x")),
-        patch.object(ps, "get_prefect_logger", return_value=mock_log),
-    ):
-        hook(None, None, state)
-    mock_log.exception.assert_called()
 
 
 def test_post_run_finding_source_in_kwargs_does_not_raise(monkeypatch) -> None:
@@ -230,7 +176,7 @@ def test_get_run_id_is_unattributable_without_prefect(monkeypatch) -> None:
     that relied on it could not be joined to the run that sent it.
     """
     monkeypatch.delenv("PREFECT_FLOW_RUN_ID", raising=False)
-    assert pe.get_run_id() == "local-run"
+    assert ps.get_run_id() == "local-run"
 
 
 def test_post_run_finding_stamps_version_without_distribution(monkeypatch) -> None:

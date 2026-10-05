@@ -153,6 +153,10 @@ def test_ingest_live_history_sends_plays_and_returns_summary(
 
     mock_post.assert_called_once()
     mock_client_cls.assert_called_once_with(base_url="https://example.test")
+    # This cog's folder, not whatever the shared library's config holds.
+    fake_g.drive.get_all_m3u_files.assert_called_once_with(
+        live.config.VDJ_HISTORY_FOLDER_ID
+    )
     parse_mock.assert_called_once()
     client.post.assert_called_once()
     path, payload = client.post.call_args.args

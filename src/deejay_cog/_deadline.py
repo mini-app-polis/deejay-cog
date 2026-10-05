@@ -21,7 +21,7 @@ from typing import Any
 DEADLINE_MARGIN_SECONDS = 30
 
 
-class RunOutOfTime(Exception):  # noqa: N818 — named for what happened
+class RunOutOfTime(BaseException):  # noqa: N818 — named for what happened
     """The run was about to be killed by the function's timeout.
 
     Lambda kills a timed-out invocation outright: no ``finally``, no
@@ -29,6 +29,13 @@ class RunOutOfTime(Exception):  # noqa: N818 — named for what happened
     with nobody told why. Raised a margin early instead, inside the run,
     it travels the ordinary failure path — the handler reports it and
     names the message for redelivery.
+
+    A ``BaseException``, like ``KeyboardInterrupt``, because the flows
+    contain their per-file failures with ``except Exception``. As an
+    ``Exception`` it was caught by the first of those it met: the file in
+    hand was renamed ``FAILED_``, the sweep carried on past the deadline,
+    and the handler reported success until Lambda killed the run anyway.
+    Only the handler catches it.
     """
 
 
