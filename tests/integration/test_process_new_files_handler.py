@@ -362,6 +362,28 @@ def test_non_csv_and_unrecognised_files(
     assert api.severities() == ["SUCCESS"]
 
 
+def test_a_venue_with_a_slash_in_its_name_imports(
+    google: FakeGoogle, api: FakeApi, handler
+) -> None:
+    """The Drive name never becomes a path, so "/" and ".." are just text."""
+    drive = google.drive
+    drive.add_file(SOURCE_FOLDER, "2025-10-04 AC/DC Night.csv", SET_CSV)
+    drive.add_file(SOURCE_FOLDER, "2025-10-05 ../../Escape.csv", SET_CSV)
+
+    handler(_event())
+
+    assert {b["venue"] for b in api.bodies("/v1/ingest")} == {
+        "AC/DC Night",
+        "../../Escape",
+    }
+    assert sorted(s.name for s in drive.sheets_in(drive.path("2025"))) == [
+        "2025-10-04 AC/DC Night.csv",
+        "2025-10-05 ../../Escape.csv",
+    ]
+    assert drive.names_in(SOURCE_FOLDER) == []
+    assert api.severities() == ["SUCCESS"]
+
+
 def test_several_sets_in_one_sweep_are_each_imported(
     google: FakeGoogle, api: FakeApi, handler
 ) -> None:

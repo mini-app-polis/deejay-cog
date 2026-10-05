@@ -1,6 +1,7 @@
-import contextlib
 import os
 import re
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import Literal
@@ -426,7 +427,10 @@ def _upload_csv_to_sheets(
 ) -> str:
     """Upload normalized CSV as a Google Sheet, apply formatting, invalidate summary."""
     logger = get_prefect_logger()
-    sheet_id = g.drive.upload_csv_as_google_sheet(temp_path, parent_id=year_folder_id)
+    # Named from the Drive file, not the temp path, which is a fixed name.
+    sheet_id = g.drive.upload_csv_as_google_sheet(
+        temp_path, parent_id=year_folder_id, dest_name=filename
+    )
     logger.debug("Uploaded sheet ID: %s", sheet_id)
     g.sheets.formatter.apply_formatting_to_sheet(sheet_id)
     remove_summary_file_for_year(g, year)
@@ -671,7 +675,11 @@ def process_csv_file(
     filename = file_metadata["name"]
     file_id = file_metadata["id"]
     logger.info(f"\n🚧 Processing: {filename}")
-    temp_path = os.path.join("/tmp", filename)
+    # A private directory and a fixed file name. The Drive name went into
+    # the path as-is: a "/" in it (a venue like "AC/DC Night") pointed the
+    # download at a directory that does not exist, and the set failed.
+    temp_dir = tempfile.mkdtemp(prefix="deejay-cog-")
+    temp_path = os.path.join(temp_dir, "set.csv")
 
     try:
         g.drive.download_file(file_id, temp_path)
@@ -799,9 +807,7 @@ def process_csv_file(
         _mark_failed(g, file_id, filename, stats)
         return "failed"
     finally:
-        if os.path.exists(temp_path):
-            with contextlib.suppress(Exception):
-                os.remove(temp_path)
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def process_new_csv_files_flow(*, run_id: str | None = None) -> None:

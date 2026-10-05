@@ -197,7 +197,8 @@ def _fake_drive_for_failure(tmp_path):
     return SimpleNamespace(drive=drive, sheets=sheets)
 
 
-def test_temp_file_is_removed_in_all_cases(tmp_path):
+def test_temp_file_is_removed_in_all_cases(tmp_path, monkeypatch):
+    monkeypatch.setattr(process_new_files.tempfile, "tempdir", str(tmp_path))
     g = _fake_drive_for_failure(tmp_path)
     file_meta = {"id": "file-temp", "name": "2024-01-03_WithTemp.csv"}
 
@@ -205,8 +206,27 @@ def test_temp_file_is_removed_in_all_cases(tmp_path):
 
     process_new_files.process_csv_file(g, file_meta, "2024")
 
-    temp_path = os.path.join("/tmp", file_meta["name"])
-    assert not os.path.exists(temp_path)
+    g.drive.download_file.assert_called_once()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_download_path_does_not_come_from_the_drive_name(tmp_path, monkeypatch):
+    """A "/" or ".." in a Drive file name must not reach the filesystem."""
+    monkeypatch.setattr(process_new_files.tempfile, "tempdir", str(tmp_path))
+    g = _fake_drive_for_failure(tmp_path)
+    file_meta = {"id": "file-temp", "name": "2024-01-03 ../../AC/DC Night.csv"}
+    g.drive.list_files = MagicMock(return_value=[])  # not a duplicate
+    g.drive.upload_csv_as_google_sheet.side_effect = RuntimeError("stop here")
+
+    process_new_files.process_csv_file(g, file_meta, "2024")
+
+    dest = g.drive.download_file.call_args.args[1]
+    assert os.path.dirname(os.path.dirname(dest)) == str(tmp_path)
+    assert os.path.basename(dest) == "set.csv"
+    assert (
+        g.drive.upload_csv_as_google_sheet.call_args.kwargs["dest_name"]
+        == (file_meta["name"])
+    )
 
 
 def test_file_already_in_folder_returns_true_when_parent_matches():
@@ -635,8 +655,6 @@ def test_process_csv_file_skips_when_duplicate_exists_in_year_folder():
 
     assert stats.duplicate_csv == 1
     assert stats.sets_imported == 0
-
-    assert not os.path.exists(os.path.join("/tmp", filename))
 
 
 # -- process_non_csv_file ------------------------------------------------------
