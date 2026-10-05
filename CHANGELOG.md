@@ -1,3 +1,10 @@
+## [2.4.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.4.0...v2.4.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **scripts:** always sign in afresh when issuing a Spotify refresh token ([0f2c05c](https://github.com/mini-app-polis/deejay-cog/commit/0f2c05c4ed481e715c3542141208c17c44abca2f))
+
 # [2.4.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.3.7...v2.4.0) (2026-10-05)
 
 
