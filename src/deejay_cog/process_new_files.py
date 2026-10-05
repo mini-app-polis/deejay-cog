@@ -1,6 +1,5 @@
 import os
 import re
-import shutil
 import tempfile
 from dataclasses import dataclass, field
 from time import monotonic
@@ -670,16 +669,34 @@ def process_csv_file(
     year: str,
     stats: CsvPipelineStats | None = None,
 ) -> str:
-    """Process one CSV. Returns imported | failed | duplicate."""
+    """Process one CSV. Returns imported | failed | duplicate.
+
+    The download goes to a private directory under a fixed file name, and
+    the directory goes when this returns, however it returns. The Drive
+    name used to go into the path as-is: a "/" in it (a venue like
+    "AC/DC Night") pointed the download at a directory that does not
+    exist, and the set failed.
+    """
+    with tempfile.TemporaryDirectory(
+        prefix="deejay-cog-", ignore_cleanup_errors=True
+    ) as temp_dir:
+        return _process_csv_at(
+            g, file_metadata, year, stats, os.path.join(temp_dir, "set.csv")
+        )
+
+
+def _process_csv_at(
+    g: GoogleAPI,
+    file_metadata: dict,
+    year: str,
+    stats: CsvPipelineStats | None,
+    temp_path: str,
+) -> str:
+    """:func:`process_csv_file`, downloading to ``temp_path``."""
     logger = get_prefect_logger()
     filename = file_metadata["name"]
     file_id = file_metadata["id"]
     logger.info(f"\n🚧 Processing: {filename}")
-    # A private directory and a fixed file name. The Drive name went into
-    # the path as-is: a "/" in it (a venue like "AC/DC Night") pointed the
-    # download at a directory that does not exist, and the set failed.
-    temp_dir = tempfile.mkdtemp(prefix="deejay-cog-")
-    temp_path = os.path.join(temp_dir, "set.csv")
 
     try:
         g.drive.download_file(file_id, temp_path)
@@ -806,8 +823,6 @@ def process_csv_file(
         logger.error(f"❌ Failed to upload or format {filename}: {e}")
         _mark_failed(g, file_id, filename, stats)
         return "failed"
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
