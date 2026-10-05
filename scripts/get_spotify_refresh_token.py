@@ -1,8 +1,14 @@
 """
-One-time local utility to obtain a Spotify OAuth refresh token.
+Local utility to obtain a Spotify OAuth refresh token.
 
-Run this once locally, copy the printed refresh token, and store it as
-the SPOTIPY_REFRESH_TOKEN GitHub Actions secret.
+Run it locally, sign in to Spotify in the browser it opens, and store the
+printed refresh token as SPOTIPY_REFRESH_TOKEN in Doppler (which syncs it to
+the Lambda's SSM parameters).
+
+Spotify refresh tokens expire six months after sign-in (enforced from
+2026-07-20), and refreshing does not extend them, so this has to be run again
+before then. It always signs in afresh: it never reads or writes spotipy's
+token cache, which would otherwise hand back the old, possibly revoked token.
 
 Usage:
     uv run python scripts/get_spotify_refresh_token.py
@@ -17,6 +23,7 @@ Prerequisites:
 import os
 
 from dotenv import load_dotenv
+from spotipy.cache_handler import MemoryCacheHandler
 from spotipy.oauth2 import SpotifyOAuth
 
 load_dotenv()
@@ -37,14 +44,20 @@ sp_oauth = SpotifyOAuth(
     redirect_uri=redirect_uri,
     scope="playlist-modify-public playlist-modify-private",
     open_browser=True,
+    # No token cache: a cached refresh token is exactly what has expired.
+    cache_handler=MemoryCacheHandler(),
 )
 
 print(f"Opening browser for Spotify authorization (redirect URI: {redirect_uri}) ...")
-token_info = sp_oauth.get_access_token(as_dict=True)
+code = sp_oauth.get_auth_response()
+token_info = sp_oauth.get_access_token(code, as_dict=True, check_cache=False)
 
 if token_info and token_info.get("refresh_token"):
     print("\n✅ REFRESH TOKEN:", token_info["refresh_token"])
-    print("\nStore this as the SPOTIPY_REFRESH_TOKEN GitHub Actions secret.")
+    print(
+        "\nStore this as SPOTIPY_REFRESH_TOKEN in Doppler. It expires six months "
+        "from now — renew before then."
+    )
 else:
     print("❌ Failed to retrieve token. Check your credentials and redirect URI.")
     raise SystemExit(1)
