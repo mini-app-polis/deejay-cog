@@ -37,6 +37,9 @@ class SyncOutcome:
 
     ok: bool
     detail: str = ""
+    #: A set playlist was created rather than refilled. Only a new set
+    #: playlist puts its tracks on the radio playlist.
+    created: bool = False
 
     @classmethod
     def success(cls) -> SyncOutcome:
@@ -274,7 +277,9 @@ def create_spotify_playlist_for_file(
     """Create or replace a per-set Spotify playlist.
 
     If a playlist with the given name already exists, it is cleared and
-    repopulated with ``found_uris``. Otherwise a new playlist is created.
+    repopulated with ``found_uris``. Otherwise a new playlist is created,
+    and the outcome says so (``created``). With no tracks there is nothing
+    to publish and no playlist is made.
 
     Returns a ``SyncOutcome`` rather than a playlist ID, which no caller
     used. It used to raise while its sibling returned an outcome, and the
@@ -301,7 +306,7 @@ def create_spotify_playlist_for_file(
 
         unique_uris = list(dict.fromkeys(found_uris))
         sp.add_tracks_to_specific_playlist(playlist_id, unique_uris)
-        return SyncOutcome.success()
+        return SyncOutcome(True, created=True)
 
     except Exception as e:
         log.error(
@@ -335,11 +340,14 @@ def sync_set_to_spotify(
     set_name: str,
     tracks: list[dict],
 ) -> SyncOutcome:
-    """Search Spotify for each track and update playlists.
+    """Search Spotify for each track and publish the set's playlist.
 
-    Returns a SyncOutcome covering both the radio playlist and the per-set
-    playlist. The CSV is already archived by the time this runs, so this is
-    the only moment a partial sync can be recorded.
+    The radio playlist is fed by playlist creation: a set's tracks are
+    appended to it only when its own playlist is created, not when an
+    existing one is refilled. So a set reaches the radio once, however many
+    times it is synced. A radio update that fails after the set playlist
+    was created is reported and not retried — the set playlist exists, and
+    nothing will create it again.
     """
     try:
         found_uris: list[str] = []
@@ -365,14 +373,14 @@ def sync_set_to_spotify(
             not_found,
         )
 
-        radio = update_spotify_radio_playlist(sp, radio_playlist_id(), found_uris)
         per_set = create_spotify_playlist_for_file(sp, set_name, found_uris)
-        if radio.ok and per_set.ok:
-            return SyncOutcome.success()
-        return SyncOutcome(
-            False,
-            "; ".join(o.detail for o in (radio, per_set) if not o.ok and o.detail),
-        )
+        if not per_set.ok or not per_set.created:
+            return per_set
+
+        radio = update_spotify_radio_playlist(sp, radio_playlist_id(), found_uris)
+        if not radio.ok:
+            return SyncOutcome(False, f"radio: {radio.detail}", created=True)
+        return per_set
     except Exception as e:
         log.error("sync_set_to_spotify failed: %s", e, exc_info=True)
         return SyncOutcome.failure(e)

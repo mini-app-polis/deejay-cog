@@ -104,6 +104,14 @@ class FakeDrive:
     def fail(self, method: str, exc: BaseException, *, times: int | None = 1) -> None:
         self._faults[method] = _Fault(exc, times)
 
+    def add_sheet(self, folder_id: str, name: str, csv_text: str) -> str:
+        """A set sheet an earlier run left in a year folder."""
+        sheet_id = self.add_file(folder_id, name, mime_type=SHEET_MIME)
+        self._sheets.values[sheet_id] = [
+            list(r) for r in csv.reader(line for line in csv_text.splitlines() if line)
+        ]
+        return sheet_id
+
     def slow(self, method: str, seconds: float) -> None:
         self._delays[method] = seconds
 
@@ -273,10 +281,13 @@ class FakeApi:
 
     ``calls[path]`` holds each request body that reached a route, in order,
     whether it was answered with success or with an injected failure.
+    ``sets`` is what ``GET /v1/sets`` lists: every set ingested successfully,
+    plus any a test seeds with :meth:`has_set`.
     """
 
     router: respx.MockRouter
     calls: dict[str, list[dict]] = field(default_factory=dict)
+    sets: list[dict] = field(default_factory=list)
     auth: list[str] = field(default_factory=list)
     hosts: list[str] = field(default_factory=list)
     _faults: dict[str, list[int]] = field(default_factory=dict)
@@ -290,6 +301,44 @@ class FakeApi:
 
     def bodies(self, path: str) -> list[dict]:
         return self.calls.get(path, [])
+
+    def has_set(self, source_file: str, set_date: str, venue: str = "Venue") -> None:
+        self.sets.append(
+            {"source_file": source_file, "set_date": set_date, "venue": venue}
+        )
+
+    def _list_sets(self, request: httpx.Request) -> httpx.Response:
+        self.calls.setdefault("GET /v1/sets", []).append(dict(request.url.params))
+        pending = self._faults.get("GET /v1/sets")
+        if pending:
+            return httpx.Response(pending.pop(0), json={"detail": "injected failure"})
+        q = request.url.params
+        rows = [
+            s
+            for s in self.sets
+            if (not q.get("date_from") or s["set_date"] >= q["date_from"])
+            and (not q.get("date_to") or s["set_date"] <= q["date_to"])
+        ]
+        offset, limit = int(q.get("offset", 0)), int(q.get("limit", 50))
+        page = rows[offset : offset + limit]
+        data = [
+            {
+                "id": f"00000000-0000-4000-8000-{i:012d}",
+                "set_date": s["set_date"],
+                "year": int(s["set_date"][:4]),
+                "venue": s["venue"],
+                "source_file": s["source_file"],
+                "track_count": 1,
+            }
+            for i, s in enumerate(page, start=offset)
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "data": data,
+                "meta": {"count": len(data), "total": len(rows), "version": "test"},
+            },
+        )
 
     def reports(self) -> list[dict]:
         """Each run report delivered, as its one Discord embed."""
@@ -322,7 +371,8 @@ class FakeApi:
         return handle
 
 
-def _ingest_answer(body: dict) -> dict:
+def _ingest_answer(api: FakeApi, body: dict) -> dict:
+    api.has_set(body["source_file"], body["set_date"], body["venue"])
     return {
         "set_id": "00000000-0000-4000-8000-000000000001",
         "tracks_created": len(body.get("tracks", [])),
@@ -334,7 +384,7 @@ def _ingest_answer(body: dict) -> dict:
 
 def install_api(router: respx.MockRouter, api: FakeApi, base: str) -> None:
     routes: dict[str, Callable[[dict], Any]] = {
-        "/v1/ingest": _ingest_answer,
+        "/v1/ingest": lambda b: _ingest_answer(api, b),
         "/v1/live-plays": lambda b: {"inserted": len(b.get("plays", [])), "skipped": 0},
         "/v1/spotify/playlists": lambda b: {
             "upserted": len(b.get("playlists", [])),
@@ -349,6 +399,7 @@ def install_api(router: respx.MockRouter, api: FakeApi, base: str) -> None:
     }
     for path, answer in routes.items():
         router.post(f"{base}{path}").mock(side_effect=api._handler(path, answer))
+    router.get(f"{base}/v1/sets").mock(side_effect=api._list_sets)
 
 
 # ── Spotify ──────────────────────────────────────────────────────────────
@@ -363,6 +414,15 @@ class FakeSpotify:
         self.added: list[tuple[str, list[str]]] = []
         self.trimmed: list[str] = []
         self.client = SimpleNamespace(current_user_playlists=self._page)
+        self._faults: dict[str, list[BaseException]] = {}
+
+    def fail(self, method: str, exc: BaseException, *, times: int = 1) -> None:
+        self._faults.setdefault(method, []).extend([exc] * times)
+
+    def _enter(self, method: str) -> None:
+        pending = self._faults.get(method)
+        if pending:
+            raise pending.pop(0)
 
     def search_track(self, artist: str, title: str) -> str | None:
         return self.catalog.get((artist, title))
@@ -374,6 +434,7 @@ class FakeSpotify:
         return None
 
     def create_playlist(self, name: str, description: str) -> str:  # noqa: ARG002
+        self._enter("create_playlist")
         pid = f"pl-{len(self.playlists) + 1}"
         self.playlists[pid] = {"id": pid, "name": name, "uris": []}
         return pid
@@ -384,6 +445,7 @@ class FakeSpotify:
     def add_tracks_to_specific_playlist(
         self, playlist_id: str, uris: list[str]
     ) -> None:
+        self._enter(f"add_tracks:{playlist_id}")
         self.added.append((playlist_id, list(uris)))
         self.playlists.setdefault(
             playlist_id, {"id": playlist_id, "name": playlist_id, "uris": []}

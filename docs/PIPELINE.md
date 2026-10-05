@@ -77,16 +77,47 @@ trigger that arrives after its files were already handled finds nothing.
      3. **Ingest** to `POST /v1/ingest`, using the date and venue from the
         filename (`YYYY-MM-DD Venue.csv`).
      4. **Archive** the CSV into the year's `Archive` folder.
-     5. **Spotify:** per-set playlist, radio playlist.
-3. **Spotify playlist snapshot** pushed to `POST /v1/spotify/playlists`, every
+     5. **Spotify:** the set's own playlist; if that playlist was newly
+        created, its tracks also go on the radio playlist.
+3. **Repair pass** over recent sets (below).
+4. **Spotify playlist snapshot** pushed to `POST /v1/spotify/playlists`, every
    sweep that has Spotify credentials.
-4. **One run report.**
+5. **One run report.**
 
 **Ingest before archive.** A CSV leaves the drop zone only once the API has
 its set. If the ingest fails (an API error, no base URL, no client), the
 sheet just uploaded is deleted and the CSV renamed `FAILED_`; the next run
 strips the prefix and imports it from scratch. A filename without a venue,
 or a sheet with no tracks, has nothing to send and is archived.
+
+**The radio follows the set playlist.** A set's tracks are appended to the
+radio playlist only when its own playlist is created — never when an existing
+one is refilled — so a set reaches the radio once. If the radio update fails
+after the set playlist was created, the run warns and the radio update is not
+retried.
+
+### Repair pass
+
+One CSV fans out into a sheet, an API set and a Spotify playlist, and the
+archive move is one flag for all of them. So every sweep ends by checking
+recent sets against the systems themselves (`repair.py`), with nothing
+stored:
+
+| Job | Done when | Repair |
+|-----|-----------|--------|
+| API set | `GET /v1/sets` lists a set whose `source_file` is the sheet's name | Ingest from the sheet |
+| Set playlist | The Spotify account has a playlist of that name | Build it from the sheet; as a new playlist, it feeds the radio |
+
+- **Window:** sheets in the year folders dated within `REPAIR_LOOKBACK_DAYS`
+  (183, about six months).
+- **Cap:** at most `REPAIR_MAX_PER_RUN` jobs (3) per sweep, newest set first.
+  The rest are counted as `repairs_pending` and done by later sweeps.
+- **Skipped:** sets imported by this same sweep — their jobs just ran.
+- **Reporting:** each repair is an outcome in the run report; a failed repair
+  or a failed check is a WARN naming the set, retried next sweep. Neither
+  fails the run.
+- Playlists are only checked when Spotify credentials are set and the client
+  builds.
 
 ## ingest-live-history
 

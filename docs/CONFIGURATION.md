@@ -45,7 +45,9 @@ Spotify snapshot and the run report. With no URL resolved:
 | `CSV_SOURCE_FOLDER_ID` | Code default | No | Drop zone swept by process-new-files. |
 | `DJ_SETS_FOLDER_ID` | Code default | No | Parent of the year folders (each with an `Archive` subfolder) and the `Summary` folder. |
 | `VDJ_HISTORY_FOLDER_ID` | Function env | No | VirtualDJ history folder read by ingest-live-history. Passed to the shared Drive facade's `get_all_m3u_files`. |
-| `TIMEZONE` | Code default (`America/Chicago`) | No | Timezone live plays are stamped in. |
+| `TIMEZONE` | Code default (`America/Chicago`) | No | Timezone live plays are stamped in, and the "today" the repair pass counts back from. |
+| `REPAIR_LOOKBACK_DAYS` | Code default (`183`) | No | How far back, by set date, the repair pass checks sets for a missing API set or Spotify playlist. |
+| `REPAIR_MAX_PER_RUN` | Code default (`3`) | No | Repairs one sweep may make; the rest wait for later sweeps. |
 
 The folder IDs default to the production folders in `config.py`; there is
 no separate development Drive.

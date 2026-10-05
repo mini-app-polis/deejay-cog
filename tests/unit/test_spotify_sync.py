@@ -286,6 +286,7 @@ def test_create_spotify_playlist_for_file_updates_existing() -> None:
     sp.find_playlist_by_name.return_value = {"id": "existing"}
     outcome = ss.create_spotify_playlist_for_file(sp, "2024-01-01", ["u1"])
     assert outcome.ok is True
+    assert outcome.created is False
     sp.find_playlist_by_name.assert_called_once_with("2024-01-01")
     sp.clear_playlist.assert_called_once_with("existing")
     sp.add_tracks_to_specific_playlist.assert_called_once_with("existing", ["u1"])
@@ -317,6 +318,7 @@ def test_create_spotify_playlist_for_file_creates_new_dedupes() -> None:
     sp.create_playlist.return_value = "newpl"
     outcome = ss.create_spotify_playlist_for_file(sp, "2024-01-01", ["a", "a", "b"])
     assert outcome.ok is True
+    assert outcome.created is True
     sp.create_playlist.assert_called_once()
     assert sp.create_playlist.call_args[0][0] == "2024-01-01"
     sp.add_tracks_to_specific_playlist.assert_called_once_with("newpl", ["a", "b"])
@@ -404,7 +406,11 @@ def test_get_spotify_client_returns_none_when_from_env_raises(monkeypatch) -> No
         assert ss.get_spotify_client() is None
 
 
-def test_sync_set_to_spotify_searches_and_updates_playlists(monkeypatch) -> None:
+def _created() -> ss.SyncOutcome:
+    return ss.SyncOutcome(True, created=True)
+
+
+def test_a_new_set_playlist_feeds_the_radio(monkeypatch) -> None:
     monkeypatch.setenv("SPOTIFY_RADIO_PLAYLIST_ID", "radio")
     sp = MagicMock()
     sp.search_track.side_effect = ["uri1", None, "uri2"]
@@ -418,16 +424,35 @@ def test_sync_set_to_spotify_searches_and_updates_playlists(monkeypatch) -> None
             ss, "update_spotify_radio_playlist", return_value=ss.SyncOutcome.success()
         ) as m_radio,
         patch.object(
-            ss,
-            "create_spotify_playlist_for_file",
-            return_value=ss.SyncOutcome.success(),
+            ss, "create_spotify_playlist_for_file", return_value=_created()
         ) as m_create,
     ):
         outcome = ss.sync_set_to_spotify(sp, "2024-01-01", tracks)
     assert outcome.ok is True
+    assert outcome.created is True
     assert sp.search_track.call_count == 3
-    m_radio.assert_called_once_with(sp, "radio", ["uri1", "uri2"])
     m_create.assert_called_once_with(sp, "2024-01-01", ["uri1", "uri2"])
+    m_radio.assert_called_once_with(sp, "radio", ["uri1", "uri2"])
+
+
+def test_a_refilled_set_playlist_leaves_the_radio_alone(monkeypatch) -> None:
+    """The set reached the radio when its playlist was made, not again."""
+    monkeypatch.setenv("SPOTIFY_RADIO_PLAYLIST_ID", "radio")
+    sp = MagicMock()
+    sp.search_track.return_value = "u1"
+    with (
+        patch.object(ss, "update_spotify_radio_playlist") as m_radio,
+        patch.object(
+            ss,
+            "create_spotify_playlist_for_file",
+            return_value=ss.SyncOutcome.success(),
+        ),
+    ):
+        outcome = ss.sync_set_to_spotify(
+            sp, "2024-01-01", [{"artist": "A", "title": "T"}]
+        )
+    assert outcome.ok is True
+    m_radio.assert_not_called()
 
 
 def test_sync_set_to_spotify_skips_tracks_missing_artist_or_title(monkeypatch) -> None:
@@ -442,39 +467,26 @@ def test_sync_set_to_spotify_skips_tracks_missing_artist_or_title(monkeypatch) -
     with (
         patch.object(
             ss, "update_spotify_radio_playlist", return_value=ss.SyncOutcome.success()
-        ) as m_radio,
+        ),
         patch.object(
-            ss,
-            "create_spotify_playlist_for_file",
-            return_value=ss.SyncOutcome.success(),
+            ss, "create_spotify_playlist_for_file", return_value=_created()
         ) as m_create,
     ):
         outcome = ss.sync_set_to_spotify(sp, "2024-01-01", tracks)
     assert outcome.ok is True
     sp.search_track.assert_called_once_with("A", "T")
-    m_radio.assert_called_once_with(sp, "radio", ["u1"])
     m_create.assert_called_once_with(sp, "2024-01-01", ["u1"])
 
 
-def test_sync_set_to_spotify_succeeds_when_no_spotify_matches(monkeypatch) -> None:
+def test_no_spotify_matches_creates_nothing_and_touches_no_radio(monkeypatch) -> None:
     monkeypatch.setenv("SPOTIFY_RADIO_PLAYLIST_ID", "radio")
     sp = MagicMock()
     sp.search_track.return_value = None
-    tracks = [{"artist": "A", "title": "T"}]
-    with (
-        patch.object(
-            ss, "update_spotify_radio_playlist", return_value=ss.SyncOutcome.success()
-        ) as m_radio,
-        patch.object(
-            ss,
-            "create_spotify_playlist_for_file",
-            return_value=ss.SyncOutcome.success(),
-        ) as m_create,
-    ):
-        outcome = ss.sync_set_to_spotify(sp, "2024-01-01", tracks)
+    outcome = ss.sync_set_to_spotify(sp, "2024-01-01", [{"artist": "A", "title": "T"}])
     assert outcome.ok is True
-    m_radio.assert_called_once_with(sp, "radio", [])
-    m_create.assert_called_once_with(sp, "2024-01-01", [])
+    assert outcome.created is False
+    sp.create_playlist.assert_not_called()
+    sp.add_tracks_to_specific_playlist.assert_not_called()
 
 
 def test_sync_set_to_spotify_returns_failure_when_internal_error(monkeypatch) -> None:
@@ -487,73 +499,33 @@ def test_sync_set_to_spotify_returns_failure_when_internal_error(monkeypatch) ->
     assert outcome.detail == "RuntimeError: api down"
 
 
-def test_sync_returns_failure_when_the_radio_update_breaks(monkeypatch) -> None:
-    """A partial sync is a failure the flow can count."""
+def test_a_radio_failure_after_creation_is_reported_as_created(monkeypatch) -> None:
+    """Counted, and the playlist still exists, so nothing will redo the radio."""
     monkeypatch.setenv("SPOTIFY_RADIO_PLAYLIST_ID", "radio")
     sp = MagicMock()
     sp.search_track.return_value = "u1"
-    sp.add_tracks_to_specific_playlist.side_effect = RuntimeError("token expired")
-    tracks = [{"artist": "A", "title": "T"}]
-    with patch.object(
-        ss, "create_spotify_playlist_for_file", return_value=ss.SyncOutcome.success()
+    with (
+        patch.object(
+            ss,
+            "update_spotify_radio_playlist",
+            return_value=ss.SyncOutcome(False, "token expired"),
+        ),
+        patch.object(ss, "create_spotify_playlist_for_file", return_value=_created()),
     ):
-        outcome = ss.sync_set_to_spotify(sp, "2024-01-01", tracks)
+        outcome = ss.sync_set_to_spotify(
+            sp, "2024-01-01", [{"artist": "A", "title": "T"}]
+        )
     assert outcome.ok is False
-    assert outcome.detail == "RuntimeError: token expired"
+    assert outcome.created is True
+    assert outcome.detail == "radio: token expired"
 
 
-def test_sync_set_to_spotify_passes_full_set_name_to_playlist_create(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("SPOTIFY_RADIO_PLAYLIST_ID", "radio")
-    sp = MagicMock()
-    sp.search_track.return_value = "u1"
-    full_name = "2024-03-15 MADjam"
-    tracks = [{"artist": "A", "title": "T"}]
-    with (
-        patch.object(
-            ss, "update_spotify_radio_playlist", return_value=ss.SyncOutcome.success()
-        ),
-        patch.object(
-            ss,
-            "create_spotify_playlist_for_file",
-            return_value=ss.SyncOutcome.success(),
-        ) as m_create,
-    ):
-        ss.sync_set_to_spotify(sp, full_name, tracks)
-    m_create.assert_called_once_with(sp, full_name, ["u1"])
-
-
-def test_sync_reads_the_radio_playlist_id_at_call_time(monkeypatch) -> None:
-    """Set after import — a module-level constant would have frozen None."""
-    monkeypatch.setenv("SPOTIFY_RADIO_PLAYLIST_ID", "set-later")
-    sp = MagicMock()
-    sp.search_track.return_value = "u1"
-    with (
-        patch.object(
-            ss, "update_spotify_radio_playlist", return_value=ss.SyncOutcome.success()
-        ) as m_radio,
-        patch.object(
-            ss,
-            "create_spotify_playlist_for_file",
-            return_value=ss.SyncOutcome.success(),
-        ),
-    ):
-        ss.sync_set_to_spotify(sp, "2024-01-01", [{"artist": "A", "title": "T"}])
-    m_radio.assert_called_once_with(sp, "set-later", ["u1"])
-
-
-def test_a_broken_per_set_playlist_is_visible_next_to_a_healthy_radio(
-    monkeypatch,
-) -> None:
-    """Two sibling operations, one outcome, both stages named."""
+def test_a_failed_set_playlist_does_not_touch_the_radio(monkeypatch) -> None:
     monkeypatch.setenv("SPOTIFY_RADIO_PLAYLIST_ID", "radio")
     sp = MagicMock()
     sp.search_track.return_value = "u1"
     with (
-        patch.object(
-            ss, "update_spotify_radio_playlist", return_value=ss.SyncOutcome.success()
-        ),
+        patch.object(ss, "update_spotify_radio_playlist") as m_radio,
         patch.object(
             ss,
             "create_spotify_playlist_for_file",
@@ -565,27 +537,19 @@ def test_a_broken_per_set_playlist_is_visible_next_to_a_healthy_radio(
         )
     assert outcome.ok is False
     assert outcome.detail == "boom"
+    m_radio.assert_not_called()
 
 
-def test_both_playlist_failures_reach_the_caller(monkeypatch) -> None:
-    """Two sibling operations, one outcome, neither detail dropped."""
-    monkeypatch.setenv("SPOTIFY_RADIO_PLAYLIST_ID", "radio")
+def test_sync_reads_the_radio_playlist_id_at_call_time(monkeypatch) -> None:
+    """Set after import — a module-level constant would have frozen None."""
+    monkeypatch.setenv("SPOTIFY_RADIO_PLAYLIST_ID", "set-later")
     sp = MagicMock()
     sp.search_track.return_value = "u1"
     with (
         patch.object(
-            ss,
-            "update_spotify_radio_playlist",
-            return_value=ss.SyncOutcome(False, "radio broke"),
-        ),
-        patch.object(
-            ss,
-            "create_spotify_playlist_for_file",
-            return_value=ss.SyncOutcome(False, "per-set broke"),
-        ),
+            ss, "update_spotify_radio_playlist", return_value=ss.SyncOutcome.success()
+        ) as m_radio,
+        patch.object(ss, "create_spotify_playlist_for_file", return_value=_created()),
     ):
-        outcome = ss.sync_set_to_spotify(
-            sp, "2024-01-01", [{"artist": "A", "title": "T"}]
-        )
-    assert outcome.ok is False
-    assert outcome.detail == "radio broke; per-set broke"
+        ss.sync_set_to_spotify(sp, "2024-01-01", [{"artist": "A", "title": "T"}])
+    m_radio.assert_called_once_with(sp, "set-later", ["u1"])
