@@ -44,7 +44,7 @@ source = ["src"]
 
 [tool.coverage.report]
 # TEST-019: CI fails below this floor. Raise it as coverage rises; lowering it is a reviewed edit.
-fail_under = 81
+fail_under = 82
 show_missing = true
 skip_empty = true
 ignore_errors = true

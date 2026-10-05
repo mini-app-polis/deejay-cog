@@ -20,6 +20,7 @@ from deejay_cog.ingest_to_api import (
     build_ingest_payload,
     read_tracks_from_sheet,
 )
+from deejay_cog.repair import repair_recent_sets, set_name
 from deejay_cog.spotify_sync import (
     get_spotify_client,
     missing_spotify_credentials,
@@ -80,6 +81,17 @@ class CsvPipelineStats:
     #: deleted. The CSV is FAILED_ and will be retried, but the leftover
     #: sheet makes the retry see a duplicate.
     rollback_failed: int = 0
+    #: Repair pass (repair.py): sets put back in the API, set playlists
+    #: recreated, jobs that failed (``(set, what)``), and jobs left for a
+    #: later run by the per-run cap.
+    repaired_ingest: list[str] = field(default_factory=list)
+    repaired_playlists: list[str] = field(default_factory=list)
+    repair_failures: list[tuple[str, str]] = field(default_factory=list)
+    repairs_pending: int = 0
+
+    @property
+    def repair_failed(self) -> int:
+        return len(self.repair_failures)
 
 
 def _real_issue(stats: CsvPipelineStats) -> bool:
@@ -106,6 +118,7 @@ def _real_issue(stats: CsvPipelineStats) -> bool:
         or stats.duplicate_check_failed > 0
         or stats.post_import_failed > 0
         or stats.rollback_failed > 0
+        or stats.repair_failed > 0
     )
 
 
@@ -141,6 +154,7 @@ _ISSUE_FIELDS: tuple[tuple[str, str | None], ...] = (
         "sheet left in the year folder after a failed ingest — delete it by "
         "hand, or the retry will flag the CSV possible_duplicate_",
     ),
+    ("repair_failed", "tried again next run"),
 )
 
 
@@ -195,6 +209,8 @@ def _common_eval(stats: CsvPipelineStats) -> dict:
         "duplicate_check_failed": stats.duplicate_check_failed,
         "post_import_failed": stats.post_import_failed,
         "rollback_failed": stats.rollback_failed,
+        "repair_failed": stats.repair_failed,
+        "repairs_pending": stats.repairs_pending,
     }
 
 
@@ -910,40 +926,57 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
         stats.skipped_bad_filename,
     )
 
-    # Always sync Spotify playlists regardless of whether new files were processed
+    # One Spotify client for the repair pass and the playlist snapshot.
+    sp = None
     missing_credentials = missing_spotify_credentials()
-    if not missing_credentials:
+    if missing_credentials:
+        logger.warning(
+            "Spotify credentials incomplete (%s not set) — "
+            "playlists not repaired, snapshot not pushed",
+            ", ".join(missing_credentials),
+        )
+    else:
+        sp = get_spotify_client()
+        if sp is None:
+            logger.error(
+                "❌ Spotify client could not be initialized — "
+                "playlists not repaired, snapshot not pushed",
+            )
+            stats.spotify_failed += 1
+
+    # Finish what earlier runs left undone: recent sets missing from the
+    # API or without their playlist (repair.py). Before the snapshot, so a
+    # recreated playlist is in it. Sets this run imported are skipped —
+    # their jobs ran minutes ago, and a failure there is next run's repair.
+    repair = repair_recent_sets(
+        g,
+        sp=sp,
+        skip={set_name(label) for label in stats.imported_set_labels},
+    )
+    stats.repaired_ingest = repair.ingested
+    stats.repaired_playlists = repair.published
+    stats.repair_failures = repair.failed
+    stats.repairs_pending = repair.pending
+
+    # The playlist snapshot goes every run, new files or not.
+    if sp is not None:
         try:
-            sp = get_spotify_client()
-            if sp is None:
-                logger.error(
-                    "❌ Spotify client could not be initialized — "
-                    "playlist snapshot not pushed",
+            push = push_playlists_to_api(sp)
+            if push is None:
+                # A skip is not a push of None playlists.
+                logger.warning(
+                    "⚠️ Spotify playlist push skipped — KAIANO_API_BASE_URL not set",
                 )
-                stats.spotify_failed += 1
             else:
-                push = push_playlists_to_api(sp)
-                if push is None:
-                    # A skip is not a push of None playlists.
-                    logger.warning(
-                        "⚠️ Spotify playlist push skipped — KAIANO_API_BASE_URL not set",
-                    )
-                else:
-                    upserted, unchanged = push
-                    logger.info(
-                        "✅ Spotify playlist sync complete: %s upserted, %s unchanged",
-                        upserted,
-                        unchanged,
-                    )
+                upserted, unchanged = push
+                logger.info(
+                    "✅ Spotify playlist sync complete: %s upserted, %s unchanged",
+                    upserted,
+                    unchanged,
+                )
         except Exception as e:
             logger.error("❌ Spotify playlist sync failed: %s", e)
             stats.spotify_failed += 1
-    else:
-        logger.warning(
-            "Spotify credentials incomplete (%s not set) — "
-            "playlist snapshot not pushed",
-            ", ".join(missing_credentials),
-        )
 
     # Whether this run had anything in front of it at all. A scheduled
     # sweep over an empty folder is an idle tick; a sweep that saw files
@@ -974,12 +1007,23 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
         report.created("dj set", label)
     report.count("tracks", stats.total_tracks)
     report.count("attempted", stats.sets_attempted)
+    for name in stats.repaired_ingest:
+        report.created("dj set in the API (repaired)", name)
+    for name in stats.repaired_playlists:
+        report.created("spotify playlist (repaired)", name)
+    if stats.repairs_pending:
+        report.count("repairs_pending", stats.repairs_pending)
     if stats.duplicate_csv:
         report.note("duplicate_csv")
     if stats.skipped_bad_filename:
         report.note("unrecognized_filename")
 
     for reason, count, note in _issue_counts(stats):
+        if reason == "repair_failed":
+            # Named, because "a repair failed" is no use without which.
+            for name, what in stats.repair_failures:
+                report.issue(reason, name, detail=what)
+            continue
         for index in range(count):
             # The note rides on the first one only: it explains the
             # reason, not the instance, and repeating it once per count

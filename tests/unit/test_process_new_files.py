@@ -3,10 +3,20 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 from mini_app_polis.api.contract import IngestSet
 
 import deejay_cog.process_new_files as process_new_files
+from deejay_cog.repair import RepairResult
 from deejay_cog.spotify_sync import SyncOutcome
+
+
+@pytest.fixture(autouse=True)
+def _no_repair_pass(monkeypatch):
+    """The repair pass has its own tests; these are about the sweep."""
+    monkeypatch.setattr(
+        process_new_files, "repair_recent_sets", lambda *_a, **_k: RepairResult()
+    )
 
 
 def test_main_posts_single_success_finding_when_llm_and_api_configured(

@@ -33,8 +33,13 @@ DEEJAY_SET_COLLECTION_JSON_PATH = os.getenv(
     "v1/deejay-sets/deejay_set_collection.json",
 )
 
-# Live history timezone (ingest_live_history)
+# Live history timezone (ingest_live_history), and "today" for the repair pass
 TIMEZONE = os.getenv("TIMEZONE", "America/Chicago")
+
+# Repair pass (repair.py): how far back sets are checked for a missing API
+# set or Spotify playlist, and how many repairs one run may make.
+REPAIR_LOOKBACK_DAYS = int(os.getenv("REPAIR_LOOKBACK_DAYS", "183"))
+REPAIR_MAX_PER_RUN = int(os.getenv("REPAIR_MAX_PER_RUN", "3"))
 
 # SPOTIPY_REDIRECT_URI and LOGGING_LEVEL are read by common-python-utils
 # (mini_app_polis.config, mini_app_polis.logger), not here.
