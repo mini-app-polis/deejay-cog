@@ -1,3 +1,16 @@
+# [2.4.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.3.7...v2.4.0) (2026-10-05)
+
+
+### Bug Fixes
+
+* clean up the CSV download directory with a context manager (PY-014) ([f812c52](https://github.com/mini-app-polis/deejay-cog/commit/f812c5247f84d701d89721ae917615ebb12db136))
+* **deps:** require common 5.20 for list_sets and paged playlist lookup ([094b10d](https://github.com/mini-app-polis/deejay-cog/commit/094b10dd1e41c13a5d61fa42b422a992b01bb0f6))
+
+
+### Features
+
+* **pipeline:** repair recent sets missing from the API or Spotify; feed the radio only on playlist creation ([60fb3d5](https://github.com/mini-app-polis/deejay-cog/commit/60fb3d57c146765d8275e3483dca5a00a01aca9f))
+
 ## [2.3.7](https://github.com/mini-app-polis/deejay-cog/compare/v2.3.6...v2.3.7) (2026-10-05)
 
 
