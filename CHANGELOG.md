@@ -1,3 +1,10 @@
+# [2.6.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.5.0...v2.6.0) (2026-10-06)
+
+
+### Features
+
+* **worker:** log per-record timing (working vs waiting, by service) ([468ace6](https://github.com/mini-app-polis/deejay-cog/commit/468ace623a1b3ce1bd44bf8238202b1b0b48c045))
+
 # [2.5.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.4.3...v2.5.0) (2026-10-06)
 
 
