@@ -1,3 +1,15 @@
+# [2.5.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.4.3...v2.5.0) (2026-10-06)
+
+
+### Bug Fixes
+
+* **deps:** require common 5.21 for per-invocation settings refresh ([8284297](https://github.com/mini-app-polis/deejay-cog/commit/8284297e0321aaf59e8326d1ce6c01daefa1081d))
+
+
+### Features
+
+* **worker:** pick up changed settings at every invocation ([71335f5](https://github.com/mini-app-polis/deejay-cog/commit/71335f5ab86823892af1a84eb6074f2d3b9e0880))
+
 ## [2.4.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.4.2...v2.4.3) (2026-10-06)
 
 
