@@ -12,8 +12,11 @@ declared in `mini-app-polis/infra` (`cogs.tf` and `modules/cog-worker`):
   are left unset.
 - **Plain settings** are set on the function's environment.
 
-**Locally**, run under `doppler run` or put values in `.env`, which
-`config.py` loads. See `.env.example`.
+**Locally**, everything comes from Doppler's shared `dev` config: run
+`doppler setup` once per clone (it reads `doppler.yaml`), then
+`doppler run -- …`. No `.env` file is read, and local runs never use `prd`.
+`.env.example` lists the names; `scripts/check_doppler_keys.py` checks that
+`dev` holds every one.
 
 ---
 

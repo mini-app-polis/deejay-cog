@@ -1,8 +1,8 @@
 import os
 
-from dotenv import load_dotenv
-
-load_dotenv()
+# Settings come from the process environment only: Doppler locally
+# (`doppler run -- …`), SSM and the function environment on Lambda. No .env
+# file is read.
 
 # Google Drive folder IDs
 CSV_SOURCE_FOLDER_ID = os.getenv(

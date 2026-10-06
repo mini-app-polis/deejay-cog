@@ -91,41 +91,45 @@ Spotify variables (`SPOTIPY_*`, `SPOTIFY_RADIO_PLAYLIST_ID`) are optional; if in
 
 ## Running locally with uv (DOC-013)
 
-**Prerequisites:** Python ≥ 3.11, [uv](https://docs.astral.sh/uv/).
+**Prerequisites:** Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), and the
+[Doppler CLI](https://docs.doppler.com/docs/install-cli). Secrets come from
+Doppler's shared `dev` config — nothing reads a `.env` file, and local runs
+never use `prd`.
 
 ```bash
+brew install gnupg dopplerhq/cli/doppler   # once per machine
+doppler login                              # once per machine
+
 git clone git@github.com:mini-app-polis/deejay-cog.git
 cd deejay-cog
+doppler setup                              # reads doppler.yaml: mini-app-polis-ecosystem / dev
 uv sync --all-extras
 uv run pre-commit install
 uv run pre-commit run --all-files
+uv run python scripts/check_doppler_keys.py   # every .env.example name is in dev
 ```
+
+Anything that needs secrets runs under `doppler run -- …`; the tests do not.
 
 **Production flows** — the worker runs them on Lambda; locally, run one directly:
 
 ```bash
-uv run python -u src/deejay_cog/process_new_files.py
-uv run python -u src/deejay_cog/ingest_live_history.py
+doppler run -- uv run python -u src/deejay_cog/process_new_files.py
+doppler run -- uv run python -u src/deejay_cog/ingest_live_history.py
 ```
 
 **Local-only / WIP flows** — run modules directly. These call `post_run_finding(..., production_only=False)`, so their run reports are logged and never sent, whatever is set in your shell:
 
 ```bash
-uv run python -m deejay_cog.generate_summaries
-uv run python -m deejay_cog.update_deejay_set_collection
-uv run python -m deejay_cog.retag_music   # requires ffmpeg + fpcalc on PATH
-```
-
-**One-off CSV processing:**
-
-```bash
-uv run python -u src/deejay_cog/process_new_files.py
+doppler run -- uv run python -m deejay_cog.generate_summaries
+doppler run -- uv run python -m deejay_cog.update_deejay_set_collection
+doppler run -- uv run python -m deejay_cog.retag_music   # requires ffmpeg + fpcalc on PATH
 ```
 
 **deduplicate_summary** (spreadsheet IDs as arguments):
 
 ```bash
-uv run python -u src/deejay_cog/deduplicate_summary.py <spreadsheet_id> [spreadsheet_id ...]
+doppler run -- uv run python -u src/deejay_cog/deduplicate_summary.py <spreadsheet_id> [spreadsheet_id ...]
 ```
 
 ---

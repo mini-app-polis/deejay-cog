@@ -637,7 +637,6 @@ dependencies = [
     { name = "musicbrainzngs" },
     { name = "pyacoustid" },
     { name = "pydantic" },
-    { name = "python-dotenv" },
     { name = "pytz" },
     { name = "sentry-sdk" },
 ]
@@ -663,7 +662,6 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.6,<3.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.2" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
-    { name = "python-dotenv" },
     { name = "pytz" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
