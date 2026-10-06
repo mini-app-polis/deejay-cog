@@ -39,6 +39,7 @@ from collections.abc import Callable
 from typing import Any
 
 import sentry_sdk
+from mini_app_polis import load_secrets
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.environment import current_environment
 
@@ -169,6 +170,23 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     makes this return shape mean something.
     """
     records = event.get("Records", []) if isinstance(event, dict) else []
+
+    # Settings as Doppler holds them now, not as they were at cold start: a
+    # warm container otherwise ran on stale secrets and a stale
+    # LOGGING_LEVEL until the next deploy. Cheap — one GetParameters call —
+    # and a failed SSM read keeps the values already loaded. A required
+    # parameter that has gone missing fails every record, so they come back
+    # and the dead-letter queue sees them, rather than running half-configured.
+    try:
+        load_secrets(refresh=True)
+    except Exception:  # noqa: BLE001 — nothing can run without its settings
+        log.exception("worker: could not refresh settings from SSM")
+        return {
+            "batchItemFailures": [
+                {"itemIdentifier": str(r.get("messageId") or "")} for r in records
+            ]
+        }
+
     failures: list[dict[str, str]] = []
 
     for record in records:
