@@ -1,3 +1,10 @@
+## [2.4.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.4.2...v2.4.3) (2026-10-06)
+
+
+### Bug Fixes
+
+* run locally under Doppler's dev config; drop .env loading ([ccbbd50](https://github.com/mini-app-polis/deejay-cog/commit/ccbbd509c454b0d7b3d66692e273df6a4d307291))
+
 ## [2.4.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.4.1...v2.4.2) (2026-10-06)
 
 
