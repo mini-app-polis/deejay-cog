@@ -1,3 +1,10 @@
+## [2.4.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.4.1...v2.4.2) (2026-10-06)
+
+
+### Bug Fixes
+
+* **deps:** bump sentry-sdk ([bafe122](https://github.com/mini-app-polis/deejay-cog/commit/bafe122dd957cc757e65f9be493b6b53d978f799))
+
 ## [2.4.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.4.0...v2.4.1) (2026-10-05)
 
 
