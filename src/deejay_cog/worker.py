@@ -39,7 +39,7 @@ from collections.abc import Callable
 from typing import Any
 
 import sentry_sdk
-from mini_app_polis import load_secrets
+from mini_app_polis import load_secrets, timing
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.environment import current_environment
 
@@ -160,6 +160,14 @@ def _flow_name_for(body: str) -> str:
         return "deejay-cog"
 
 
+def _mode_label(body: str) -> str:
+    """The message's mode, for the timing line. Never raises."""
+    try:
+        return _mode_of(body)
+    except Exception:  # noqa: BLE001 — a label must not fail the run
+        return "unreadable"
+
+
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Run each record's flow, and name the records that must come back.
 
@@ -194,35 +202,47 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         body = record.get("body") or ""
         attempt = (record.get("attributes") or {}).get("ApproximateReceiveCount", "?")
 
-        try:
-            # A run that outlives the function's timeout is killed outright —
-            # no report, and the message comes back with nobody told why.
-            # This stops it a margin early so the failure is the ordinary
-            # kind (PIPE-020).
-            with deadline(context):
-                process_message(body, run_id=message_id)
-        except UnprocessableMessage as exc:
-            log.error("worker: unprocessable message (attempt %s): %s", attempt, exc)
-            # Once, on the first receive. Every later receive fails the same
-            # way, and where it ends up — the dead-letter queue — has an
-            # alarm of its own; five reports of one bad message is noise.
-            if attempt in ("1", "?"):
-                _report_failure(
-                    "deejay-cog", "an unprocessable message", exc, message_id
+        # One timing line per record: how much of the run was waiting,
+        # and on what (mini_app_polis.timing).
+        with timing.invocation(
+            cog="deejay", mode=_mode_label(body), attempt=attempt
+        ) as timed:
+            try:
+                # A run that outlives the function's timeout is killed outright —
+                # no report, and the message comes back with nobody told why.
+                # This stops it a margin early so the failure is the ordinary
+                # kind (PIPE-020).
+                with deadline(context):
+                    process_message(body, run_id=message_id)
+            except UnprocessableMessage as exc:
+                timed.label(outcome="unprocessable")
+                log.error(
+                    "worker: unprocessable message (attempt %s): %s", attempt, exc
                 )
-            failures.append({"itemIdentifier": message_id})
-        except RunOutOfTime as exc:
-            # A BaseException, so that no flow's ``except Exception``
-            # swallows it; caught here and nowhere else. The sweep stopped
-            # mid-way, and the redelivery picks up whatever it left in
-            # the drop zone.
-            log.error("worker: run stopped at the deadline (attempt %s)", attempt)
-            _report_failure(_flow_name_for(body), "a queued run", exc, message_id)
-            failures.append({"itemIdentifier": message_id})
-        except Exception as exc:  # noqa: BLE001 — every failure is a retry
-            log.exception("worker: run failed (attempt %s)", attempt)
-            _report_failure(_flow_name_for(body), "a queued run", exc, message_id)
-            failures.append({"itemIdentifier": message_id})
+                # Once, on the first receive. Every later receive fails the same
+                # way, and where it ends up — the dead-letter queue — has an
+                # alarm of its own; five reports of one bad message is noise.
+                if attempt in ("1", "?"):
+                    _report_failure(
+                        "deejay-cog", "an unprocessable message", exc, message_id
+                    )
+                failures.append({"itemIdentifier": message_id})
+            except RunOutOfTime as exc:
+                timed.label(outcome="deadline")
+                # A BaseException, so that no flow's ``except Exception``
+                # swallows it; caught here and nowhere else. The sweep stopped
+                # mid-way, and the redelivery picks up whatever it left in
+                # the drop zone.
+                log.error("worker: run stopped at the deadline (attempt %s)", attempt)
+                _report_failure(_flow_name_for(body), "a queued run", exc, message_id)
+                failures.append({"itemIdentifier": message_id})
+            except Exception as exc:  # noqa: BLE001 — every failure is a retry
+                timed.label(outcome="failed")
+                log.exception("worker: run failed (attempt %s)", attempt)
+                _report_failure(_flow_name_for(body), "a queued run", exc, message_id)
+                failures.append({"itemIdentifier": message_id})
+            else:
+                timed.label(outcome="ok")
 
     if failures:
         log.warning(
