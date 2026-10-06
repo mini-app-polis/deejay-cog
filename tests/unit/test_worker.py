@@ -263,3 +263,34 @@ def test_settings_that_cannot_load_send_every_record_back(
     }
     for fake in flows.values():
         fake.assert_not_called()
+
+
+def _timing_lines(out: str) -> list[dict]:
+    return [json.loads(x)["timing"] for x in out.splitlines() if '"timing"' in x]
+
+
+def test_each_record_writes_one_timing_line(
+    flows: dict[str, MagicMock],
+    reported: MagicMock,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    flows["process-new-files"].side_effect = [None, RuntimeError("Drive is down")]
+
+    worker.lambda_handler(_event(_body(), _body(), "not json"), None)
+
+    labels = [line["labels"] for line in _timing_lines(capsys.readouterr().out)]
+    assert labels == [
+        {"cog": "deejay", "mode": "process-new-files", "attempt": "1", "outcome": "ok"},
+        {
+            "cog": "deejay",
+            "mode": "process-new-files",
+            "attempt": "1",
+            "outcome": "failed",
+        },
+        {
+            "cog": "deejay",
+            "mode": "unreadable",
+            "attempt": "1",
+            "outcome": "unprocessable",
+        },
+    ]
