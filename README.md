@@ -78,7 +78,7 @@ Required for Drive/Sheets and logging:
 
 Layout and behavior keys live in **common-python-utils** / `config` (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
 
-API (production — on Lambda, secrets are loaded from SSM Parameter Store at cold start, synced from Doppler; the names are listed in mini-app-polis/infra `cogs.tf`):
+API (production — on Lambda, secrets come from SSM Parameter Store, synced from Doppler and read again at every invocation, so a change applies to the next run; the names are listed in mini-app-polis/infra `cogs.tf`):
 
 | Variable | Description |
 |----------|-------------|
