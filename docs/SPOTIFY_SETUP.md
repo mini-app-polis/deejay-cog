@@ -16,11 +16,12 @@ this pipeline.
 
 ---
 
-## 2. Set up your local `.env`
+## 2. Put the app credentials in Doppler
 
-Add the following to your local `.env` (do not commit this file):
+Set these in Doppler, in both the `dev` and `prd` configs of
+`mini-app-polis-ecosystem`:
 
-```env
+```
 SPOTIPY_CLIENT_ID=your-client-id
 SPOTIPY_CLIENT_SECRET=your-client-secret
 SPOTIPY_REDIRECT_URI=http://127.0.0.1:8888/callback
@@ -33,7 +34,7 @@ SPOTIPY_REDIRECT_URI=http://127.0.0.1:8888/callback
 Run the helper script:
 
 ```bash
-uv run python scripts/get_spotify_refresh_token.py
+doppler run -- uv run python scripts/get_spotify_refresh_token.py
 ```
 
 This opens a browser window asking you to log in and authorize the app.
@@ -68,7 +69,7 @@ the Lambda loads them at cold start (all optional — declared in
 `SPOTIPY_REDIRECT_URI` is set on the function's environment in the same
 file (`http://127.0.0.1:8888/callback`).
 
-**Locally.** Put the same names in `.env`, or run under `doppler run`.
+**Locally.** The same names in Doppler's `dev` config, used under `doppler run`.
 
 The full playlist catalog is pushed to api-kaianolevine-com
 (`POST /v1/spotify/playlists`) whenever an API base URL resolves; see

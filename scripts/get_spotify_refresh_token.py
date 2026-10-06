@@ -11,22 +11,19 @@ before then. It always signs in afresh: it never reads or writes spotipy's
 token cache, which would otherwise hand back the old, possibly revoked token.
 
 Usage:
-    uv run python scripts/get_spotify_refresh_token.py
+    doppler run -- uv run python scripts/get_spotify_refresh_token.py
 
 Prerequisites:
-    - SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, and SPOTIPY_REDIRECT_URI
-      must be set in your local .env file.
+    - SPOTIPY_CLIENT_ID and SPOTIPY_CLIENT_SECRET in Doppler's dev config
+      (the same Spotify app as production); SPOTIPY_REDIRECT_URI optional.
     - The redirect URI must be registered in your Spotify Developer Dashboard
       app settings (https://developer.spotify.com/dashboard).
 """
 
 import os
 
-from dotenv import load_dotenv
 from spotipy.cache_handler import MemoryCacheHandler
 from spotipy.oauth2 import SpotifyOAuth
-
-load_dotenv()
 
 client_id = os.getenv("SPOTIPY_CLIENT_ID")
 client_secret = os.getenv("SPOTIPY_CLIENT_SECRET")
@@ -34,7 +31,8 @@ redirect_uri = os.getenv("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8888/callback
 
 if not all([client_id, client_secret]):
     print(
-        "❌ SPOTIPY_CLIENT_ID and SPOTIPY_CLIENT_SECRET must be set in your .env file."
+        "❌ SPOTIPY_CLIENT_ID and SPOTIPY_CLIENT_SECRET are not set. Run this under "
+        "`doppler run -- uv run python scripts/get_spotify_refresh_token.py`."
     )
     raise SystemExit(1)
 

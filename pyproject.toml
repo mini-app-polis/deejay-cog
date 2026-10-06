@@ -10,7 +10,6 @@ dependencies = [
     # Request models are pydantic; ValidationError is caught where a set the
     # API would refuse is counted as a failure rather than sent.
     "pydantic>=2.6,<3.0",
-    "python-dotenv",
     "pytz",
     "sentry-sdk",
     "music-tag>=0.4.3",
