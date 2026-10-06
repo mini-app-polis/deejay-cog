@@ -1,3 +1,10 @@
+## [2.6.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.6.0...v2.6.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* **deps:** pick up common 5.22.1 (throttle-aware timing) ([ffdb1c4](https://github.com/mini-app-polis/deejay-cog/commit/ffdb1c4aa714b53a04dd28f60766fdecf0855271))
+
 # [2.6.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.5.0...v2.6.0) (2026-10-06)
 
 
