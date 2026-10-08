@@ -76,9 +76,11 @@ FLOW_NAMES = {
 # invocations, so this runs once per cold start; initialising per call
 # would pay the setup repeatedly and register duplicate integrations.
 sentry_sdk.init(
-    dsn=os.getenv("SENTRY_DSN"),
+    dsn=os.getenv("SENTRY_DSN_COGS"),
     environment=current_environment().value,
 )
+# Shared cogs project: the tag is what tells this cog's events apart.
+sentry_sdk.get_global_scope().set_tag("service", "deejay-cog")
 
 
 class UnprocessableMessage(RuntimeError):
