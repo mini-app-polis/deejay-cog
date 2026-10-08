@@ -1,3 +1,10 @@
+## [2.6.4](https://github.com/mini-app-polis/deejay-cog/compare/v2.6.3...v2.6.4) (2026-10-08)
+
+
+### Bug Fixes
+
+* **observability:** read Sentry DSN from SENTRY_DSN_COGS and tag service ([f8341b1](https://github.com/mini-app-polis/deejay-cog/commit/f8341b101734a165774a4aac607426624c8f0966))
+
 ## [2.6.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.6.2...v2.6.3) (2026-10-08)
 
 
