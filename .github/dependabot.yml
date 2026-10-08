@@ -17,7 +17,10 @@
 # unrelated ones:
 #   - `commons`: the fleet's own shared packages, every update type,
 #     majors included. We always want the latest commons, so they are
-#     exempt from the cooldown below and land the day they publish.
+#     exempt from the cooldown below. A commons release does not wait for
+#     Sunday: common-python-utils and identity trigger commons-update.yml
+#     in mini-app-polis/.github when they publish, which bumps every
+#     consumer the same day. This group is the weekly backstop.
 #   - `majors`: every third-party major in one pull request. Majors are
 #     what break tests; keeping them together and apart from routine bumps
 #     means routine bumps never wait on a migration. If one major is hard,
@@ -27,10 +30,9 @@
 # Dependabot puts a dependency in the first group that matches, which is
 # why `commons` is listed first.
 #
-# The schedule is daily so commons are picked up immediately; the
-# cooldown holds third-party releases until they are a week old, so the
-# daily run does not churn on every fresh publish and a release that gets
-# yanked in its first days never reaches us.
+# Dependabot checks once a week, on Sunday. The cooldown holds third-party
+# releases until they are a week old, so a release that gets yanked in its
+# first days never reaches us.
 #
 # GitHub Actions stay in their own pull request so they keep the
 # `ci(deps)` prefix, which cuts no release.
@@ -57,7 +59,8 @@ updates:
     directory: "/"
     target-branch: "dev"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "sunday"
     cooldown:
       default-days: 7
       exclude: ["miniapppolis-*"]
@@ -80,7 +83,7 @@ updates:
     target-branch: "dev"
     schedule:
       interval: "weekly"
-      day: "monday"
+      day: "sunday"
     open-pull-requests-limit: 5
     groups:
       actions:
