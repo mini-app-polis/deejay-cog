@@ -13,7 +13,7 @@ declared in `mini-app-polis/infra` (`cogs.tf` and `modules/cog-worker`):
   the sync has run — no deploy or cold start. Required ones fail the run
   when missing; optional ones are left unset, and one deleted from Doppler
   is unset at the next run. If SSM cannot be reached on a refresh, the
-  values already loaded are kept. Only `SENTRY_DSN`, read once at import,
+  values already loaded are kept. Only `SENTRY_DSN_COGS`, read once at import,
   still needs a cold start.
 - **Plain settings** are set on the function's environment.
 
@@ -81,7 +81,7 @@ not counted as a failure).
 
 | Variable | Production source | Required | Description |
 |----------|-------------------|----------|-------------|
-| `SENTRY_DSN` | SSM (optional) | No | Sentry DSN, initialised once per cold start in `worker.py` — the one setting a change to which needs a cold start. |
+| `SENTRY_DSN_COGS` | SSM (optional) | No | Sentry DSN, initialised once per cold start in `worker.py` — the one setting a change to which needs a cold start. |
 | `LOGGING_LEVEL` | SSM (optional) | No | Log level for the fleet's logger (`DEBUG`, `INFO`, …). Defaults to `INFO`. Re-applied at every invocation, so setting it in Doppler `prd` takes effect from the next run; an unrecognised value is logged and ignored. Credential-bearing libraries stay at INFO at any level. |
 
 ---
