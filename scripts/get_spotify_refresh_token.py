@@ -1,9 +1,11 @@
 """
 Local utility to obtain a Spotify OAuth refresh token.
 
-Run it locally, sign in to Spotify in the browser it opens, and store the
-printed refresh token as SPOTIPY_REFRESH_TOKEN in Doppler (which syncs it to
-the Lambda's SSM parameters).
+Run it locally and sign in to Spotify in the browser it opens. It writes
+the new token to Doppler's prd config itself, as SPOTIPY_REFRESH_TOKEN with
+the date in SPOTIPY_REFRESH_TOKEN_ISSUED_AT, through your `doppler login`;
+the prd sync carries it to the Lambda's SSM parameters. Nothing to copy.
+If that write fails it prints the token instead, to store by hand.
 
 Spotify refresh tokens expire six months after sign-in (enforced from
 2026-07-20), and refreshing does not extend them, so this has to be run again
@@ -20,10 +22,17 @@ Prerequisites:
       app settings (https://developer.spotify.com/dashboard).
 """
 
+import datetime as dt
 import os
+from pathlib import Path
 
+from mini_app_polis.doppler import DopplerError, doppler_project, set_secrets_with_cli
 from spotipy.cache_handler import MemoryCacheHandler
 from spotipy.oauth2 import SpotifyOAuth
+
+#: The config production reads. Written on purpose: renewing the token is the
+#: one local action that exists to change production.
+PRD_CONFIG = "prd"
 
 client_id = os.getenv("SPOTIPY_CLIENT_ID")
 client_secret = os.getenv("SPOTIPY_CLIENT_SECRET")
@@ -50,12 +59,34 @@ print(f"Opening browser for Spotify authorization (redirect URI: {redirect_uri})
 code = sp_oauth.get_auth_response()
 token_info = sp_oauth.get_access_token(code, as_dict=True, check_cache=False)
 
-if token_info and token_info.get("refresh_token"):
-    print("\n✅ REFRESH TOKEN:", token_info["refresh_token"])
-    print(
-        "\nStore this as SPOTIPY_REFRESH_TOKEN in Doppler. It expires six months "
-        "from now — renew before then."
-    )
-else:
+if not (token_info and token_info.get("refresh_token")):
     print("❌ Failed to retrieve token. Check your credentials and redirect URI.")
     raise SystemExit(1)
+
+refresh_token = token_info["refresh_token"]
+issued_at = dt.date.today().isoformat()
+try:
+    project = doppler_project(
+        (Path(__file__).resolve().parent.parent / "doppler.yaml").read_text()
+    )
+    set_secrets_with_cli(
+        {
+            "SPOTIPY_REFRESH_TOKEN": refresh_token,
+            "SPOTIPY_REFRESH_TOKEN_ISSUED_AT": issued_at,
+        },
+        project=project,
+        config=PRD_CONFIG,
+    )
+except DopplerError as exc:
+    print(f"\n⚠️  Could not write to Doppler ({exc}).")
+    print("✅ REFRESH TOKEN:", refresh_token)
+    print(
+        f"\nStore it as SPOTIPY_REFRESH_TOKEN in Doppler {PRD_CONFIG}, and "
+        f"SPOTIPY_REFRESH_TOKEN_ISSUED_AT={issued_at}."
+    )
+else:
+    print(
+        f"\n✅ Wrote SPOTIPY_REFRESH_TOKEN and SPOTIPY_REFRESH_TOKEN_ISSUED_AT="
+        f"{issued_at} to Doppler {project}/{PRD_CONFIG}."
+    )
+print("It expires six months from now — renew before then.")
