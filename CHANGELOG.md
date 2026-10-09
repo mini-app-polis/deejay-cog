@@ -1,3 +1,10 @@
+# [2.7.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.6.4...v2.7.0) (2026-10-09)
+
+
+### Features
+
+* **spotify:** write the renewed refresh token to Doppler prd ([9b7311e](https://github.com/mini-app-polis/deejay-cog/commit/9b7311e094818f62ff76fb21811d9d25235b0f1f))
+
 ## [2.6.4](https://github.com/mini-app-polis/deejay-cog/compare/v2.6.3...v2.6.4) (2026-10-08)
 
 
