@@ -77,7 +77,7 @@ try:
         project=project,
         config=PRD_CONFIG,
     )
-except DopplerError as exc:
+except (DopplerError, OSError) as exc:
     print(f"\n⚠️  Could not write to Doppler ({exc}).")
     print("✅ REFRESH TOKEN:", refresh_token)
     print(
