@@ -1,3 +1,11 @@
+## [2.7.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.7.0...v2.7.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 5.24.1 ([c673d3e](https://github.com/mini-app-polis/deejay-cog/commit/c673d3e891a18b4bf968f48f6fa97fbbc71cda81))
+* **spotify:** print the token when doppler.yaml cannot be read ([d5e1019](https://github.com/mini-app-polis/deejay-cog/commit/d5e1019317820ffadac8bc104e3d5a8c25ac5fb1))
+
 # [2.7.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.6.4...v2.7.0) (2026-10-09)
 
 
