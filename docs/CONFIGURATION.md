@@ -20,8 +20,8 @@ declared in `mini-app-polis/infra` (`cogs.tf` and `modules/cog-worker`):
 **Locally**, everything comes from Doppler's shared `dev` config: run
 `doppler setup` once per clone (it reads `doppler.yaml`), then
 `doppler run -- …`. No `.env` file is read, and local runs never use `prd`.
-`.env.example` lists the names; `scripts/check_doppler_keys.py` checks that
-`dev` holds every one.
+`.env.example` lists the names; `uv run check-doppler-keys` (from
+miniapppolis-common-utils) checks that `dev` holds every one.
 
 ---
 
