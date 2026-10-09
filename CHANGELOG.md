@@ -1,3 +1,15 @@
+# [2.8.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.7.1...v2.8.0) (2026-10-09)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 5.25.0 ([d5e6cb6](https://github.com/mini-app-polis/deejay-cog/commit/d5e6cb6a419729614a635c2039aff127a014283f))
+
+
+### Features
+
+* **spotify:** report an expired refresh token once, with the re-auth link ([b790f14](https://github.com/mini-app-polis/deejay-cog/commit/b790f14be58278842e0c1a7474513d4913a8ba1d))
+
 ## [2.7.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.7.0...v2.7.1) (2026-10-09)
 
 
