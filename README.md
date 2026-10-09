@@ -106,7 +106,7 @@ doppler setup                              # reads doppler.yaml: mini-app-polis-
 uv sync --all-extras
 uv run pre-commit install
 uv run pre-commit run --all-files
-uv run python scripts/check_doppler_keys.py   # every .env.example name is in dev
+uv run check-doppler-keys                  # every required .env.example name is in dev
 ```
 
 Anything that needs secrets runs under `doppler run -- …`; the tests do not.
