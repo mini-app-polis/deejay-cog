@@ -43,13 +43,18 @@ After authorizing, you will be redirected to `http://127.0.0.1:8888/callback`
 the full URL from the browser address bar and paste it into the terminal
 when prompted.
 
-The script will print:
+The script then writes the token to Doppler's `prd` config itself, through
+your `doppler login`, as `SPOTIPY_REFRESH_TOKEN`, with the date in
+`SPOTIPY_REFRESH_TOKEN_ISSUED_AT`. The `prd` sync carries it to SSM, so there
+is nothing to copy. If the write fails (no CLI, or no write access to `prd`),
+it prints the token instead:
 
 ```
 ✅ REFRESH TOKEN: AQD...
 ```
 
-Copy that token — you only need to do this once.
+and you store it by hand as in step 4. Spotify refresh tokens expire six
+months after sign-in, so run this again before then.
 
 ---
 
@@ -63,7 +68,8 @@ the Lambda loads them at cold start (all optional — declared in
 |------|-------|
 | `SPOTIPY_CLIENT_ID` | Your Spotify app client ID |
 | `SPOTIPY_CLIENT_SECRET` | Your Spotify app client secret |
-| `SPOTIPY_REFRESH_TOKEN` | The refresh token from step 3 |
+| `SPOTIPY_REFRESH_TOKEN` | The refresh token from step 3 (written by the script) |
+| `SPOTIPY_REFRESH_TOKEN_ISSUED_AT` | The date it was issued (written by the script); not read by the cog |
 | `SPOTIFY_RADIO_PLAYLIST_ID` | Spotify playlist ID for the radio playlist |
 
 `SPOTIPY_REDIRECT_URI` is set on the function's environment in the same
