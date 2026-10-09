@@ -8,6 +8,7 @@ from typing import Literal
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.environment import api_base_url, env_var_name
 from mini_app_polis.google import GoogleAPI
+from mini_app_polis.spotify import SpotifyTokenExpired
 
 import deejay_cog.config as config
 from deejay_cog._deadline import RunOutOfTime
@@ -25,6 +26,7 @@ from deejay_cog.spotify_sync import (
     get_spotify_client,
     missing_spotify_credentials,
     push_playlists_to_api,
+    reauth_url,
     sync_set_to_spotify,
 )
 
@@ -50,6 +52,10 @@ class CsvPipelineStats:
     ingest_attempted: int = 0
     ingest_failed: int = 0
     spotify_failed: int = 0
+    #: Spotify refused the refresh token. Set once; every Spotify step
+    #: after it is skipped rather than counted in spotify_failed, because
+    #: none of them can work until the token is renewed.
+    spotify_token_expired: bool = False
     bad_filename_in_file: int = 0  # post-import path: could not extract date/venue
     ingest_skipped_no_tracks: int = 0
     ingest_skipped_env_missing: int = 0
@@ -116,6 +122,7 @@ def _real_issue(stats: CsvPipelineStats) -> bool:
         or stats.ingest_skipped_env_missing > 0
         or stats.ingest_client_unavailable > 0
         or stats.spotify_failed > 0
+        or stats.spotify_token_expired
         or stats.bad_filename_in_file > 0
         or stats.track_read_failed > 0
         or stats.archive_move_failed > 0
@@ -139,6 +146,8 @@ _ISSUE_FIELDS: tuple[tuple[str, str | None], ...] = (
     ("ingest_skipped_env_missing", "KAIANO_API_BASE_URL unset — nothing was sent"),
     ("ingest_client_unavailable", "API client could not be built — nothing was sent"),
     ("spotify_failed", None),
+    # Its note carries the re-auth link, so it is built in _issue_counts.
+    ("spotify_token_expired", None),
     ("bad_filename_in_file", None),
     ("track_read_failed", None),
     (
@@ -169,8 +178,20 @@ def _issue_counts(stats: CsvPipelineStats) -> list[tuple[str, int, str | None]]:
     for name, note in _ISSUE_FIELDS:
         count = int(getattr(stats, name, 0) or 0)
         if count:
+            if name == "spotify_token_expired":
+                note = _token_expired_note()
             out.append((name, count, note))
     return out
+
+
+def _token_expired_note() -> str:
+    """What to do about an expired Spotify token, with the link when known."""
+    url = reauth_url()
+    return "Spotify token expired — " + (
+        f"re-authorise: {url}"
+        if url
+        else "run scripts/get_spotify_refresh_token.py to renew it"
+    )
 
 
 def _warn_parts(stats: CsvPipelineStats) -> list[str]:
@@ -207,6 +228,7 @@ def _common_eval(stats: CsvPipelineStats) -> dict:
         "ingest_attempted": stats.ingest_attempted,
         "ingest_failed": stats.ingest_failed,
         "spotify_failed": stats.spotify_failed,
+        "spotify_token_expired": stats.spotify_token_expired,
         "bad_filename_in_file": stats.bad_filename_in_file,
         "track_read_failed": stats.track_read_failed,
         "archive_move_failed": stats.archive_move_failed,
@@ -572,6 +594,11 @@ def _sync_set_to_spotify(
         )
         return
 
+    if stats is not None and stats.spotify_token_expired:
+        # Already reported once this run; every further try fails the same way.
+        logger.warning("Spotify token expired — skipping Spotify sync for %s", label)
+        return
+
     try:
         sp = get_spotify_client()
         if sp is None:
@@ -590,7 +617,9 @@ def _sync_set_to_spotify(
         if tracks is None:
             tracks = read_tracks_from_sheet(g, sheet_id)
         outcome = sync_set_to_spotify(sp, set_name, tracks)
-        if not outcome.ok:
+        if outcome.token_expired:
+            _record_token_expired(stats)
+        elif not outcome.ok:
             logger.error(
                 "❌ Spotify sync failed for %s: %s",
                 label,
@@ -602,10 +631,25 @@ def _sync_set_to_spotify(
         # the end of the flow: N+1 enumerations and N+1 POSTs for N files,
         # with a push failure logged as that CSV's sync failing. The
         # flow-level push runs unconditionally and covers this.
+    except SpotifyTokenExpired:
+        _record_token_expired(stats)
     except Exception as e:
         logger.error("❌ Spotify sync failed for %s: %s", label, e)
         if stats is not None:
             stats.spotify_failed += 1
+
+
+def _record_token_expired(stats: CsvPipelineStats | None) -> None:
+    """Note that Spotify refused the refresh token, logging it once per run."""
+    if stats is not None and stats.spotify_token_expired:
+        return
+    url = reauth_url()
+    get_prefect_logger().error(
+        "❌ Spotify refresh token expired — re-authorise%s",
+        f": {url}" if url else " with scripts/get_spotify_refresh_token.py",
+    )
+    if stats is not None:
+        stats.spotify_token_expired = True
 
 
 def _file_already_in_folder(g: GoogleAPI, file_id: str, folder_id: str) -> bool:
@@ -934,7 +978,11 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
     # One Spotify client for the repair pass and the playlist snapshot.
     sp = None
     missing_credentials = missing_spotify_credentials()
-    if missing_credentials:
+    if stats.spotify_token_expired:
+        logger.warning(
+            "Spotify token expired — playlists not repaired, snapshot not pushed",
+        )
+    elif missing_credentials:
         logger.warning(
             "Spotify credentials incomplete (%s not set) — "
             "playlists not repaired, snapshot not pushed",
@@ -948,6 +996,19 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
                 "playlists not repaired, snapshot not pushed",
             )
             stats.spotify_failed += 1
+        else:
+            # Authenticate now, so an expired token is reported once as
+            # what it is, even on a run with no sets, rather than as a
+            # listing failure in the repair pass and again in the snapshot.
+            # After renewal the repair pass rebuilds the playlists missed.
+            try:
+                _ = sp.client
+            except SpotifyTokenExpired:
+                _record_token_expired(stats)
+                sp = None
+            except Exception:
+                # Anything else surfaces in the steps below, as before.
+                pass
 
     # Finish what earlier runs left undone: recent sets missing from the
     # API or without their playlist (repair.py). Before the snapshot, so a

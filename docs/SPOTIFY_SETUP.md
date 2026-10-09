@@ -56,6 +56,18 @@ it prints the token instead:
 and you store it by hand as in step 4. Spotify refresh tokens expire six
 months after sign-in, so run this again before then.
 
+### When the token has expired
+
+Spotify answers `invalid_grant` and no retry helps, so the cog does not
+retry. The first Spotify step to hit it marks the run, every later Spotify
+step that run is skipped, and the run report carries one
+`spotify_token_expired` issue (not `spotify_failed`) with the link that
+renews it: `<KAIANO_API_BASE_URL>/v1/spotify/authorize`. With no API URL
+configured, it names this script instead. Either way the new token reaches
+the worker at its next invocation, because the worker re-reads SSM at the
+start of each one; no redeploy. The repair pass then rebuilds any set
+playlists missed while the token was dead.
+
 ---
 
 ## 4. Store the credentials

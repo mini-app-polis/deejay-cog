@@ -75,6 +75,11 @@ no separate development Drive.
 All three credentials must be set, or every Spotify step is skipped (logged,
 not counted as a failure).
 
+A refresh token Spotify refuses (`invalid_grant`, usually because it has
+passed its six-month expiry) is reported once per run as
+`spotify_token_expired`, with the re-auth link, and the run skips the rest of
+its Spotify steps; see [SPOTIFY_SETUP.md](SPOTIFY_SETUP.md#when-the-token-has-expired).
+
 ---
 
 ## Observability

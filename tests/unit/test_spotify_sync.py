@@ -553,3 +553,21 @@ def test_sync_reads_the_radio_playlist_id_at_call_time(monkeypatch) -> None:
     ):
         ss.sync_set_to_spotify(sp, "2024-01-01", [{"artist": "A", "title": "T"}])
     m_radio.assert_called_once_with(sp, "set-later", ["u1"])
+
+
+def test_failure_marks_an_expired_token():
+    from mini_app_polis.spotify import SpotifyTokenExpired
+
+    from deejay_cog.spotify_sync import SyncOutcome
+
+    assert SyncOutcome.failure(SpotifyTokenExpired("x")).token_expired is True
+    assert SyncOutcome.failure(RuntimeError("x")).token_expired is False
+
+
+def test_reauth_url_follows_the_api_base_url(monkeypatch):
+    from deejay_cog.spotify_sync import reauth_url
+
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example/")
+    assert reauth_url() == "https://api.example/v1/spotify/authorize"
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "")
+    assert reauth_url() is None

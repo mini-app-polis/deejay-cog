@@ -17,7 +17,7 @@ from mini_app_polis.api.contract import (
     SpotifyPlaylistsIngest,
 )
 from mini_app_polis.environment import api_base_url, env_var_name
-from mini_app_polis.spotify import SpotifyAPI
+from mini_app_polis.spotify import SpotifyAPI, SpotifyTokenExpired
 from pydantic import ValidationError
 
 from .api_client import api_client
@@ -40,6 +40,9 @@ class SyncOutcome:
     #: A set playlist was created rather than refilled. Only a new set
     #: playlist puts its tracks on the radio playlist.
     created: bool = False
+    #: Spotify refused the refresh token. Not a sync failure: nothing will
+    #: work until someone re-authorises, so the run reports that once.
+    token_expired: bool = False
 
     @classmethod
     def success(cls) -> SyncOutcome:
@@ -62,7 +65,11 @@ class SyncOutcome:
         Args:
             exc: The exception the Spotify operation raised.
         """
-        return cls(False, f"{type(exc).__name__}: {exc}")
+        return cls(
+            False,
+            f"{type(exc).__name__}: {exc}",
+            token_expired=isinstance(exc, SpotifyTokenExpired),
+        )
 
 
 # Credentials are read lazily, on every access, the way mini_app_polis.config
@@ -88,6 +95,16 @@ DEFAULT_PLAYLIST_DESCRIPTION = (
 def radio_playlist_id() -> str | None:
     """The long-running radio playlist ID, or None when unset."""
     return os.getenv("SPOTIFY_RADIO_PLAYLIST_ID")
+
+
+#: Where the API starts Spotify's sign-in to renew the refresh token.
+REAUTH_PATH = "/v1/spotify/authorize"
+
+
+def reauth_url() -> str | None:
+    """The link that renews the refresh token, or None without an API URL."""
+    base = api_base_url().rstrip("/")
+    return f"{base}{REAUTH_PATH}" if base else None
 
 
 def missing_spotify_credentials() -> list[str]:

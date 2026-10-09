@@ -1,5 +1,6 @@
 import os
 import sys
+from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -1072,3 +1073,134 @@ def test_the_run_id_reaches_the_report(monkeypatch) -> None:
         process_new_files.process_new_csv_files_flow(run_id="m-42")
 
     assert sent.call_args.args[0].run_id == "m-42"
+
+
+# -- Spotify token expired -----------------------------------------------------
+
+
+def _sync_one(stats, **patches):
+    mock_log = MagicMock()
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(process_new_files, "get_prefect_logger", return_value=mock_log)
+        )
+        stack.enter_context(
+            patch.object(
+                process_new_files,
+                "read_tracks_from_sheet",
+                return_value=[{"artist": "A", "title": "T"}],
+            )
+        )
+        for name, kwargs in patches.items():
+            stack.enter_context(patch.object(process_new_files, name, **kwargs))
+        process_new_files._sync_set_to_spotify(
+            sheet_id="ssid",
+            set_name="2024-01-01 Venue",
+            label="2024-01-01 Venue",
+            g=SimpleNamespace(),
+            stats=stats,
+        )
+    return mock_log
+
+
+def test_an_expired_token_outcome_is_not_a_spotify_failure(monkeypatch):
+    _spotify_env(monkeypatch)
+    monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
+    stats = process_new_files.CsvPipelineStats()
+    outcome = SyncOutcome.failure(process_new_files.SpotifyTokenExpired("expired"))
+
+    log = _sync_one(
+        stats,
+        get_spotify_client={"return_value": MagicMock()},
+        sync_set_to_spotify={"return_value": outcome},
+    )
+
+    assert stats.spotify_token_expired is True
+    assert stats.spotify_failed == 0
+    assert "https://api.example/v1/spotify/authorize" in log.error.call_args.args[1]
+
+
+def test_an_expired_token_raised_is_recorded_too(monkeypatch):
+    _spotify_env(monkeypatch)
+    stats = process_new_files.CsvPipelineStats()
+
+    _sync_one(
+        stats,
+        get_spotify_client={"return_value": MagicMock()},
+        sync_set_to_spotify={
+            "side_effect": process_new_files.SpotifyTokenExpired("expired")
+        },
+    )
+
+    assert stats.spotify_token_expired is True
+    assert stats.spotify_failed == 0
+
+
+def test_after_an_expired_token_later_sets_skip_spotify(monkeypatch):
+    _spotify_env(monkeypatch)
+    stats = process_new_files.CsvPipelineStats(spotify_token_expired=True)
+
+    with patch.object(process_new_files, "sync_set_to_spotify") as mock_sync:
+        _sync_one(stats, get_spotify_client={"return_value": MagicMock()})
+
+    mock_sync.assert_not_called()
+    assert stats.spotify_failed == 0
+
+
+def _flow_with_expired_token(monkeypatch, *, api_url: str):
+    monkeypatch.setenv("KAIANO_API_BASE_URL", api_url)
+    _spotify_env(monkeypatch)
+
+    class _Expired:
+        @property
+        def client(self):
+            raise process_new_files.SpotifyTokenExpired("expired")
+
+    g = SimpleNamespace(drive=SimpleNamespace(list_files=MagicMock(return_value=[])))
+    seen_sp = []
+
+    def fake_repair(_g, *, sp, skip):
+        seen_sp.append(sp)
+        return RepairResult()
+
+    monkeypatch.setattr(process_new_files, "repair_recent_sets", fake_repair)
+    with (
+        patch.object(process_new_files.GoogleAPI, "from_env", return_value=g),
+        patch.object(process_new_files, "normalize_prefixes_in_source"),
+        patch.object(process_new_files, "get_spotify_client", return_value=_Expired()),
+        patch.object(process_new_files, "push_playlists_to_api") as mock_push,
+        patch.object(process_new_files.RunReport, "send", autospec=True) as sent,
+        patch.object(process_new_files, "config") as mock_cfg,
+    ):
+        mock_cfg.CSV_SOURCE_FOLDER_ID = "src-folder"
+        process_new_files.process_new_csv_files_flow()
+
+    return sent.call_args.args[0], seen_sp, mock_push
+
+
+def test_an_idle_run_reports_an_expired_token_with_the_link(monkeypatch):
+    report, seen_sp, mock_push = _flow_with_expired_token(
+        monkeypatch, api_url="https://api.example"
+    )
+
+    assert report.severity == "WARN"
+    text = report.text()
+    assert "spotify_token_expired" in text
+    assert "https://api.example/v1/spotify/authorize" in text
+    assert "spotify_failed" not in text
+    # Nothing else touches Spotify; the repair pass catches up after renewal.
+    assert seen_sp == [None]
+    mock_push.assert_not_called()
+
+
+def test_without_an_api_url_the_note_names_the_script(monkeypatch):
+    report, _, _ = _flow_with_expired_token(monkeypatch, api_url="")
+
+    assert "get_spotify_refresh_token.py" in report.text()
+
+
+def test_an_expired_token_is_a_real_issue():
+    stats = process_new_files.CsvPipelineStats(spotify_token_expired=True)
+
+    assert process_new_files._real_issue(stats) is True
+    assert process_new_files._common_eval(stats)["spotify_token_expired"] is True
