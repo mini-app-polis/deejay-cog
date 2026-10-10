@@ -1124,14 +1124,14 @@ def test_an_expired_token_raised_is_recorded_too(monkeypatch):
     _spotify_env(monkeypatch)
     stats = process_new_files.CsvPipelineStats()
 
-    _sync_one(
-        stats,
-        get_spotify_client={"return_value": MagicMock()},
-        sync_set_to_spotify={
-            "side_effect": process_new_files.SpotifyTokenExpired("expired")
-        },
-    )
+    with patch.object(
+        process_new_files,
+        "sync_set_to_spotify",
+        side_effect=process_new_files.SpotifyTokenExpired("expired"),
+    ) as mock_sync:
+        _sync_one(stats, get_spotify_client={"return_value": MagicMock()})
 
+    mock_sync.assert_called_once()
     assert stats.spotify_token_expired is True
     assert stats.spotify_failed == 0
 
