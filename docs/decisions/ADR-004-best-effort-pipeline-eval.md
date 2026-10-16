@@ -4,7 +4,18 @@ Date: 2026-04-18
 
 ## Status
 
-Accepted
+Accepted, amended.
+
+> **Amended (Oct 2026).** The reporting path below is gone. Reports are
+> built with `RunReport` / `post_run_finding` from common-python-utils
+> (`mini_app_polis.pipeline_status`, wrapped by `_pipeline_eval.py`) and
+> sent as messages to `POST /v1/notify`; nothing goes to `/v1/evaluations`
+> and nothing passes through evaluator-cog. Prefect failure hooks
+> (`make_failure_hook`) are replaced by the Lambda worker reporting any run
+> that raises ([ADR-006](./ADR-006-lambda-behind-sqs.md)), and the send gate
+> is now an API base URL resolving for the environment rather than the
+> `KAIANO_API_BASE_URL` + `ANTHROPIC_API_KEY` pair. The best-effort and
+> production-only guarantees stand.
 
 ## Context
 

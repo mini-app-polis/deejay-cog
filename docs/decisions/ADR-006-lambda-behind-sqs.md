@@ -9,6 +9,13 @@ Accepted
 Supersedes [ADR-001](./ADR-001-prefect-in-process-serve.md) and
 [ADR-005](./ADR-005-serve-startup-resilience.md).
 
+> **Amended (Oct 2026).** The queue is FIFO, `deejay-jobs.fifo`, with one
+> message group, not the standard `deejay-jobs` named below. The
+> reserved-concurrency step listed as pending in Consequences is done:
+> `reserved_concurrency = 1` and `max_receive_count = 3` in
+> mini-app-polis/infra `cogs.tf`, so two sweeps no longer overlap and a
+> failing job is received three times in all before it dead-letters.
+
 ## Context
 
 deejay-cog held a Railway container open to poll Prefect Cloud every ten

@@ -4,7 +4,13 @@ Date: 2026-04-20
 
 ## Status
 
-Accepted
+Accepted, amended.
+
+> **Amended (Oct 2026).** Prefect deployments and `main.py` are gone
+> ([ADR-006](./ADR-006-lambda-behind-sqs.md)), so the deployment-slot
+> force no longer applies. The tier split stands: the production flows
+> are the two modes in `deejay_cog.worker.MODES` (`process-new-files`,
+> `ingest-live-history`), and the other three remain local-only.
 
 ## Context
 

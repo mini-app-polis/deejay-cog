@@ -73,7 +73,7 @@ playlists missed while the token was dead.
 ## 4. Store the credentials
 
 **Production.** Add these to Doppler; they sync to SSM Parameter Store, and
-the Lambda loads them at cold start (all optional — declared in
+the Lambda loads them at cold start and again at every invocation (all optional — declared in
 `mini-app-polis/infra` `cogs.tf`):
 
 | Name | Value |
@@ -104,7 +104,7 @@ before any `?`.
 Run the CSV flow locally:
 
 ```bash
-uv run python -u src/deejay_cog/process_new_files.py
+doppler run -- uv run python -u src/deejay_cog/process_new_files.py
 ```
 
 The log should show the Spotify playlist sync completing, with no
