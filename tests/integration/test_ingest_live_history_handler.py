@@ -8,6 +8,7 @@ from harness import (
     VDJ_HISTORY_FOLDER,
     FakeApi,
     FakeGoogle,
+    LambdaContext,
     install_api,
     run_body,
     sqs_event,
@@ -184,3 +185,26 @@ def test_a_development_run_sends_plays_to_the_development_api(
 
     assert api.bodies("/v1/live-plays") == [], f"posted to {API_BASE}"
     assert len(dev.bodies("/v1/live-plays")) == 1
+
+
+def test_a_download_refused_at_the_deadline_is_redelivered_not_warned(
+    google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reported as an unreadable file, the message would be deleted and these
+    plays never sent once a newer file became the most recent."""
+    from deejay_cog import _deadline
+
+    monkeypatch.setattr(_deadline, "DEADLINE_MARGIN_SECONDS", 0)
+    monkeypatch.setattr(_deadline, "REQUEST_HEADROOM_SECONDS", 4.7)  # at 0.3 s
+    google.drive.add_file(VDJ_HISTORY_FOLDER, "2025-10-04.m3u", TONIGHT)
+    google.drive.slow("list_files", 0.6)  # the listing ends past the deadline
+
+    result = handler(_event("msg-late"), LambdaContext(remaining_ms=5_000))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
+    assert api.bodies("/v1/live-plays") == []
+    assert api.severities() == ["ERROR"]
+
+    google.drive.slow("list_files", 0)
+    handler(_event("msg-late", receive_count=2))
+    assert len(api.bodies("/v1/live-plays")) == 1

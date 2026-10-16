@@ -6,17 +6,13 @@ from time import monotonic
 from typing import Literal
 
 from mini_app_polis import logger as logger_mod
-from mini_app_polis.deadline import (
-    RunDeadlineReached,
-    remaining_seconds,
-    without_run_deadline,
-)
+from mini_app_polis.deadline import RunDeadlineReached, without_run_deadline
 from mini_app_polis.environment import api_base_url, env_var_name
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.spotify import SpotifyTokenExpired
 
 import deejay_cog.config as config
-from deejay_cog._deadline import RunOutOfTime
+from deejay_cog._deadline import RunOutOfTime, shared_deadline_passed
 from deejay_cog._pipeline_eval import (
     REPO,
     RunReport,
@@ -99,6 +95,12 @@ class CsvPipelineStats:
     repaired_playlists: list[str] = field(default_factory=list)
     repair_failures: list[tuple[str, str]] = field(default_factory=list)
     repairs_pending: int = 0
+    #: The run deadline passed during the repair pass or the playlist
+    #: snapshot. Those steps never stop the run — its sets are imported and
+    #: reported — so it is said here instead: a failure counted alongside
+    #: may be the deadline refusing the call, and what was not reached is
+    #: left for the next run.
+    stopped_at_deadline: bool = False
 
     @property
     def repair_failed(self) -> int:
@@ -136,6 +138,7 @@ def _real_issue(stats: CsvPipelineStats) -> bool:
         or stats.post_import_failed > 0
         or stats.rollback_failed > 0
         or stats.repair_failed > 0
+        or stats.stopped_at_deadline
     )
 
 
@@ -172,6 +175,11 @@ _ISSUE_FIELDS: tuple[tuple[str, str | None], ...] = (
         "rollback_failed",
         "sheet left in the year folder after a failed ingest — delete it by "
         "hand, or the retry will flag the CSV possible_duplicate_",
+    ),
+    (
+        "stopped_at_deadline",
+        "run deadline passed during the repair pass or playlist snapshot — "
+        "failures here may be the deadline; the rest is left for the next run",
     ),
     ("repair_failed", "tried again next run"),
 )
@@ -243,6 +251,7 @@ def _common_eval(stats: CsvPipelineStats) -> dict:
         "rollback_failed": stats.rollback_failed,
         "repair_failed": stats.repair_failed,
         "repairs_pending": stats.repairs_pending,
+        "stopped_at_deadline": stats.stopped_at_deadline,
     }
 
 
@@ -463,20 +472,6 @@ def _normalize_csv(file_path: str) -> None:
         f.write("\n".join(cleaned_lines))
 
     logger.debug(f"✅ Normalized: {file_path}")
-
-
-def _past_deadline() -> bool:
-    """Whether the shared library's run deadline has passed.
-
-    Past it, every Google and Spotify call fails fast with
-    ``RunDeadlineReached`` — and this module's ``except Exception`` blocks
-    take that for an ordinary failure: an unreadable sheet reads as a set
-    with no tracks, a refused listing as a possible duplicate. So an outcome
-    reached past the deadline is not to be trusted, and the callers below
-    stop the run instead of acting on it.
-    """
-    remaining = remaining_seconds()
-    return remaining is not None and remaining <= 0
 
 
 def _upload_csv_to_sheets(
@@ -805,7 +800,7 @@ def _process_csv_at(
         year_folder_id = g.drive.ensure_folder(config.DJ_SETS_FOLDER_ID, year)
         base_name = os.path.splitext(filename)[0]
         exists = file_exists_with_base_name(g, year_folder_id, base_name)
-        if exists is None and _past_deadline():
+        if exists is None and shared_deadline_passed():
             # The check was refused, not inconclusive. Nothing is written
             # yet; stop, and the redelivery checks again.
             raise RunOutOfTime(f"run deadline reached checking {filename}")
@@ -871,7 +866,7 @@ def _process_csv_at(
                 ) from exc
             raise
 
-        if outcome != "sent" and _past_deadline():
+        if outcome != "sent" and shared_deadline_passed():
             # The deadline passed during the ingest and was swallowed on
             # the way: a refused sheet read comes back as no tracks
             # ("skipped"), a refused read inside the ingest as "failed".
@@ -940,7 +935,7 @@ def _process_csv_at(
         return "imported"
 
     except Exception as e:
-        if isinstance(e, RunDeadlineReached) or _past_deadline():
+        if isinstance(e, RunDeadlineReached) or shared_deadline_passed():
             # Not a failure of this file: the run is out of time. Renamed
             # FAILED_, the redelivery would skip a set that is fine.
             raise RunOutOfTime(f"run deadline reached processing {filename}") from e
@@ -984,7 +979,7 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
         # carry on — to a run reported done, its message deleted, and the
         # files it never reached left with nothing to trigger them. Not a
         # cap on the sweep: with time left, every file is processed.
-        if _past_deadline():
+        if shared_deadline_passed():
             raise RunOutOfTime(f"run deadline reached before {filename}")
         logger.debug(f"Processing file: {filename}")
 
@@ -1038,7 +1033,7 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
     # The last file is past the check above: a refusal there was swallowed
     # the same way, and the repair pass and snapshot below would only
     # collect refusals.
-    if _past_deadline():
+    if shared_deadline_passed():
         raise RunOutOfTime("run deadline reached at the end of the sweep")
 
     logger.info(
@@ -1096,9 +1091,14 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
     stats.repaired_playlists = repair.published
     stats.repair_failures = repair.failed
     stats.repairs_pending = repair.pending
+    if shared_deadline_passed():
+        stats.stopped_at_deadline = True
 
-    # The playlist snapshot goes every run, new files or not.
-    if sp is not None:
+    # The playlist snapshot goes every run, new files or not — unless the
+    # deadline has passed, when every Spotify call in it would be refused.
+    if sp is not None and stats.stopped_at_deadline:
+        logger.warning("⚠️ Run deadline passed — Spotify playlist snapshot skipped")
+    elif sp is not None:
         try:
             push = push_playlists_to_api(sp)
             if push is None:
@@ -1116,6 +1116,8 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
         except Exception as e:
             logger.error("❌ Spotify playlist sync failed: %s", e)
             stats.spotify_failed += 1
+        if shared_deadline_passed():
+            stats.stopped_at_deadline = True
 
     # Whether this run had anything in front of it at all. A scheduled
     # sweep over an empty folder is an idle tick; a sweep that saw files

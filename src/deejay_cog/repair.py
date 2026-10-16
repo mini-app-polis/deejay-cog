@@ -36,6 +36,7 @@ from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 
 import deejay_cog.config as config
+from deejay_cog._deadline import shared_deadline_passed
 
 from .api_client import api_client
 from .ingest_to_api import build_ingest_payload, read_tracks_from_sheet
@@ -199,7 +200,16 @@ def repair_recent_sets(
     cap = max(config.REPAIR_MAX_PER_RUN, 0)
     result.pending = max(len(owed) - cap, 0)
 
-    for sheet, job in owed[:cap]:
+    jobs = owed[:cap]
+    for index, (sheet, job) in enumerate(jobs):
+        if shared_deadline_passed():
+            # Each job left would only be refused and counted failed. Left
+            # for the next run instead, as the cap leaves them.
+            log.warning(
+                "repair: run deadline passed; %d job(s) left", len(jobs) - index
+            )
+            result.pending += len(jobs) - index
+            break
         log.info("repair: %s for %s", job, sheet.name)
         if job == "ingest":
             try:
