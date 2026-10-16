@@ -6,6 +6,11 @@ from time import monotonic
 from typing import Literal
 
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.deadline import (
+    RunDeadlineReached,
+    remaining_seconds,
+    without_run_deadline,
+)
 from mini_app_polis.environment import api_base_url, env_var_name
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.spotify import SpotifyTokenExpired
@@ -460,22 +465,46 @@ def _normalize_csv(file_path: str) -> None:
     logger.debug(f"✅ Normalized: {file_path}")
 
 
+def _past_deadline() -> bool:
+    """Whether the shared library's run deadline has passed.
+
+    Past it, every Google and Spotify call fails fast with
+    ``RunDeadlineReached`` — and this module's ``except Exception`` blocks
+    take that for an ordinary failure: an unreadable sheet reads as a set
+    with no tracks, a refused listing as a possible duplicate. So an outcome
+    reached past the deadline is not to be trusted, and the callers below
+    stop the run instead of acting on it.
+    """
+    remaining = remaining_seconds()
+    return remaining is not None and remaining <= 0
+
+
 def _upload_csv_to_sheets(
     g: GoogleAPI,
     temp_path: str,
     year_folder_id: str,
     year: str,
     filename: str,
+    stats: CsvPipelineStats | None = None,
 ) -> str:
-    """Upload normalized CSV as a Google Sheet, apply formatting, invalidate summary."""
+    """Upload normalized CSV as a Google Sheet, apply formatting, invalidate summary.
+
+    Stopped by the deadline after the upload, the sheet is rolled back
+    before the stop goes on up: left behind, the redelivery would take the
+    CSV for a duplicate of it.
+    """
     logger = get_prefect_logger()
     # Named from the Drive file, not the temp path, which is a fixed name.
     sheet_id = g.drive.upload_csv_as_google_sheet(
         temp_path, parent_id=year_folder_id, dest_name=filename
     )
     logger.debug("Uploaded sheet ID: %s", sheet_id)
-    g.sheets.formatter.apply_formatting_to_sheet(sheet_id)
-    remove_summary_file_for_year(g, year)
+    try:
+        g.sheets.formatter.apply_formatting_to_sheet(sheet_id)
+        remove_summary_file_for_year(g, year)
+    except (RunOutOfTime, RunDeadlineReached):
+        _roll_back_upload(g, sheet_id, filename, stats)
+        raise
     logger.debug("upload-to-sheets complete for %s", filename)
     return sheet_id
 
@@ -712,10 +741,15 @@ def _roll_back_upload(
     retry would find it, take the CSV for a duplicate and never ingest the
     set — so a set is either uploaded, ingested and archived, or none of
     them.
+
+    Outside the run deadline: a rollback is often *because* the run is out
+    of time, and the shared library would refuse the delete past it.
+    ``RunOutOfTime`` still bounds it.
     """
     logger = get_prefect_logger()
     try:
-        g.drive.delete_file(sheet_id)
+        with without_run_deadline():
+            g.drive.delete_file(sheet_id)
         logger.info("↩️ Removed the sheet uploaded for %s", filename)
     except Exception as exc:
         logger.error(
@@ -771,6 +805,10 @@ def _process_csv_at(
         year_folder_id = g.drive.ensure_folder(config.DJ_SETS_FOLDER_ID, year)
         base_name = os.path.splitext(filename)[0]
         exists = file_exists_with_base_name(g, year_folder_id, base_name)
+        if exists is None and _past_deadline():
+            # The check was refused, not inconclusive. Nothing is written
+            # yet; stop, and the redelivery checks again.
+            raise RunOutOfTime(f"run deadline reached checking {filename}")
         if exists is None and stats is not None:
             stats.duplicate_check_failed += 1
         if exists is not False:
@@ -782,7 +820,9 @@ def _process_csv_at(
                 stats.duplicate_csv += 1
             return "duplicate"
 
-        sheet_id = _upload_csv_to_sheets(g, temp_path, year_folder_id, year, filename)
+        sheet_id = _upload_csv_to_sheets(
+            g, temp_path, year_folder_id, year, filename, stats
+        )
 
         # Ingest before archive. The CSV leaves the drop zone only once the
         # API has the set: archived first, a rejected POST left the set in
@@ -821,11 +861,26 @@ def _process_csv_at(
                 if stats is not None:
                     stats.bad_filename_in_file += 1
                 outcome = "skipped"
-        except RunOutOfTime:
+        except (RunOutOfTime, RunDeadlineReached) as exc:
             # Stopped between upload and archive. Undo the upload so the
             # redelivery finds the CSV, not a duplicate of it.
             _roll_back_upload(g, sheet_id, filename, stats)
+            if isinstance(exc, RunDeadlineReached):
+                raise RunOutOfTime(
+                    f"run deadline reached ingesting {filename}"
+                ) from exc
             raise
+
+        if outcome != "sent" and _past_deadline():
+            # The deadline passed during the ingest and was swallowed on
+            # the way: a refused sheet read comes back as no tracks
+            # ("skipped"), a refused read inside the ingest as "failed".
+            # Neither is what happened to the set. Treat it as the stop
+            # above.
+            _roll_back_upload(g, sheet_id, filename, stats)
+            raise RunOutOfTime(
+                f"run deadline reached before {filename} reached the API"
+            )
 
         if outcome == "failed":
             _roll_back_upload(g, sheet_id, filename, stats)
@@ -885,6 +940,10 @@ def _process_csv_at(
         return "imported"
 
     except Exception as e:
+        if isinstance(e, RunDeadlineReached) or _past_deadline():
+            # Not a failure of this file: the run is out of time. Renamed
+            # FAILED_, the redelivery would skip a set that is fine.
+            raise RunOutOfTime(f"run deadline reached processing {filename}") from e
         logger.error(f"❌ Failed to upload or format {filename}: {e}")
         _mark_failed(g, file_id, filename, stats)
         return "failed"
@@ -919,6 +978,14 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
 
     for file_metadata in files:
         filename = file_metadata["name"]
+        # Between files, not mid-way through one. Past the shared deadline
+        # every Drive call is refused, and the per-file ``except Exception``
+        # blocks below would count each refusal as that file's failure and
+        # carry on — to a run reported done, its message deleted, and the
+        # files it never reached left with nothing to trigger them. Not a
+        # cap on the sweep: with time left, every file is processed.
+        if _past_deadline():
+            raise RunOutOfTime(f"run deadline reached before {filename}")
         logger.debug(f"Processing file: {filename}")
 
         year = _extract_year_from_filename(filename)
@@ -967,6 +1034,12 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
         # the report as something this run created.
         if stats.sets_imported > imported_before:
             stats.imported_set_labels.append(filename)
+
+    # The last file is past the check above: a refusal there was swallowed
+    # the same way, and the repair pass and snapshot below would only
+    # collect refusals.
+    if _past_deadline():
+        raise RunOutOfTime("run deadline reached at the end of the sweep")
 
     logger.info(
         "✅ Done: %d CSVs, %d non-CSV files, %d skipped.",

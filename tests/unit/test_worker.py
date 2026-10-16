@@ -294,3 +294,82 @@ def test_each_record_writes_one_timing_line(
             "outcome": "unprocessable",
         },
     ]
+
+
+# ── the shared run deadline ──────────────────────────────────────────────
+
+
+def test_the_shared_deadline_is_set_a_request_timeout_inside_the_margin(
+    flows: dict[str, MagicMock], reported: MagicMock
+) -> None:
+    from mini_app_polis.deadline import remaining_seconds
+
+    from deejay_cog import _deadline
+
+    seen: list[float | None] = []
+    flows["process-new-files"].side_effect = lambda **_: seen.append(
+        remaining_seconds()
+    )
+
+    worker.lambda_handler(_event(_body()), _Context(remaining_ms=900_000))
+
+    expected = (
+        900 - _deadline.DEADLINE_MARGIN_SECONDS - _deadline.REQUEST_HEADROOM_SECONDS
+    )
+    [budget] = seen
+    assert budget is not None
+    assert expected - 1 < budget <= expected
+    assert remaining_seconds() is None  # cleared after the run
+
+
+def test_less_time_than_the_headroom_starts_with_the_deadline_passed(
+    flows: dict[str, MagicMock], reported: MagicMock
+) -> None:
+    from mini_app_polis.deadline import remaining_seconds
+
+    from deejay_cog import _deadline
+
+    seen: list[float | None] = []
+    flows["process-new-files"].side_effect = lambda **_: seen.append(
+        remaining_seconds()
+    )
+    ms = int((_deadline.DEADLINE_MARGIN_SECONDS + 1) * 1000)
+
+    worker.lambda_handler(_event(_body()), _Context(remaining_ms=ms))
+
+    [budget] = seen
+    assert budget is not None and budget <= 0
+
+
+def test_no_context_sets_no_shared_deadline(
+    flows: dict[str, MagicMock], reported: MagicMock
+) -> None:
+    from mini_app_polis.deadline import remaining_seconds
+
+    seen: list[float | None] = []
+    flows["process-new-files"].side_effect = lambda **_: seen.append(
+        remaining_seconds()
+    )
+
+    worker.lambda_handler(_event(_body()), None)
+
+    assert seen == [None]
+
+
+def test_a_refusal_past_the_shared_deadline_is_a_deadline_stop(
+    flows: dict[str, MagicMock],
+    reported: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Raised where no flow catches it — listing the drop zone, say — it
+    takes the deadline branch: reported, and the message handed back."""
+    from mini_app_polis.deadline import RunDeadlineReached
+
+    flows["process-new-files"].side_effect = RunDeadlineReached("listing files")
+
+    with caplog.at_level("ERROR"):
+        result = worker.lambda_handler(_event(_body()), _Context(remaining_ms=900_000))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}]}
+    assert reported.called
+    assert "stopped at the deadline" in caplog.text

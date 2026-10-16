@@ -44,6 +44,17 @@ def _event(message_id: str = "msg-1", *, receive_count: int = 1) -> dict:
     )
 
 
+def _deadlines(monkeypatch: pytest.MonkeyPatch, *, headroom: float) -> None:
+    """The alarm (RunOutOfTime) at the context's remaining time, and the
+    shared library's run deadline ``headroom`` seconds before it — the
+    production order, compressed. The fake Drive and Sheets refuse calls
+    past the shared deadline, as the facade does."""
+    from deejay_cog import _deadline
+
+    monkeypatch.setattr(_deadline, "DEADLINE_MARGIN_SECONDS", 0)
+    monkeypatch.setattr(_deadline, "REQUEST_HEADROOM_SECONDS", headroom)
+
+
 # ── the path that matters ────────────────────────────────────────────────
 
 
@@ -293,14 +304,14 @@ def test_a_rollback_that_cannot_delete_the_sheet_says_so(
 def test_a_run_stopped_mid_ingest_leaves_the_csv_for_the_redelivery(
     google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from deejay_cog import _deadline
-
-    monkeypatch.setattr(_deadline, "DEADLINE_MARGIN_SECONDS", 0)
+    # Both deadlines pass during the POST, so the rollback runs past the
+    # shared one — and must not be refused by it.
+    _deadlines(monkeypatch, headroom=0.1)
     drive = google.drive
     drive.add_file(SOURCE_FOLDER, f"{SET_NAME}.csv", SET_CSV)
     api.slow("/v1/ingest", 1.0)
 
-    result = handler(_event("msg-late"), LambdaContext(remaining_ms=300))
+    result = handler(_event("msg-late"), LambdaContext(remaining_ms=400))
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
     assert drive.names_in(SOURCE_FOLDER) == [f"{SET_NAME}.csv"]
@@ -483,14 +494,12 @@ def test_a_rejected_playlist_snapshot_warns_without_failing_the_run(
 def test_a_run_that_reaches_the_deadline_is_returned_to_the_queue(
     google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from deejay_cog import _deadline
-
-    monkeypatch.setattr(_deadline, "DEADLINE_MARGIN_SECONDS", 0)
+    _deadlines(monkeypatch, headroom=0.1)
     drive = google.drive
     drive.add_file(SOURCE_FOLDER, f"{SET_NAME}.csv", SET_CSV)
     drive.slow("download_file", 1.0)
 
-    result = handler(_event("msg-late"), LambdaContext(remaining_ms=300))
+    result = handler(_event("msg-late"), LambdaContext(remaining_ms=400))
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
     assert drive.names_in(SOURCE_FOLDER) == [f"{SET_NAME}.csv"]
@@ -512,3 +521,129 @@ def test_a_development_run_ingests_to_the_development_api(
 
     assert len(dev.bodies("/v1/ingest")) == 1
     assert dev.severities() == ["SUCCESS"]
+
+
+# ── the shared run deadline (mini_app_polis.deadline) ────────────────────
+#
+# The shared deadline at 0.3 s, the alarm well after it at 5 s: what these
+# exercise is the library refusing calls, and the flow not mistaking those
+# refusals for ordinary failures.
+
+OTHER_SET = "2025-10-05 Swingtime"
+
+
+def _shared_deadline_at_0_3s(monkeypatch: pytest.MonkeyPatch) -> LambdaContext:
+    _deadlines(monkeypatch, headroom=4.7)
+    return LambdaContext(remaining_ms=5_000)
+
+
+def test_a_deadline_passed_during_the_upload_rolls_the_sheet_back(
+    google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The upload finishes past the deadline and the formatting is refused.
+    Left behind, the sheet would make the CSV a duplicate next time."""
+    drive = google.drive
+    drive.add_file(SOURCE_FOLDER, f"{SET_NAME}.csv", SET_CSV)
+    drive.slow("upload_csv_as_google_sheet", 0.6)
+
+    result = handler(_event("msg-late"), _shared_deadline_at_0_3s(monkeypatch))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
+    assert drive.names_in(SOURCE_FOLDER) == [f"{SET_NAME}.csv"]
+    assert drive.sheets_in(drive.path("2025")) == []
+    assert google.sheets.formatted == []
+    assert api.bodies("/v1/ingest") == []
+    assert api.severities() == ["ERROR"]
+
+    drive.slow("upload_csv_as_google_sheet", 0)
+    handler(_event("msg-late", receive_count=2))
+    assert drive.names_in(drive.path("2025", "Archive")) == [f"{SET_NAME}.csv"]
+    assert len(api.bodies("/v1/ingest")) == 1
+
+
+def test_a_deadline_swallowed_by_the_track_read_does_not_lose_the_set(
+    google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refused sheet read comes back as "no tracks", so the ingest says
+    "skipped". Taken at its word, the set was counted imported and never
+    reached the API, and the sheet made the CSV a duplicate next time."""
+    drive = google.drive
+    drive.add_file(SOURCE_FOLDER, f"{SET_NAME}.csv", SET_CSV)
+    google.sheets.slow("apply_formatting_to_sheet", 0.6)
+
+    result = handler(_event("msg-late"), _shared_deadline_at_0_3s(monkeypatch))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
+    assert drive.names_in(SOURCE_FOLDER) == [f"{SET_NAME}.csv"]
+    assert drive.sheets_in(drive.path("2025")) == []
+    assert api.bodies("/v1/ingest") == []
+    assert api.severities() == ["ERROR"]
+
+    google.sheets.slow("apply_formatting_to_sheet", 0)
+    handler(_event("msg-late", receive_count=2))
+    assert drive.names_in(drive.path("2025", "Archive")) == [f"{SET_NAME}.csv"]
+    assert len(api.bodies("/v1/ingest")) == 1
+
+
+def test_a_refused_duplicate_check_stops_rather_than_flagging_the_csv(
+    google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    drive = google.drive
+    drive.add_file(SOURCE_FOLDER, f"{SET_NAME}.csv", SET_CSV)
+    drive.slow("ensure_folder", 0.6)
+
+    result = handler(_event("msg-late"), _shared_deadline_at_0_3s(monkeypatch))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
+    assert drive.names_in(SOURCE_FOLDER) == [f"{SET_NAME}.csv"]
+    assert drive.calls.count("upload_csv_as_google_sheet") == 0
+    assert "rename_file" not in drive.calls  # not flagged possible_duplicate_
+    assert api.severities() == ["ERROR"]
+
+
+def test_the_sweep_stops_between_files_at_the_deadline(
+    google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Past the deadline, the next file is not started: each of its Drive
+    calls would be refused, counted as its failure, and the run reported
+    done with the file still in the drop zone and nothing to retry it."""
+    drive = google.drive
+    drive.add_file(SOURCE_FOLDER, f"{SET_NAME}.csv", SET_CSV)
+    drive.add_file(SOURCE_FOLDER, f"{OTHER_SET}.csv", SET_CSV)
+    api.slow("/v1/ingest", 0.6)  # the first set's POST ends past it
+
+    result = handler(_event("msg-late"), _shared_deadline_at_0_3s(monkeypatch))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
+    [ingest] = api.bodies("/v1/ingest")
+    assert ingest["source_file"] == SET_NAME
+    assert f"{OTHER_SET}.csv" in drive.names_in(SOURCE_FOLDER)
+    assert drive.calls.count("download_file") == 1  # the second never started
+    assert api.severities() == ["ERROR"]
+
+    # The redelivery imports the second set. The first, imported but not
+    # archived (that move was refused), is flagged as before.
+    api.slow("/v1/ingest", 0)
+    handler(_event("msg-late", receive_count=2))
+    assert [b["source_file"] for b in api.bodies("/v1/ingest")] == [
+        SET_NAME,
+        OTHER_SET,
+    ]
+    assert drive.names_in(drive.path("2025", "Archive")) == [f"{OTHER_SET}.csv"]
+
+
+def test_a_refusal_on_the_last_file_is_not_reported_as_a_finished_sweep(
+    google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-CSV file's move, refused and contained, is the last thing the
+    sweep did. It stops there, rather than run the repair pass and report
+    a sweep that left the file behind as done."""
+    drive = google.drive
+    drive.add_file(SOURCE_FOLDER, "2025-10-04 notes.txt", "", mime_type="text/plain")
+    drive.slow("ensure_folder", 0.6)
+
+    result = handler(_event("msg-late"), _shared_deadline_at_0_3s(monkeypatch))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
+    assert drive.names_in(SOURCE_FOLDER) == ["2025-10-04 notes.txt"]
+    assert api.severities() == ["ERROR"]
