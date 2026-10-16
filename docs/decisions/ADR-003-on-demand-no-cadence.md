@@ -4,7 +4,16 @@ Date: 2026-04-23
 
 ## Status
 
-Accepted
+Accepted, amended.
+
+> **Amended (Oct 2026).** The two observability channels named in Decision
+> are gone with Prefect ([ADR-006](./ADR-006-lambda-behind-sqs.md)). A run
+> that raises is reported by the Lambda worker to `POST /v1/notify`, and a
+> job that fails every receive lands in the dead-letter queue and fires
+> `deejay-dlq-not-empty`; `deejay-queue-stalled` fires when nothing
+> consumes the queue. `evaluator.yaml` no longer carries the CD-010
+> exemption quoted below. The conclusion — no Healthchecks.io ping for an
+> on-demand cog — stands.
 
 ## Context
 
