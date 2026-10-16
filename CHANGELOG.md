@@ -1,3 +1,11 @@
+## [2.8.8](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.7...v2.8.8) (2026-10-16)
+
+
+### Bug Fixes
+
+* **deadline:** stop shared-library retries short of the Lambda deadline, keeping rollback outside it ([58083d8](https://github.com/mini-app-polis/deejay-cog/commit/58083d8c30e88d94300e6a7c6f632aacb434c379))
+* **deps:** bump miniapppolis-common-utils to 6.2.0 ([3fde1d0](https://github.com/mini-app-polis/deejay-cog/commit/3fde1d0a75ff08ce7d14bc173780e04a44f57dd9))
+
 ## [2.8.7](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.6...v2.8.7) (2026-10-16)
 
 
