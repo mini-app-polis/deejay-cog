@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 import respx
+from mini_app_polis.deadline import RunDeadlineReached, remaining_seconds
 from mini_app_polis.google.types import DriveFile
 
 API_BASE = "https://api.deejay.test"
@@ -28,6 +29,14 @@ SHEET_MIME = "application/vnd.google-apps.spreadsheet"
 
 
 # ── Google Drive / Sheets ────────────────────────────────────────────────
+
+
+def _refuse_past_deadline(method: str) -> None:
+    """What the real facade does inside ``run_deadline``: no call starts
+    once the deadline has passed. A call already started runs to the end."""
+    remaining = remaining_seconds()
+    if remaining is not None and remaining <= 0:
+        raise RunDeadlineReached(f"Run deadline reached while calling {method}")
 
 
 @dataclass
@@ -53,16 +62,29 @@ class FakeSheets:
         self.formatted: list[str] = []
         self.reads: list[str] = []
         self.formatter = SimpleNamespace(apply_formatting_to_sheet=self._format)
+        self._delays: dict[str, float] = {}
+
+    def slow(self, method: str, seconds: float) -> None:
+        self._delays[method] = seconds
+
+    def _enter(self, method: str) -> None:
+        _refuse_past_deadline(method)
+        delay = self._delays.get(method)
+        if delay:
+            time.sleep(delay)
 
     def _format(self, spreadsheet_id: str) -> None:
+        self._enter("apply_formatting_to_sheet")
         self.formatted.append(spreadsheet_id)
 
     def get_metadata(self, spreadsheet_id: str, fields: str | None = None) -> dict:  # noqa: ARG002
+        self._enter("get_metadata")
         if spreadsheet_id not in self.values:
             raise RuntimeError(f"404: spreadsheet {spreadsheet_id} not found")
         return {"sheets": [{"properties": {"title": "Sheet1"}}]}
 
     def read_values(self, spreadsheet_id: str, a1_range: str) -> list[list[str]]:  # noqa: ARG002
+        self._enter("read_values")
         self.reads.append(spreadsheet_id)
         return [list(row) for row in self.values.get(spreadsheet_id, [])]
 
@@ -77,7 +99,9 @@ class FakeDrive:
     folder entries.
 
     ``fail(method, exc, times=n)`` makes the next ``n`` calls to a method
-    raise, for the failure paths.
+    raise, for the failure paths. ``slow(method, s)`` makes each call take
+    ``s`` seconds. Past a ``run_deadline``, every call is refused with
+    ``RunDeadlineReached``, as the facade's retry loop refuses it.
     """
 
     def __init__(self, sheets: FakeSheets) -> None:
@@ -144,6 +168,7 @@ class FakeDrive:
 
     def _enter(self, method: str) -> None:
         self.calls.append(method)
+        _refuse_past_deadline(method)
         delay = self._delays.get(method)
         if delay:
             time.sleep(delay)

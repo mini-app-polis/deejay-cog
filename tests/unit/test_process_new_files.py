@@ -1204,3 +1204,45 @@ def test_an_expired_token_is_a_real_issue():
 
     assert process_new_files._real_issue(stats) is True
     assert process_new_files._common_eval(stats)["spotify_token_expired"] is True
+
+
+# ── the shared run deadline ──────────────────────────────────────────────
+
+
+def test_a_rollback_runs_outside_the_shared_deadline():
+    """Past the deadline the library refuses every call — the delete that
+    undoes this run's upload included, unless it is lifted for it."""
+    from mini_app_polis.deadline import remaining_seconds, run_deadline
+
+    seen: list[float | None] = []
+    drive = SimpleNamespace(delete_file=lambda _id: seen.append(remaining_seconds()))
+    g = SimpleNamespace(drive=drive)
+
+    with run_deadline(0):
+        process_new_files._roll_back_upload(g, "sheet-1", "set.csv", None)
+        assert remaining_seconds() is not None  # restored
+
+    assert seen == [None]
+
+
+def test_past_deadline_is_false_without_a_deadline():
+    assert process_new_files._past_deadline() is False
+
+
+def test_a_deadline_refusal_before_the_upload_is_a_stop_not_a_failure(tmp_path):
+    """Renamed FAILED_, the redelivery would skip a set that is fine."""
+    from mini_app_polis.deadline import RunDeadlineReached
+
+    from deejay_cog._deadline import RunOutOfTime
+
+    drive = MagicMock()
+    drive.download_file.side_effect = RunDeadlineReached("downloading")
+    g = SimpleNamespace(drive=drive)
+
+    with pytest.raises(RunOutOfTime) as exc:
+        process_new_files.process_csv_file(
+            g, {"id": "f1", "name": "2025-10-04 MADjam.csv"}, "2025", None
+        )
+
+    assert isinstance(exc.value.__cause__, RunDeadlineReached)
+    drive.rename_file.assert_not_called()

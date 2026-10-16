@@ -6,6 +6,15 @@ told why. :func:`deadline` raises :class:`RunOutOfTime` a margin early,
 inside the run, so it travels the ordinary failure path instead — this
 cog's flows do not report themselves, so the handler reports it and names
 the message for redelivery.
+
+It also sets the shared library's run deadline
+(:func:`mini_app_polis.deadline.run_deadline`) one request timeout earlier,
+so a Google or Spotify retry loop stops short of the timeout instead of
+spending the margin on backoff. Past that deadline every such call fails
+fast with ``RunDeadlineReached`` — a ``TimeoutError``, which the flows'
+``except Exception`` blocks would take for an ordinary failure. The flows
+turn it into :class:`RunOutOfTime` where it matters (process_new_files),
+and roll back under ``without_run_deadline()``.
 """
 
 from __future__ import annotations
@@ -15,10 +24,18 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from googleapiclient.http import DEFAULT_HTTP_TIMEOUT_SEC
+from mini_app_polis.deadline import run_deadline
+
 #: How long before the function's timeout a run is stopped, so that it can
 #: still send its report and the handler can still return. The report is
 #: one POST with the API client's own timeout; this leaves room for it.
 DEADLINE_MARGIN_SECONDS = 30
+
+#: How much earlier still the shared library's retries stop. The library
+#: checks its deadline between attempts, never during one, so a request
+#: started just before it can run for the client's whole timeout.
+REQUEST_HEADROOM_SECONDS = DEFAULT_HTTP_TIMEOUT_SEC
 
 
 class RunOutOfTime(BaseException):  # noqa: N818 — named for what happened
@@ -43,6 +60,10 @@ class RunOutOfTime(BaseException):  # noqa: N818 — named for what happened
 def deadline(context: Any) -> Iterator[None]:
     """Raise :class:`RunOutOfTime` a margin before the invocation's timeout.
 
+    Inside, the shared library's run deadline is set a further
+    :data:`REQUEST_HEADROOM_SECONDS` earlier, so its retries stop before
+    the alarm does.
+
     SIGALRM, because the run is blocking I/O on the main thread — which is
     where Lambda runs the handler and where the signal is delivered. A
     context without ``get_remaining_time_in_millis`` (a test, a local
@@ -64,7 +85,8 @@ def deadline(context: Any) -> Iterator[None]:
     previous = signal.signal(signal.SIGALRM, _expire)
     signal.setitimer(signal.ITIMER_REAL, seconds)
     try:
-        yield
+        with run_deadline(max(0, seconds - REQUEST_HEADROOM_SECONDS)):
+            yield
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)

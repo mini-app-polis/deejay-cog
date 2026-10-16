@@ -41,6 +41,7 @@ from typing import Any
 import sentry_sdk
 from mini_app_polis import load_secrets, timing
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.deadline import RunDeadlineReached
 from mini_app_polis.environment import current_environment
 
 from deejay_cog._deadline import RunOutOfTime, deadline
@@ -229,10 +230,13 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         "deejay-cog", "an unprocessable message", exc, message_id
                     )
                 failures.append({"itemIdentifier": message_id})
-            except RunOutOfTime as exc:
+            except (RunOutOfTime, RunDeadlineReached) as exc:
                 timed.label(outcome="deadline")
-                # A BaseException, so that no flow's ``except Exception``
-                # swallows it; caught here and nowhere else. The sweep stopped
+                # RunOutOfTime is a BaseException, so that no flow's
+                # ``except Exception`` swallows it; caught here and nowhere
+                # else. RunDeadlineReached is the shared library refusing a
+                # call past the run deadline, raised where no flow catches it
+                # (listing the drop zone, say). Either way the sweep stopped
                 # mid-way, and the redelivery picks up whatever it left in
                 # the drop zone.
                 log.error("worker: run stopped at the deadline (attempt %s)", attempt)
