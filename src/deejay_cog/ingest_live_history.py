@@ -14,6 +14,7 @@ from mini_app_polis.google import GoogleAPI
 from mini_app_polis.vdj.m3u import M3UToolbox
 
 import deejay_cog.config as config
+from deejay_cog._deadline import RunOutOfTime, shared_deadline_passed
 from deejay_cog._pipeline_eval import (
     REPO,
     RunReport,
@@ -116,6 +117,11 @@ def process_m3u_file(
         n_failed = len(payload.plays) if payload is not None else 0
         return (0, n_failed, False)
     except Exception as e:
+        if shared_deadline_passed():
+            # Refused by the run deadline, not a bad file. Reported as one,
+            # the message would be deleted, and a newer file could take its
+            # place as "most recent" before anything sent these plays.
+            raise RunOutOfTime(f"run deadline reached processing {filename}") from e
         logger.error("❌ Failed to process %s: %s", filename, e)
         return (0, 0, False)
 

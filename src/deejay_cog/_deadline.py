@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from googleapiclient.http import DEFAULT_HTTP_TIMEOUT_SEC
-from mini_app_polis.deadline import run_deadline
+from mini_app_polis.deadline import remaining_seconds, run_deadline
 
 #: How long before the function's timeout a run is stopped, so that it can
 #: still send its report and the handler can still return. The report is
@@ -54,6 +54,20 @@ class RunOutOfTime(BaseException):  # noqa: N818 — named for what happened
     and the handler reported success until Lambda killed the run anyway.
     Only the handler catches it.
     """
+
+
+def shared_deadline_passed() -> bool:
+    """Whether the shared library's run deadline has passed.
+
+    Past it, every Google and Spotify call fails fast with
+    ``RunDeadlineReached`` — and the flows' ``except Exception`` blocks
+    take that for an ordinary failure: an unreadable sheet reads as a set
+    with no tracks, a refused listing as a possible duplicate. So an
+    outcome reached past the deadline is not to be trusted, and the flows
+    check this before acting on one. Always ``False`` with no deadline set.
+    """
+    remaining = remaining_seconds()
+    return remaining is not None and remaining <= 0
 
 
 @contextmanager

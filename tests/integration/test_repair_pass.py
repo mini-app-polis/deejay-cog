@@ -279,3 +279,39 @@ def test_a_set_imported_this_run_is_not_repaired_in_the_same_run(
     assert len(api.bodies("/v1/ingest")) == 1
     assert catalog.playlists["pl-radio"]["uris"] == [LEAVE, ADORN]  # once
     assert "(repaired)" not in api.reports()[0]["description"]
+
+
+# ── the shared run deadline ──────────────────────────────────────────────
+
+
+def test_repairs_stop_at_the_deadline_and_the_rest_wait_for_the_next_run(
+    google: FakeGoogle, api: FakeApi, handler, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweep's own work is done, so the run is not failed — but it says
+    the deadline cut the repair short, rather than list refusals as
+    repairs that failed."""
+    from harness import LambdaContext
+
+    from deejay_cog import _deadline
+
+    monkeypatch.setattr(_deadline, "DEADLINE_MARGIN_SECONDS", 0)
+    monkeypatch.setattr(_deadline, "REQUEST_HEADROOM_SECONDS", 4.7)  # at 0.3 s
+    names = [_name(n, f"Event {n}") for n in (5, 10)]
+    for name in names:
+        _imported_earlier(google, name)
+    api.slow("/v1/ingest", 0.6)  # the first repair ends past the deadline
+
+    result = handler(_event("msg-1"), LambdaContext(remaining_ms=5_000))
+
+    assert result == {"batchItemFailures": []}
+    assert [b["source_file"] for b in api.bodies("/v1/ingest")] == names[:1]
+    assert api.severities() == ["WARN"]
+    description = api.reports()[0]["description"]
+    assert "stopped_at_deadline" in description
+    assert "repairs_pending=1" in description
+    assert "repair_failed" not in description
+
+    api.slow("/v1/ingest", 0)
+    handler(_event("msg-2"))
+
+    assert [b["source_file"] for b in api.bodies("/v1/ingest")] == names

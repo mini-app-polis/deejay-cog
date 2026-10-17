@@ -1225,8 +1225,16 @@ def test_a_rollback_runs_outside_the_shared_deadline():
     assert seen == [None]
 
 
-def test_past_deadline_is_false_without_a_deadline():
-    assert process_new_files._past_deadline() is False
+def test_shared_deadline_passed_only_once_it_has():
+    from mini_app_polis.deadline import run_deadline
+
+    from deejay_cog._deadline import shared_deadline_passed
+
+    assert shared_deadline_passed() is False  # none set
+    with run_deadline(60):
+        assert shared_deadline_passed() is False
+    with run_deadline(0):
+        assert shared_deadline_passed() is True
 
 
 def test_a_deadline_refusal_before_the_upload_is_a_stop_not_a_failure(tmp_path):
@@ -1246,3 +1254,43 @@ def test_a_deadline_refusal_before_the_upload_is_a_stop_not_a_failure(tmp_path):
 
     assert isinstance(exc.value.__cause__, RunDeadlineReached)
     drive.rename_file.assert_not_called()
+
+
+def test_a_deadline_refusal_escaping_the_ingest_rolls_back_and_stops():
+    """The ingest contains its own failures today, so this cannot happen
+    yet; if one ever escapes, the sheet must still go."""
+    from mini_app_polis.deadline import RunDeadlineReached
+
+    from deejay_cog._deadline import RunOutOfTime
+
+    g = _drive_for_post_upload()
+    g.drive.delete_file = MagicMock()
+    stats = process_new_files.CsvPipelineStats()
+
+    with (
+        patch.object(process_new_files, "read_tracks_from_sheet", return_value=[]),
+        patch.object(
+            process_new_files,
+            "_ingest_set_to_api",
+            side_effect=RunDeadlineReached("ingesting"),
+        ),
+        pytest.raises(RunOutOfTime) as exc,
+    ):
+        process_new_files.process_csv_file(
+            g, {"id": "file-1", "name": "2024-01-03 Venue.csv"}, "2024", stats
+        )
+
+    assert isinstance(exc.value.__cause__, RunDeadlineReached)
+    g.drive.delete_file.assert_called_once_with("sheet-id")
+    g.drive.rename_file.assert_not_called()
+    assert stats.sets_imported == 0
+
+
+def test_stopped_at_deadline_is_a_warn_with_its_reason():
+    stats = process_new_files.CsvPipelineStats(stopped_at_deadline=True)
+
+    assert process_new_files._real_issue(stats) is True
+    assert "stopped_at_deadline=1 (run deadline passed" in " ".join(
+        process_new_files._warn_parts(stats)
+    )
+    assert process_new_files._common_eval(stats)["stopped_at_deadline"] is True
