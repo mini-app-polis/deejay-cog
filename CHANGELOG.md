@@ -1,3 +1,10 @@
+## [2.8.9](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.8...v2.8.9) (2026-10-17)
+
+
+### Bug Fixes
+
+* **deadline:** stop live history and the repair pass cleanly at the shared run deadline ([74eb14a](https://github.com/mini-app-polis/deejay-cog/commit/74eb14aa8aece307f3829bdf0108098db3211aa0))
+
 ## [2.8.8](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.7...v2.8.8) (2026-10-16)
 
 
