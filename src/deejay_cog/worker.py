@@ -34,15 +34,13 @@ run can be traced from watcher's log to the report without a join table.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from typing import Any
 
-import sentry_sdk
 from mini_app_polis import load_secrets, timing
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.deadline import RunDeadlineReached
-from mini_app_polis.environment import current_environment
+from mini_app_polis.sentry import init_sentry
 
 from deejay_cog._deadline import RunOutOfTime, deadline
 from deejay_cog._pipeline_eval import post_run_finding
@@ -76,12 +74,9 @@ FLOW_NAMES = {
 # At import, not per invocation. A Lambda container is reused across
 # invocations, so this runs once per cold start; initialising per call
 # would pay the setup repeatedly and register duplicate integrations.
-sentry_sdk.init(
-    dsn=os.getenv("SENTRY_DSN_COGS"),
-    environment=current_environment().value,
-)
-# Shared cogs project: the tag is what tells this cog's events apart.
-sentry_sdk.get_global_scope().set_tag("service", "deejay-cog")
+# An empty DSN in production logs an ERROR rather than passing silently
+# (CD-038); the service tag tells this cog's events apart in the shared project.
+init_sentry("deejay-cog")
 
 
 class UnprocessableMessage(RuntimeError):
