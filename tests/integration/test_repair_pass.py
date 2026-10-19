@@ -222,7 +222,9 @@ def test_an_api_outage_while_checking_does_not_fail_the_sweep(
     google: FakeGoogle, api: FakeApi, handler
 ) -> None:
     _imported_earlier(google, _name(4, "Swingtime"))
-    api.fail("GET /v1/sets", 503)
+    # Down for longer than the client retries a read (common-utils 6.7):
+    # one 503 is now retried and answered, which is a blip, not an outage.
+    api.fail("GET /v1/sets", 503, times=10)
 
     result = handler(_event())
 

@@ -80,6 +80,14 @@ def api(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeApi]:
 
 
 @pytest.fixture(autouse=True)
+def _no_retry_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The API client backs off between read retries; a test needn't wait it out."""
+    monkeypatch.setattr(
+        "mini_app_polis.api.client._sleep", lambda _seconds: None, raising=False
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_spotify(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("SPOTIPY_CLIENT_ID", "SPOTIPY_CLIENT_SECRET", "SPOTIPY_REFRESH_TOKEN"):
         monkeypatch.delenv(name, raising=False)
