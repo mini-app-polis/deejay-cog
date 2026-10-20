@@ -1,3 +1,11 @@
+## [2.8.16](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.15...v2.8.16) (2026-10-20)
+
+
+### Bug Fixes
+
+* **deps:** bump certifi to 2026.10.19 for GHSA-6q48-6c7w-9gw2 ([ce2875f](https://github.com/mini-app-polis/deejay-cog/commit/ce2875f26e2b179bb23958040c6c205e902c7b1d))
+* refuse a local sweep of the production drop zone ([dfd33ad](https://github.com/mini-app-polis/deejay-cog/commit/dfd33ad0adc77085c323f34258ac45575d1d8bd0))
+
 ## [2.8.15](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.14...v2.8.15) (2026-10-19)
 
 
