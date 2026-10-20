@@ -1294,3 +1294,25 @@ def test_stopped_at_deadline_is_a_warn_with_its_reason():
         process_new_files._warn_parts(stats)
     )
     assert process_new_files._common_eval(stats)["stopped_at_deadline"] is True
+
+
+def test_a_local_run_refuses_the_default_production_drop_zone(monkeypatch) -> None:
+    monkeypatch.delenv("CSV_SOURCE_FOLDER_ID", raising=False)
+    monkeypatch.setattr(process_new_files, "is_production", lambda: False)
+
+    with pytest.raises(SystemExit, match="CSV_SOURCE_FOLDER_ID"):
+        process_new_files._refuse_local_sweep_of_production_drive()
+
+
+def test_a_local_run_with_a_named_folder_is_allowed(monkeypatch) -> None:
+    monkeypatch.setenv("CSV_SOURCE_FOLDER_ID", "a-test-folder")
+    monkeypatch.setattr(process_new_files, "is_production", lambda: False)
+
+    process_new_files._refuse_local_sweep_of_production_drive()
+
+
+def test_production_runs_on_the_default_folder(monkeypatch) -> None:
+    monkeypatch.delenv("CSV_SOURCE_FOLDER_ID", raising=False)
+    monkeypatch.setattr(process_new_files, "is_production", lambda: True)
+
+    process_new_files._refuse_local_sweep_of_production_drive()
