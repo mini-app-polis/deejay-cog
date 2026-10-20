@@ -118,6 +118,12 @@ doppler run -- uv run python -u src/deejay_cog/process_new_files.py
 doppler run -- uv run python -u src/deejay_cog/ingest_live_history.py
 ```
 
+The folder IDs default to the production folders, and a local run ingests
+into the development API. `process_new_files.py` therefore refuses to run
+outside production unless `CSV_SOURCE_FOLDER_ID` is set in your shell (a
+test drop-zone folder): left on the default
+it would archive the real drop zone's CSVs into the development API.
+
 **Local-only / WIP flows** — run modules directly. These call `post_run_finding(..., production_only=False)`, so their run reports are logged and never sent, whatever is set in your shell:
 
 ```bash

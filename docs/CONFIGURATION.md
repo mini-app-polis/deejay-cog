@@ -58,7 +58,9 @@ Spotify snapshot and the run report. With no URL resolved:
 | `REPAIR_MAX_PER_RUN` | Code default (`3`) | No | Repairs one sweep may make; the rest wait for later sweeps. |
 
 The folder IDs default to the production folders in `config.py`; there is
-no separate development Drive.
+no separate development Drive. Outside production, `process_new_files.py`
+refuses to run unless `CSV_SOURCE_FOLDER_ID` is set explicitly, so a local
+run cannot archive the production drop zone into the development API.
 
 ---
 

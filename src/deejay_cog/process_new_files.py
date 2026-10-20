@@ -7,7 +7,7 @@ from typing import Literal
 
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.deadline import RunDeadlineReached, without_run_deadline
-from mini_app_polis.environment import api_base_url, env_var_name
+from mini_app_polis.environment import api_base_url, env_var_name, is_production
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.spotify import SpotifyTokenExpired
 
@@ -328,7 +328,9 @@ def normalize_prefixes_in_source(drive) -> None:
 def remove_summary_file_for_year(g: GoogleAPI, year: str) -> None:
     """Remove the summary sheet for the given year from Drive if it exists."""
     try:
-        summary_folder_id = g.drive.ensure_folder(config.DJ_SETS_FOLDER_ID, "Summary")
+        summary_folder_id = g.drive.ensure_folder(
+            config.DJ_SETS_FOLDER_ID, config.SUMMARY_FOLDER_NAME
+        )
         summary_name = f"{year} Summary"
 
         # List files in the Summary folder and delete any exact name matches
@@ -1174,5 +1176,24 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
     report.send(notable=saw_input)
 
 
+def _refuse_local_sweep_of_production_drive() -> None:
+    """Stop a local run from sweeping the production drop zone by default.
+
+    The folder IDs default to the production folders, and outside production
+    the API base URL is the development one. A local run left on the defaults
+    would move and archive the real CSVs while ingesting them into the
+    development API, so production would never receive those sets until a
+    repair pass found them. Locally, the source folder must be named
+    explicitly.
+    """
+    if not is_production() and "CSV_SOURCE_FOLDER_ID" not in os.environ:
+        raise SystemExit(
+            "process-new-files outside production needs CSV_SOURCE_FOLDER_ID "
+            "set explicitly: the default is the production drop zone, and a "
+            "local run would archive its files into the development API."
+        )
+
+
 if __name__ == "__main__":
+    _refuse_local_sweep_of_production_drive()
     process_new_csv_files_flow()
