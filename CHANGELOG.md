@@ -1,3 +1,11 @@
+## [2.8.18](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.17...v2.8.18) (2026-10-21)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 6.11.0 ([2312f85](https://github.com/mini-app-polis/deejay-cog/commit/2312f852aa3fbcd52d7dbacc38ab80b682c04514))
+* **deps:** patch vulnerable dependencies (virtualenv) ([9ae5a24](https://github.com/mini-app-polis/deejay-cog/commit/9ae5a24108419a2c4b8b41b5954422e859a74368))
+
 ## [2.8.17](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.16...v2.8.17) (2026-10-20)
 
 
