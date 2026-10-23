@@ -19,7 +19,9 @@ declared in `mini-app-polis/infra` (`cogs.tf` and `modules/cog-worker`):
 
 **Locally**, everything comes from Doppler's shared `dev` config: run
 `doppler setup` once per clone (it reads `doppler.yaml`), then
-`doppler run -- …`. No `.env` file is read, and local runs never use `prd`.
+`doppler run -- …`. No `.env` file is read, and local commands use `dev`: a
+command that must act on production would say `--config prd` explicitly
+(ecosystem-standards CFG-003), and none in this repository does.
 `.env.example` lists the names; `uv run check-doppler-keys` (from
 miniapppolis-common-utils) checks that `dev` holds every one.
 

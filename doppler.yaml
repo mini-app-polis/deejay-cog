@@ -1,6 +1,7 @@
 # Pins this repo to the shared Doppler config for local development.
 # `doppler setup` reads it; `doppler run -- …` then injects the dev secrets.
-# Local runs use dev only — prd is synced to SSM for the Lambda, never run.
+# Local commands use dev; a production command would say `--config prd`
+# explicitly, and none here does. prd is synced to SSM for the Lambda.
 setup:
   - project: mini-app-polis-ecosystem
     config: dev
