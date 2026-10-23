@@ -1,3 +1,11 @@
+## [2.8.27](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.26...v2.8.27) (2026-10-23)
+
+
+### Bug Fixes
+
+* **deps:** patch vulnerable dependencies (filelock) ([ac415ed](https://github.com/mini-app-polis/deejay-cog/commit/ac415ed2d854872be6e4343179165a301fdf554d))
+* **deps:** patch vulnerable dependencies (virtualenv) ([f9b132c](https://github.com/mini-app-polis/deejay-cog/commit/f9b132cf8c3171c7c0c1b517f2a5210870019fb3))
+
 ## [2.8.26](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.25...v2.8.26) (2026-10-23)
 
 
