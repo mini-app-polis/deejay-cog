@@ -93,8 +93,9 @@ Spotify variables (`SPOTIPY_*`, `SPOTIFY_RADIO_PLAYLIST_ID`) are optional; if in
 
 **Prerequisites:** Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), and the
 [Doppler CLI](https://docs.doppler.com/docs/install-cli). Secrets come from
-Doppler's shared `dev` config — nothing reads a `.env` file, and local runs
-never use `prd`.
+Doppler's shared `dev` config — nothing reads a `.env` file, and local
+commands use `dev`. A command that must act on production would say
+`--config prd` explicitly (ecosystem-standards CFG-003); none here does.
 
 ```bash
 brew install gnupg dopplerhq/cli/doppler   # once per machine
