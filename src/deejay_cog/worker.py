@@ -2,7 +2,7 @@
 
 deejay-cog used to register a Prefect router deployment and poll Prefect
 Cloud for runs from a resident Railway container. It now runs on Lambda
-behind its own FIFO queue, ``deejay-jobs.fifo``: AWS polls the queue and invokes
+behind its own FIFO queue, declared in mini-app-polis/infra: AWS polls the queue and invokes
 :func:`lambda_handler`, so nothing of ours stays awake between DJ events.
 
 The API is the only producer. watcher-cog asks it to run a mode, and it
