@@ -69,23 +69,10 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 
 ## Environment variables
 
-Required for Drive/Sheets and logging:
-
-| Variable | Description |
-|----------|-------------|
-| **GOOGLE_CREDENTIALS_JSON** | Service account (or user) JSON for Google APIs. |
-| **LOGGING_LEVEL** | e.g. `DEBUG`, `INFO`. |
-
-Layout and behavior keys live in **common-python-utils** / `config` (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
-
-API (production — on Lambda, secrets come from SSM Parameter Store, synced from Doppler and read again at every invocation, so a change applies to the next run; the names are listed in mini-app-polis/infra `cogs.tf`):
-
-| Variable | Description |
-|----------|-------------|
-| **KAIANO_API_BASE_URL** | api-kaianolevine-com base URL, read in production. Every other environment reads **`KAIANO_API_BASE_URL_DEV`**, with no fallback. Unset, nothing is ingested and run reports are not sent. |
-| **DEEJAY_COG_API_KEY** | This cog's own named key, used by the API client to authenticate to api-kaianolevine-com. The shared client falls back to the generic `KAIANO_API_KEY` when it is unset; with neither, every call fails. |
-
-Spotify variables (`SPOTIPY_*`, `SPOTIFY_RADIO_PLAYLIST_ID`) are optional; if incomplete, Spotify steps are skipped.
+Every variable this cog reads is listed, with its default and whether it is
+required, in [`.env.example`](.env.example).
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md) covers how the deployed
+worker loads them and what each part does when one is missing.
 
 ---
 
