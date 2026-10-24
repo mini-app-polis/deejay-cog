@@ -1,3 +1,11 @@
+## [2.8.28](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.27...v2.8.28) (2026-10-24)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 6.22.1 ([3494304](https://github.com/mini-app-polis/deejay-cog/commit/349430493b6656c7d8918954e90eacdff8e2a125))
+* **worker:** use the shared Lambda worker module and queue message models ([392f949](https://github.com/mini-app-polis/deejay-cog/commit/392f9493b71889c767fa577f49961b50f44fd659))
+
 ## [2.8.27](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.26...v2.8.27) (2026-10-23)
 
 
