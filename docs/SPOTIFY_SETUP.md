@@ -74,7 +74,7 @@ playlists missed while the token was dead.
 
 **Production.** Add these to Doppler; they sync to SSM Parameter Store, and
 the Lambda loads them at cold start and again at every invocation (all optional — declared in
-`mini-app-polis/infra` `cogs.tf`):
+`mini-app-polis/infra`):
 
 | Name | Value |
 |------|-------|

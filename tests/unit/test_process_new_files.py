@@ -1228,7 +1228,7 @@ def test_a_rollback_runs_outside_the_shared_deadline():
 def test_shared_deadline_passed_only_once_it_has():
     from mini_app_polis.deadline import run_deadline
 
-    from deejay_cog._deadline import shared_deadline_passed
+    from deejay_cog._shared_deadline import shared_deadline_passed
 
     assert shared_deadline_passed() is False  # none set
     with run_deadline(60):
@@ -1240,8 +1240,7 @@ def test_shared_deadline_passed_only_once_it_has():
 def test_a_deadline_refusal_before_the_upload_is_a_stop_not_a_failure(tmp_path):
     """Renamed FAILED_, the redelivery would skip a set that is fine."""
     from mini_app_polis.deadline import RunDeadlineReached
-
-    from deejay_cog._deadline import RunOutOfTime
+    from mini_app_polis.lambda_worker import RunOutOfTime
 
     drive = MagicMock()
     drive.download_file.side_effect = RunDeadlineReached("downloading")
@@ -1260,8 +1259,7 @@ def test_a_deadline_refusal_escaping_the_ingest_rolls_back_and_stops():
     """The ingest contains its own failures today, so this cannot happen
     yet; if one ever escapes, the sheet must still go."""
     from mini_app_polis.deadline import RunDeadlineReached
-
-    from deejay_cog._deadline import RunOutOfTime
+    from mini_app_polis.lambda_worker import RunOutOfTime
 
     g = _drive_for_post_upload()
     g.drive.delete_file = MagicMock()

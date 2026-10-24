@@ -9,15 +9,16 @@ from mini_app_polis import logger as logger_mod
 from mini_app_polis.deadline import RunDeadlineReached, without_run_deadline
 from mini_app_polis.environment import api_base_url, env_var_name, is_production
 from mini_app_polis.google import GoogleAPI
+from mini_app_polis.lambda_worker import RunOutOfTime
 from mini_app_polis.spotify import SpotifyTokenExpired
 
 import deejay_cog.config as config
-from deejay_cog._deadline import RunOutOfTime, shared_deadline_passed
 from deejay_cog._pipeline_eval import (
     REPO,
     RunReport,
     get_prefect_logger,
 )
+from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog.ingest_to_api import (
     build_ingest_payload,
     read_tracks_from_sheet,

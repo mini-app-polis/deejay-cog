@@ -12,7 +12,7 @@ records and Spotify playlists. The decision behind the current shape is
 watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
                                                   │ enqueues one message
                                                   ▼
-                                    SQS FIFO queue `deejay-jobs.fifo`
+                                    this cog's SQS FIFO queue
                                                   │ event source mapping
                                                   ▼
                               Lambda `deejay_cog.worker.lambda_handler`
@@ -29,7 +29,7 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
 - **The Lambda** runs one flow per message, under the message id as its run
   id, so a run can be traced from watcher's log to its report.
 - Nothing runs between triggers. The queue, function, dead-letter queue and
-  alarms are declared in `mini-app-polis/infra` (`cogs.tf`): a FIFO queue
+  alarms are declared in `mini-app-polis/infra`: a FIFO queue
   with reserved concurrency 1, so two sweeps never race over one folder; a
   300 s timeout; three receives before a message is dead-lettered.
 

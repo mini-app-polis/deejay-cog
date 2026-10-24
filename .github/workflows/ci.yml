@@ -97,7 +97,7 @@ jobs:
     uses: mini-app-polis/.github/.github/workflows/lambda-deploy.yml@v3
     with:
       ref: ${{ needs.release.outputs.tag }}
-      # These three match this cog's block in mini-app-polis/infra cogs.tf; the deploy refuses a function
+      # These three match the function declared in mini-app-polis/infra; the deploy refuses a function
       # whose architecture differs.
       handler: deejay_cog.worker.lambda_handler
       architecture: x86_64

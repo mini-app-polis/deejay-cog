@@ -5,7 +5,7 @@ a value is missing. Every variable, what it does, its default and whether it
 is required, is listed in [`.env.example`](../.env.example).
 
 **In production** the Lambda gets its configuration from two places, both
-declared in `mini-app-polis/infra` (`cogs.tf` and `modules/cog-worker`):
+declared in `mini-app-polis/infra`:
 
 - **Secrets and tunable settings** come from SSM Parameter Store, synced
   from Doppler (`mini_app_polis.load_secrets`). They are loaded when the

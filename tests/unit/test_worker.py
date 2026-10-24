@@ -182,9 +182,7 @@ def test_a_run_that_outlives_the_deadline_fails_the_ordinary_way(
     anything."""
     import time
 
-    from deejay_cog import _deadline
-
-    monkeypatch.setattr(_deadline, "DEADLINE_MARGIN_SECONDS", 0)
+    monkeypatch.setattr(worker, "DEADLINE_MARGIN_SECONDS", 0)
     raised: list[BaseException] = []
 
     def _slow(*_args: object, **_kwargs: object) -> None:
@@ -200,7 +198,7 @@ def test_a_run_that_outlives_the_deadline_fails_the_ordinary_way(
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}]}
     assert len(raised) == 1
-    assert isinstance(raised[0], _deadline.RunOutOfTime)
+    assert isinstance(raised[0], worker.RunOutOfTime)
     # This cog's flows do not report themselves, so the consumer is the only
     # witness and must say something.
     assert reported.called
@@ -304,8 +302,6 @@ def test_the_shared_deadline_is_set_a_request_timeout_inside_the_margin(
 ) -> None:
     from mini_app_polis.deadline import remaining_seconds
 
-    from deejay_cog import _deadline
-
     seen: list[float | None] = []
     flows["process-new-files"].side_effect = lambda **_: seen.append(
         remaining_seconds()
@@ -313,9 +309,7 @@ def test_the_shared_deadline_is_set_a_request_timeout_inside_the_margin(
 
     worker.lambda_handler(_event(_body()), _Context(remaining_ms=900_000))
 
-    expected = (
-        900 - _deadline.DEADLINE_MARGIN_SECONDS - _deadline.REQUEST_HEADROOM_SECONDS
-    )
+    expected = 900 - worker.DEADLINE_MARGIN_SECONDS - worker.REQUEST_HEADROOM_SECONDS
     [budget] = seen
     assert budget is not None
     assert expected - 1 < budget <= expected
@@ -327,13 +321,11 @@ def test_less_time_than_the_headroom_starts_with_the_deadline_passed(
 ) -> None:
     from mini_app_polis.deadline import remaining_seconds
 
-    from deejay_cog import _deadline
-
     seen: list[float | None] = []
     flows["process-new-files"].side_effect = lambda **_: seen.append(
         remaining_seconds()
     )
-    ms = int((_deadline.DEADLINE_MARGIN_SECONDS + 1) * 1000)
+    ms = int((worker.DEADLINE_MARGIN_SECONDS + 1) * 1000)
 
     worker.lambda_handler(_event(_body()), _Context(remaining_ms=ms))
 
