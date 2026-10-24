@@ -653,7 +653,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "miniapppolis-common-utils", specifier = ">=6.6.0,<7" },
+    { name = "miniapppolis-common-utils", specifier = ">=6.22.0,<7" },
     { name = "music-tag", specifier = ">=0.4.3" },
     { name = "musicbrainzngs", specifier = ">=0.7.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.2" },

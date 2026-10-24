@@ -36,7 +36,7 @@ from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 
 import deejay_cog.config as config
-from deejay_cog._deadline import shared_deadline_passed
+from deejay_cog._shared_deadline import shared_deadline_passed
 
 from .api_client import api_client
 from .ingest_to_api import build_ingest_payload, read_tracks_from_sheet

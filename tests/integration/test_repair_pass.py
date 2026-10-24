@@ -294,10 +294,10 @@ def test_repairs_stop_at_the_deadline_and_the_rest_wait_for_the_next_run(
     repairs that failed."""
     from harness import LambdaContext
 
-    from deejay_cog import _deadline
+    from deejay_cog import worker
 
-    monkeypatch.setattr(_deadline, "DEADLINE_MARGIN_SECONDS", 0)
-    monkeypatch.setattr(_deadline, "REQUEST_HEADROOM_SECONDS", 4.7)  # at 0.3 s
+    monkeypatch.setattr(worker, "DEADLINE_MARGIN_SECONDS", 0)
+    monkeypatch.setattr(worker, "REQUEST_HEADROOM_SECONDS", 4.7)  # at 0.3 s
     names = [_name(n, f"Event {n}") for n in (5, 10)]
     for name in names:
         _imported_earlier(google, name)

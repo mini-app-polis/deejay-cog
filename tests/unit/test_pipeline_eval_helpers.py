@@ -18,6 +18,10 @@ from unittest.mock import MagicMock, patch
 import mini_app_polis.pipeline_status as ps
 
 import deejay_cog._pipeline_eval as pe
+from deejay_cog import __version__
+
+#: How the library stamps the version the shim passes it.
+VERSION_STAMP = f"(version={__version__})"
 
 
 def test_reexports_library_helpers() -> None:
@@ -133,9 +137,9 @@ def test_post_run_finding_warn_includes_extras(monkeypatch) -> None:
             production_only=True,
             spotify_failed=2,
         )
-    # Counters follow the version stamp, so the last line is the metadata.
+    # The version stamp follows the counters, at the end of the message.
     assert post.call_args.kwargs["text"] == (
-        f"Completed with issues\n{pe.VERSION_STAMP} spotify_failed=2"
+        f"Completed with issues spotify_failed=2 {VERSION_STAMP}"
     )
 
 
@@ -180,21 +184,15 @@ def test_get_run_id_is_unattributable_without_prefect(monkeypatch) -> None:
 
 
 def test_post_run_finding_stamps_version(monkeypatch) -> None:
-    """The library stamps only a version its caller passes, and the shim
-    passes none: it stamps its own, from _version.py."""
+    """The library stamps only a version its caller passes; the shim passes
+    its own, from _version.py."""
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
     with (
         patch.object(ps, "_deliver", return_value=True),
         patch.object(ps, "_build_message", wraps=ps._build_message) as post,
     ):
         pe.post_run_finding("f", "ERROR", text="worker failed", production_only=True)
-    assert post.call_args.kwargs["text"] == f"worker failed\n{pe.VERSION_STAMP}"
-
-
-def test_version_stamp_is_the_running_code() -> None:
-    from deejay_cog import __version__
-
-    assert f"(processor={__version__})" == pe.VERSION_STAMP
+    assert post.call_args.kwargs["text"] == f"worker failed {VERSION_STAMP}"
 
 
 def test_post_run_finding_stamps_once(monkeypatch) -> None:
@@ -205,20 +203,13 @@ def test_post_run_finding_stamps_once(monkeypatch) -> None:
     ):
         pe.post_run_finding("f", "SUCCESS", production_only=True, notable=True)
     text = post.call_args.kwargs["text"]
-    assert text.count("(processor=") == 1
-    assert pe.VERSION_STAMP in text
+    assert text.count("(version=") == 1
+    assert VERSION_STAMP in text
 
 
-def test_stamp_version_leaves_empty_text_alone() -> None:
-    assert pe.stamp_version("") == ""
-
-
-def test_run_report_text_is_version_stamped() -> None:
+def test_run_report_carries_the_running_version() -> None:
     report = pe.RunReport(flow_name="f", repo=pe.REPO)
-    report.ok(2)
-    lines = report.text().splitlines()
-    assert lines[0].startswith("Run complete in ")
-    assert lines[-1] == pe.VERSION_STAMP
+    assert report.version == __version__
 
 
 def test_run_report_send_carries_version(monkeypatch) -> None:
@@ -230,4 +221,4 @@ def test_run_report_send_carries_version(monkeypatch) -> None:
         patch.object(ps, "_build_message", wraps=ps._build_message) as post,
     ):
         report.send(notable=True)
-    assert post.call_args.kwargs["text"].endswith(pe.VERSION_STAMP)
+    assert post.call_args.kwargs["text"].endswith(VERSION_STAMP)

@@ -11,15 +11,16 @@ from mini_app_polis.api import KaianoApiError
 from mini_app_polis.api.contract import LivePlayIngest, LivePlaysIngest
 from mini_app_polis.environment import api_base_url, env_var_name
 from mini_app_polis.google import GoogleAPI
+from mini_app_polis.lambda_worker import RunOutOfTime
 from mini_app_polis.vdj.m3u import M3UToolbox
 
 import deejay_cog.config as config
-from deejay_cog._deadline import RunOutOfTime, shared_deadline_passed
 from deejay_cog._pipeline_eval import (
     REPO,
     RunReport,
     get_prefect_logger,
 )
+from deejay_cog._shared_deadline import shared_deadline_passed
 
 from .api_client import api_client
 

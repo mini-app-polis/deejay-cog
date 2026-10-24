@@ -12,9 +12,10 @@ enqueues one message:
 
 **Nothing is deleted until the work is done.** This code deletes nothing
 at all: the event source mapping deletes every record the handler does not
-name in ``batchItemFailures``. So "do not delete" means "name it", and every
-failure below appends to that list. Get that backwards and a failed run is
-silently discarded — the property the queue exists to remove.
+name in ``batchItemFailures``. So "do not delete" means "name it", and
+:func:`mini_app_polis.lambda_worker.process_records` names every record
+whose run raised. Get that backwards and a failed run is silently
+discarded — the property the queue exists to remove.
 
 **An unrecognised message is a producer bug.** The queue is deejay-cog's
 alone, so a type, version or mode this consumer does not speak was
@@ -33,26 +34,40 @@ run can be traced from watcher's log to the report without a join table.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from typing import Any
 
+from googleapiclient.http import DEFAULT_HTTP_TIMEOUT_SEC
 from mini_app_polis import load_secrets, timing
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.api.contract import DeejayRunMessage
 from mini_app_polis.deadline import RunDeadlineReached
+from mini_app_polis.lambda_worker import (
+    RunOutOfTime,
+    UnprocessableMessage,
+    all_failed,
+    deadline,
+    parse_message,
+    process_records,
+)
 from mini_app_polis.sentry import init_sentry
 
-from deejay_cog._deadline import RunOutOfTime, deadline
 from deejay_cog._pipeline_eval import post_run_finding
 from deejay_cog.ingest_live_history import ingest_live_history
 from deejay_cog.process_new_files import process_new_csv_files_flow
 
 log = logger_mod.get_logger()
 
-#: Must match api-kaianolevine-com's deejay_dispatch. A mismatch is a
-#: message this consumer refuses rather than misreads.
-MESSAGE_VERSION = 1
-TYPE_RUN = "deejay.run"
+#: How long before the function's timeout a run is stopped, so that it can
+#: still send its report and the handler can still return. The report is
+#: one POST with the API client's own timeout; this leaves room for it.
+DEADLINE_MARGIN_SECONDS = 30
+
+#: How much earlier still the shared library's Google and Spotify retries
+#: stop. The library checks its deadline between attempts, never during one,
+#: so a request started just before it can run for the client's whole
+#: timeout.
+REQUEST_HEADROOM_SECONDS = DEFAULT_HTTP_TIMEOUT_SEC
 
 #: The router, formerly ``deejay_router`` in ``main.py``. A mode here is a
 #: mode the API's ``DeejayRunRequest`` must also accept — the API rejects an
@@ -79,39 +94,10 @@ FLOW_NAMES = {
 init_sentry("deejay-cog")
 
 
-class UnprocessableMessage(RuntimeError):
-    """The message cannot be handled by this consumer, ever.
-
-    Distinct from a run that failed: retrying will not help. It is still
-    returned to the queue rather than dropped, so it reaches the dead-letter
-    queue and someone sees what produced it.
-    """
-
-
 def _mode_of(body: str) -> str:
     """The mode a message asks for. Raises UnprocessableMessage otherwise."""
-    try:
-        message = json.loads(body)
-    except ValueError as exc:
-        raise UnprocessableMessage(f"body is not JSON: {exc}") from exc
-    if not isinstance(message, dict):
-        raise UnprocessableMessage("body is not an object")
-
-    version = message.get("version")
-    if version != MESSAGE_VERSION:
-        raise UnprocessableMessage(
-            f"message version {version!r}, this consumer speaks {MESSAGE_VERSION}"
-        )
-
-    kind = message.get("type")
-    if kind != TYPE_RUN:
-        raise UnprocessableMessage(f"unknown message type {kind!r}")
-
-    payload = message.get("payload")
-    if not isinstance(payload, dict):
-        raise UnprocessableMessage("message carries no payload object")
-
-    mode = payload.get("mode")
+    message = parse_message(body, DeejayRunMessage)
+    mode = message.payload.mode
     if mode not in MODES:
         raise UnprocessableMessage(f"unknown mode {mode!r}; supported: {sorted(MODES)}")
     return mode
@@ -166,6 +152,11 @@ def _mode_label(body: str) -> str:
         return "unreadable"
 
 
+def _attempt(record: dict[str, Any]) -> str:
+    """Which receive of this message this is, or "?" when unknown."""
+    return str((record.get("attributes") or {}).get("ApproximateReceiveCount", "?"))
+
+
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Run each record's flow, and name the records that must come back.
 
@@ -175,8 +166,6 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     at every size, and ``ReportBatchItemFailures`` on the mapping is what
     makes this return shape mean something.
     """
-    records = event.get("Records", []) if isinstance(event, dict) else []
-
     # Settings as Doppler holds them now, not as they were at cold start: a
     # warm container otherwise ran on stale secrets and a stale
     # LOGGING_LEVEL until the next deploy. Cheap — one GetParameters call —
@@ -187,18 +176,12 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         load_secrets(refresh=True)
     except Exception:  # noqa: BLE001 — nothing can run without its settings
         log.exception("worker: could not refresh settings from SSM")
-        return {
-            "batchItemFailures": [
-                {"itemIdentifier": str(r.get("messageId") or "")} for r in records
-            ]
-        }
+        return all_failed(event)
 
-    failures: list[dict[str, str]] = []
-
-    for record in records:
+    def handle(record: dict[str, Any]) -> None:
         message_id = str(record.get("messageId") or "")
         body = record.get("body") or ""
-        attempt = (record.get("attributes") or {}).get("ApproximateReceiveCount", "?")
+        attempt = _attempt(record)
 
         # One timing line per record: how much of the run was waiting,
         # and on what (mini_app_polis.timing).
@@ -210,21 +193,15 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 # no report, and the message comes back with nobody told why.
                 # This stops it a margin early so the failure is the ordinary
                 # kind (PIPE-020).
-                with deadline(context):
+                with deadline(
+                    context,
+                    margin_seconds=DEADLINE_MARGIN_SECONDS,
+                    request_headroom_seconds=REQUEST_HEADROOM_SECONDS,
+                ):
                     process_message(body, run_id=message_id)
-            except UnprocessableMessage as exc:
+            except UnprocessableMessage:
                 timed.label(outcome="unprocessable")
-                log.error(
-                    "worker: unprocessable message (attempt %s): %s", attempt, exc
-                )
-                # Once, on the first receive. Every later receive fails the same
-                # way, and where it ends up — the dead-letter queue — has an
-                # alarm of its own; three reports of one bad message is noise.
-                if attempt in ("1", "?"):
-                    _report_failure(
-                        "deejay-cog", "an unprocessable message", exc, message_id
-                    )
-                failures.append({"itemIdentifier": message_id})
+                raise
             except (RunOutOfTime, RunDeadlineReached) as exc:
                 timed.label(outcome="deadline")
                 # RunOutOfTime is a BaseException, so that no flow's
@@ -236,23 +213,34 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 # the drop zone.
                 log.error("worker: run stopped at the deadline (attempt %s)", attempt)
                 _report_failure(_flow_name_for(body), "a queued run", exc, message_id)
-                failures.append({"itemIdentifier": message_id})
-            except Exception as exc:  # noqa: BLE001 — every failure is a retry
+                raise
+            except Exception as exc:
                 timed.label(outcome="failed")
                 log.exception("worker: run failed (attempt %s)", attempt)
                 _report_failure(_flow_name_for(body), "a queued run", exc, message_id)
-                failures.append({"itemIdentifier": message_id})
-            else:
-                timed.label(outcome="ok")
+                raise
+            timed.label(outcome="ok")
 
+    def on_unprocessable(exc: UnprocessableMessage, record: dict[str, Any]) -> None:
+        # Once, on the first receive. Every later receive fails the same way,
+        # and where it ends up — the dead-letter queue — has an alarm of its
+        # own; three reports of one bad message is noise.
+        if _attempt(record) in ("1", "?"):
+            _report_failure(
+                "deejay-cog",
+                "an unprocessable message",
+                exc,
+                str(record.get("messageId") or ""),
+            )
+
+    result = process_records(event, handle, on_unprocessable=on_unprocessable)
+    failures = result["batchItemFailures"]
     if failures:
+        records = event.get("Records", []) if isinstance(event, dict) else []
         log.warning(
             "worker: %d of %d record(s) returned to the queue",
             len(failures),
             len(records),
         )
-
-    # Anything absent from this list is deleted by the mapping. An empty
-    # list means "all of it is done" — true only because every failure
-    # above appended to it.
-    return {"batchItemFailures": failures}
+    # Anything absent from this list is deleted by the mapping.
+    return result

@@ -49,10 +49,10 @@ def _deadlines(monkeypatch: pytest.MonkeyPatch, *, headroom: float) -> None:
     shared library's run deadline ``headroom`` seconds before it — the
     production order, compressed. The fake Drive and Sheets refuse calls
     past the shared deadline, as the facade does."""
-    from deejay_cog import _deadline
+    from deejay_cog import worker
 
-    monkeypatch.setattr(_deadline, "DEADLINE_MARGIN_SECONDS", 0)
-    monkeypatch.setattr(_deadline, "REQUEST_HEADROOM_SECONDS", headroom)
+    monkeypatch.setattr(worker, "DEADLINE_MARGIN_SECONDS", 0)
+    monkeypatch.setattr(worker, "REQUEST_HEADROOM_SECONDS", headroom)
 
 
 # ── the path that matters ────────────────────────────────────────────────
