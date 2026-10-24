@@ -179,12 +179,11 @@ def test_get_run_id_is_unattributable_without_prefect(monkeypatch) -> None:
     assert ps.get_run_id() == "local-run"
 
 
-def test_post_run_finding_stamps_version_without_distribution(monkeypatch) -> None:
-    """Regression: Lambda strips *.dist-info, so the library's own lookup
-    finds nothing and stamps nothing. The shim stamps from _version.py."""
+def test_post_run_finding_stamps_version(monkeypatch) -> None:
+    """The library stamps only a version its caller passes, and the shim
+    passes none: it stamps its own, from _version.py."""
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
     with (
-        patch.object(ps, "_resolve_processor_version", return_value=None),
         patch.object(ps, "_deliver", return_value=True),
         patch.object(ps, "_build_message", wraps=ps._build_message) as post,
     ):
@@ -198,12 +197,9 @@ def test_version_stamp_is_the_running_code() -> None:
     assert f"(processor={__version__})" == pe.VERSION_STAMP
 
 
-def test_post_run_finding_stamps_once_when_distribution_installed(
-    monkeypatch,
-) -> None:
+def test_post_run_finding_stamps_once(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
     with (
-        patch.object(ps, "_resolve_processor_version", return_value="9.9.9"),
         patch.object(ps, "_deliver", return_value=True),
         patch.object(ps, "_build_message", wraps=ps._build_message) as post,
     ):
@@ -225,12 +221,11 @@ def test_run_report_text_is_version_stamped() -> None:
     assert lines[-1] == pe.VERSION_STAMP
 
 
-def test_run_report_send_carries_version_without_distribution(monkeypatch) -> None:
+def test_run_report_send_carries_version(monkeypatch) -> None:
     monkeypatch.setenv("KAIANO_API_BASE_URL", "https://api.example")
     report = pe.RunReport(flow_name="f", repo=pe.REPO)
     report.ok()
     with (
-        patch.object(ps, "_resolve_processor_version", return_value=None),
         patch.object(ps, "_deliver", return_value=True),
         patch.object(ps, "_build_message", wraps=ps._build_message) as post,
     ):

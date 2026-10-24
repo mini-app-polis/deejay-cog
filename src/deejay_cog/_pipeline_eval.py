@@ -20,14 +20,11 @@ The shim provides three conveniences for deejay-cog callers:
    trade, since the absorbed list is why a SUCCESS report could be sent
    carrying twelve counters and saying "Run completed successfully."
 3. Stamps ``(processor=X.Y.Z)`` — the version of the code that is running —
-   onto every message, from ``_version.py``. The library would stamp it
-   itself, but it resolves the version from the installed distribution's
-   metadata, and the Lambda deploy strips every ``*.dist-info`` from the
-   zip; there the lookup fails and the library, by design, stamps nothing.
-   ``_version.py`` is source and ships in the zip, and the deploy builds
-   from the release tag, so it is the version of what is running. The
-   library skips its own stamp when the text already carries one, so
-   nothing is stamped twice where the distribution is installed.
+   onto every message, from ``_version.py``. The library stamps only a
+   version its caller passes, and this shim passes none, so the message
+   carries one stamp. ``_version.py`` is source and ships in the Lambda zip
+   (the deploy strips ``*.dist-info``), and the deploy builds from the
+   release tag, so it is the version of what is running.
 
 ``get_prefect_logger`` keeps its library name; outside a Prefect run, which
 is everywhere now, it is the shared module logger.
