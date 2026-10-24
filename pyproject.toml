@@ -86,8 +86,11 @@ known-first-party = ["deejay_cog"]
 quote-style = "double"
 
 [tool.uv]
-# The uv every lock in the fleet is written with. setup-uv reads this in CI,
-# and an older or newer local uv refuses to run instead of rewriting the
-# lock's revision. Upgrading uv is a fleet sweep: bump this everywhere, then
-# re-lock, in commits of their own.
-required-version = "==0.13.5"
+# The uv minor every lock in the fleet is written with. A range, not an exact
+# pin: Dependabot runs its own single uv and refuses to update a repository
+# whose pin excludes it, and it follows uv's patch releases. setup-uv reads
+# this in CI and installs the newest uv inside the range; a uv outside it
+# refuses to run instead of rewriting the lock's revision. Moving to a new
+# minor is a fleet sweep: bump this everywhere, then re-lock, in commits of
+# their own.
+required-version = ">=0.13.0,<0.14"
