@@ -1,4 +1,4 @@
-# ADR-003: On-demand cog with no expected cadence
+# ADR-0003: On-demand cog with no expected cadence
 
 Date: 2026-04-23
 
@@ -7,7 +7,7 @@ Date: 2026-04-23
 Accepted, amended.
 
 > **Amended (Oct 2026).** The two observability channels named in Decision
-> are gone with Prefect ([ADR-006](./ADR-006-lambda-behind-sqs.md)). A run
+> are gone with Prefect ([ADR-0006](./ADR-0006-lambda-behind-sqs.md)). A run
 > that raises is reported by the Lambda worker to `POST /v1/notify`, and a
 > job that fails every receive lands in the dead-letter queue and fires
 > `deejay-dlq-not-empty`; `deejay-queue-stalled` fires when nothing
@@ -58,7 +58,7 @@ channels instead:
   record with completion state (Completed, Failed, Crashed). These
   are visible in Prefect Cloud UI and scored by evaluator-cog.
 - **Failure hooks posting findings.** Each served flow has an
-  `on_failure` and `on_crashed` hook (see ADR-004) that posts a
+  `on_failure` and `on_crashed` hook (see ADR-0004) that posts a
   direct finding to evaluator-cog when a run ends abnormally.
 
 ## Consequences

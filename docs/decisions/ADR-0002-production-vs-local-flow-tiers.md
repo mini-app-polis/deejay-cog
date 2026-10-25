@@ -1,4 +1,4 @@
-# ADR-002: Production-vs-local flow tiers
+# ADR-0002: Production-vs-local flow tiers
 
 Date: 2026-04-20
 
@@ -7,7 +7,7 @@ Date: 2026-04-20
 Accepted, amended.
 
 > **Amended (Oct 2026).** Prefect deployments and `main.py` are gone
-> ([ADR-006](./ADR-006-lambda-behind-sqs.md)), so the deployment-slot
+> ([ADR-0006](./ADR-0006-lambda-behind-sqs.md)), so the deployment-slot
 > force no longer applies. The tier split stands: the production flows
 > are the two modes in `deejay_cog.worker.MODES` (`process-new-files`,
 > `ingest-live-history`), and the other three remain local-only.

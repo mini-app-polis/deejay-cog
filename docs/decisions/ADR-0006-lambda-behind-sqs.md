@@ -1,4 +1,4 @@
-# ADR-006: Run on Lambda behind SQS, not Prefect on Railway
+# ADR-0006: Run on Lambda behind SQS, not Prefect on Railway
 
 Date: 2026-09-21
 
@@ -6,8 +6,8 @@ Date: 2026-09-21
 
 Accepted
 
-Supersedes [ADR-001](./ADR-001-prefect-in-process-serve.md) and
-[ADR-005](./ADR-005-serve-startup-resilience.md).
+Supersedes [ADR-0001](./ADR-0001-prefect-in-process-serve.md) and
+[ADR-0005](./ADR-0005-serve-startup-resilience.md).
 
 > **Amended (Oct 2026).** The queue is FIFO, `deejay-jobs.fifo`, with one
 > message group, not the standard `deejay-jobs` named below. The
@@ -19,7 +19,7 @@ Supersedes [ADR-001](./ADR-001-prefect-in-process-serve.md) and
 ## Context
 
 deejay-cog held a Railway container open to poll Prefect Cloud every ten
-seconds for work that arrives roughly monthly (ADR-003). Memory was the
+seconds for work that arrives roughly monthly (ADR-0003). Memory was the
 whole bill, and it bought nothing between DJ events. The fleet is moving
 off Prefect onto one SQS queue and one Lambda function per cog; the
 decision and its reasoning are evaluator-cog's

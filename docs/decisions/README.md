@@ -6,9 +6,11 @@ context around them, and their consequences.
 
 ## Format
 
-Each ADR is a markdown file named `ADR-NNN-short-slug.md` where `NNN`
-is a zero-padded three-digit sequence number starting at `001`. This
-matches the ecosystem-standards DOC-005 specification.
+Each ADR is a markdown file named `ADR-NNNN-short-slug.md` where `NNNN`
+is a zero-padded four-digit sequence number starting at `0001`. This
+matches the ecosystem-standards DOC-005 specification. An ADR in another
+repository is cited with that repository's name first, as in
+`ecosystem-standards ADR-0009`.
 
 Each ADR uses three sections: **Context** (what forces motivated the
 decision), **Decision** (what change is being made), and
@@ -16,9 +18,9 @@ decision), **Decision** (what change is being made), and
 
 ## Index
 
-- [ADR-001: Run Prefect flows in-process via prefect.serve()](./ADR-001-prefect-in-process-serve.md) — superseded by ADR-006
-- [ADR-002: Production-vs-local flow tiers](./ADR-002-production-vs-local-flow-tiers.md) — amended by ADR-006
-- [ADR-003: On-demand cog with no expected cadence](./ADR-003-on-demand-no-cadence.md) — amended by ADR-006
-- [ADR-004: Best-effort pipeline evaluation posting](./ADR-004-best-effort-pipeline-eval.md) — amended: reports go to `/v1/notify`
-- [ADR-005: Resilient `serve()` startup — retry, restart policy, and the `startup` finding source](./ADR-005-serve-startup-resilience.md) — amends ADR-001; superseded by ADR-006
-- [ADR-006: Run on Lambda behind SQS, not Prefect on Railway](./ADR-006-lambda-behind-sqs.md) — supersedes ADR-001 and ADR-005; amended (FIFO queue, reserved concurrency)
+- [ADR-0001: Run Prefect flows in-process via prefect.serve()](./ADR-0001-prefect-in-process-serve.md) — superseded by ADR-0006
+- [ADR-0002: Production-vs-local flow tiers](./ADR-0002-production-vs-local-flow-tiers.md) — amended by ADR-0006
+- [ADR-0003: On-demand cog with no expected cadence](./ADR-0003-on-demand-no-cadence.md) — amended by ADR-0006
+- [ADR-0004: Best-effort pipeline evaluation posting](./ADR-0004-best-effort-pipeline-eval.md) — amended: reports go to `/v1/notify`
+- [ADR-0005: Resilient `serve()` startup — retry, restart policy, and the `startup` finding source](./ADR-0005-serve-startup-resilience.md) — amends ADR-0001; superseded by ADR-0006
+- [ADR-0006: Run on Lambda behind SQS, not Prefect on Railway](./ADR-0006-lambda-behind-sqs.md) — supersedes ADR-0001 and ADR-0005; amended (FIFO queue, reserved concurrency)

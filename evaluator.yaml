@@ -1,5 +1,5 @@
 # deejay-cog / evaluator.yaml
-# Per-repo evaluation configuration — ecosystem-standards ADR-001, ADR-002
+# Per-repo evaluation configuration — ecosystem-standards ADR-0001, ADR-0002
 
 type: pipeline-cog
 
