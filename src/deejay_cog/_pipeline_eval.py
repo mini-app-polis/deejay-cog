@@ -28,7 +28,7 @@ The shim provides three conveniences for deejay-cog callers:
 ``get_prefect_logger`` keeps its library name; outside a Prefect run, which
 is everywhere now, it is the shared module logger.
 
-See ``docs/decisions/ADR-004-best-effort-pipeline-eval.md`` for the
+See ``docs/decisions/ADR-0004-best-effort-pipeline-eval.md`` for the
 decision record on best-effort posting.
 
 Production flows (``process_new_files``, ``ingest_live_history``) report

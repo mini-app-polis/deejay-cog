@@ -2,7 +2,7 @@
 
 How **deejay-cog** turns files dropped in Google Drive into sheets, API
 records and Spotify playlists. The decision behind the current shape is
-[ADR-006](decisions/ADR-006-lambda-behind-sqs.md).
+[ADR-0006](decisions/ADR-0006-lambda-behind-sqs.md).
 
 ---
 

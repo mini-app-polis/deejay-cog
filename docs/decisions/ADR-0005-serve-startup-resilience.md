@@ -1,13 +1,13 @@
-# ADR-005: Resilient `serve()` startup — retry, restart policy, and the `startup` finding source
+# ADR-0005: Resilient `serve()` startup — retry, restart policy, and the `startup` finding source
 
 Date: 2026-08-19
 
 ## Status
 
-Superseded by [ADR-006](./ADR-006-lambda-behind-sqs.md) — deejay-cog runs on Lambda behind SQS, with no Prefect.
+Superseded by [ADR-0006](./ADR-0006-lambda-behind-sqs.md) — deejay-cog runs on Lambda behind SQS, with no Prefect.
 
 Amends the Consequences section of
-[ADR-001](./ADR-001-prefect-in-process-serve.md).
+[ADR-0001](./ADR-0001-prefect-in-process-serve.md).
 
 ## Context
 
@@ -24,7 +24,7 @@ In `main.py` that call was unguarded — the only `except` was
 process exited non-zero.
 
 Every cog shares this same `serve()`-in-`main()` scaffolding per
-ADR-001. It was one single point of failure hit four times, not four
+ADR-0001. It was one single point of failure hit four times, not four
 coincidences.
 
 Three independent defects converged:
@@ -172,8 +172,8 @@ identity is unchanged, so existing triggers keep working.
 - ecosystem-standards CD-015 (prefect.serve is the canonical pattern)
 - ecosystem-standards CD-016 (startup registration must be wrapped)
 - ecosystem-standards CD-017 (version-controlled ON_FAILURE restart policy)
-- ecosystem-standards ADR-006 (the ecosystem-wide record of this decision)
+- ecosystem-standards ADR-0006 (the ecosystem-wide record of this decision)
 - `mini_app_polis.serve_resilience` in common-python-utils
-- [ADR-001](./ADR-001-prefect-in-process-serve.md) — amended Consequences
-- [ADR-004](./ADR-004-best-effort-pipeline-eval.md) — best-effort posting,
+- [ADR-0001](./ADR-0001-prefect-in-process-serve.md) — amended Consequences
+- [ADR-0004](./ADR-0004-best-effort-pipeline-eval.md) — best-effort posting,
   which the startup finding follows

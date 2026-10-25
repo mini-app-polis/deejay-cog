@@ -1,4 +1,4 @@
-# ADR-004: Best-effort pipeline-evaluation posting
+# ADR-0004: Best-effort pipeline-evaluation posting
 
 Date: 2026-04-18
 
@@ -12,7 +12,7 @@ Accepted, amended.
 > sent as messages to `POST /v1/notify`; nothing goes to `/v1/evaluations`
 > and nothing passes through evaluator-cog. Prefect failure hooks
 > (`make_failure_hook`) are replaced by the Lambda worker reporting any run
-> that raises ([ADR-006](./ADR-006-lambda-behind-sqs.md)), and the send gate
+> that raises ([ADR-0006](./ADR-0006-lambda-behind-sqs.md)), and the send gate
 > is now an API base URL resolving for the environment rather than the
 > `KAIANO_API_BASE_URL` + `ANTHROPIC_API_KEY` pair. The best-effort and
 > production-only guarantees stand.

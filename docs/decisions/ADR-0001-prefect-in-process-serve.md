@@ -1,10 +1,10 @@
-# ADR-001: Run Prefect flows in-process via prefect.serve()
+# ADR-0001: Run Prefect flows in-process via prefect.serve()
 
 Date: 2026-04-20
 
 ## Status
 
-Superseded by [ADR-006](./ADR-006-lambda-behind-sqs.md) — deejay-cog runs on Lambda behind SQS, with no Prefect.
+Superseded by [ADR-0006](./ADR-0006-lambda-behind-sqs.md) — deejay-cog runs on Lambda behind SQS, with no Prefect.
 
 ## Context
 
@@ -52,7 +52,7 @@ run manually or on a different cadence.
   marks them as crashed. The `on_crashed` hooks in each flow handle
   crash reporting to evaluator-cog.
 
-  **Amended 2026-08-19 (see [ADR-005](./ADR-005-serve-startup-resilience.md)).**
+  **Amended 2026-08-19 (see [ADR-0005](./ADR-0005-serve-startup-resilience.md)).**
   This is true only for *flow-run* crashes. `on_crashed` and
   `on_failure` hooks attach to flow runs, so they cover a run that was
   interrupted mid-execution. They do **not** cover a crash during
@@ -62,7 +62,7 @@ run manually or on a different cadence.
   that window and produced zero findings. Registration-time crashes
   are now covered by `mini_app_polis.serve_resilience.serve_with_retry`,
   which emits a `source="startup"` CRITICAL finding on give-up. Read
-  this bullet as scoped to flow runs; ADR-005 covers the rest of the
+  this bullet as scoped to flow runs; ADR-0005 covers the rest of the
   process lifecycle.
 
 **Harder:**
@@ -78,5 +78,5 @@ run manually or on a different cadence.
 - ecosystem-standards CD-015 (prefect.serve is the canonical pattern)
 - ecosystem-standards PIPE-008 (repository_dispatch retired in favor
   of prefect.serve)
-- [ADR-005](./ADR-005-serve-startup-resilience.md) — amends the
+- [ADR-0005](./ADR-0005-serve-startup-resilience.md) — amends the
   crash-reporting claim in Consequences above
