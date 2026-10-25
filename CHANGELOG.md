@@ -1,3 +1,10 @@
+## [2.8.30](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.29...v2.8.30) (2026-10-25)
+
+
+### Bug Fixes
+
+* **deps:** bump the minor-and-patch group with 4 updates ([52d6356](https://github.com/mini-app-polis/deejay-cog/commit/52d6356af1be138db570a99e116baabe4303898d))
+
 ## [2.8.29](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.28...v2.8.29) (2026-10-24)
 
 
