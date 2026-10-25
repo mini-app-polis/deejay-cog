@@ -1,3 +1,10 @@
+## [2.8.32](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.31...v2.8.32) (2026-10-25)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 6.23.0 ([9694904](https://github.com/mini-app-polis/deejay-cog/commit/9694904635d5da4a3d0f230863a1b5769a937b4b))
+
 ## [2.8.31](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.30...v2.8.31) (2026-10-25)
 
 
