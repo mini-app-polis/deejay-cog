@@ -22,7 +22,7 @@ deejay-cog held a Railway container open to poll Prefect Cloud every ten
 seconds for work that arrives roughly monthly (ADR-0003). Memory was the
 whole bill, and it bought nothing between DJ events. The fleet is moving
 off Prefect onto one SQS queue and one Lambda function per cog; the
-decision and its reasoning are evaluator-cog's
+decision and its reasoning are in ecosystem-standards'
 `docs/serverless-migration.md`, and evaluator-cog is the reference
 implementation.
 
