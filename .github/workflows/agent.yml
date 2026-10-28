@@ -1,0 +1,58 @@
+# The agent: implements one board task here and opens a draft pull request
+# into dev for a person to review. Started by task-manager-cog, never by a
+# push; this file being here is what makes this repository one the agent
+# may change. The logic, and what it will and will not do, is in the shared
+# workflow; see its header in mini-app-polis/.github.
+name: agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "The agent run's id"
+        required: true
+        type: string
+      task_id:
+        description: "The task's id on the board"
+        required: true
+        type: string
+      task:
+        description: "The task's name and body"
+        required: true
+        type: string
+      model:
+        description: "The model the agent runs"
+        required: true
+        type: string
+      budget_usd:
+        description: "The run's budget limit, in USD"
+        required: true
+        type: string
+      dry_run:
+        description: "Run everything but the model, the push and the post"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One agent in this repository at a time. task-manager-cog already refuses a
+# second; this is the backstop, and it never cancels a run in progress.
+concurrency:
+  group: agent
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    uses: mini-app-polis/.github/.github/workflows/agent.yml@v3
+    with:
+      run_id: ${{ inputs.run_id }}
+      task_id: ${{ inputs.task_id }}
+      task: ${{ inputs.task }}
+      model: ${{ inputs.model }}
+      budget_usd: ${{ inputs.budget_usd }}
+      dry_run: ${{ inputs.dry_run }}
+    # The agent's Anthropic key, the agent App and the task-agent API key:
+    # org secrets visible only to the repositories the agent may change.
+    secrets: inherit
