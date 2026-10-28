@@ -18,7 +18,7 @@ declared in `mini-app-polis/infra`:
   still needs a cold start.
 - **Plain settings** are set on the function's environment.
 
-**Locally**, everything comes from Doppler's shared `dev` config: run
+**Locally**, everything comes from this repo's own Doppler `dev` config: run
 `doppler setup` once per clone (it reads `doppler.yaml`), then
 `doppler run -- …`. No `.env` file is read, and local commands use `dev`: a
 command that must act on production would say `--config prd` explicitly

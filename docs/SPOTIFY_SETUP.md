@@ -43,11 +43,13 @@ After authorizing, you will be redirected to `http://127.0.0.1:8888/callback`
 the full URL from the browser address bar and paste it into the terminal
 when prompted.
 
-The script then writes the token to Doppler's `prd` config itself, through
-your `doppler login`, as `SPOTIPY_REFRESH_TOKEN`, with the date in
-`SPOTIPY_REFRESH_TOKEN_ISSUED_AT`. The `prd` sync carries it to SSM, so there
-is nothing to copy. If the write fails (no CLI, or no write access to `prd`),
-it prints the token instead:
+The script then writes the token to Doppler itself, through your
+`doppler login`, as `SPOTIPY_REFRESH_TOKEN`, with the date in
+`SPOTIPY_REFRESH_TOKEN_ISSUED_AT`. They go in `spotify` / `prd`, the config
+that holds them and nothing else. This cog's own `prd` config references the
+token there and syncs to SSM, so there is nothing to copy. If the write fails
+(no CLI, or no write access to `spotify` / `prd`), it prints the token
+instead:
 
 ```
 ✅ REFRESH TOKEN: AQD...
@@ -74,7 +76,8 @@ playlists missed while the token was dead.
 
 **Production.** Add these to Doppler; they sync to SSM Parameter Store, and
 the Lambda loads them at cold start and again at every invocation (all optional — declared in
-`mini-app-polis/infra`):
+`mini-app-polis/infra`). The refresh token and its date go in `spotify` /
+`prd`; the rest go in the ecosystem's `prd`:
 
 | Name | Value |
 |------|-------|
