@@ -1,3 +1,11 @@
+## [2.8.37](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.36...v2.8.37) (2026-10-28)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 6.31.0 ([2779628](https://github.com/mini-app-polis/deejay-cog/commit/2779628059ebd13799d09f1e7b6d370cae94fd04))
+* **spotify:** write a renewed token to the spotify Doppler config ([7671abe](https://github.com/mini-app-polis/deejay-cog/commit/7671abe712d3db60751de3874b5e345989856510))
+
 ## [2.8.36](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.35...v2.8.36) (2026-10-26)
 
 
