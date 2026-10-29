@@ -189,7 +189,7 @@ def test_repairs_are_capped_per_run_newest_first(
     handler(_event("msg-1"))
 
     assert [b["source_file"] for b in api.bodies("/v1/ingest")] == names[:2]
-    assert "repairs_pending=1" in api.reports()[0]["description"]
+    assert "1 repairs pending" in api.reports()[0]["description"]
 
     handler(_event("msg-2"))
 
@@ -310,7 +310,7 @@ def test_repairs_stop_at_the_deadline_and_the_rest_wait_for_the_next_run(
     assert api.severities() == ["WARN"]
     description = api.reports()[0]["description"]
     assert "stopped_at_deadline" in description
-    assert "repairs_pending=1" in description
+    assert "1 repairs pending" in description
     assert "repair_failed" not in description
 
     api.slow("/v1/ingest", 0)
