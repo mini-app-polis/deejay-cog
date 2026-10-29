@@ -465,8 +465,8 @@ def test_ingest_set_to_api_logs_error_on_api_error(monkeypatch):
 
 # -- severity when the ingest never happened -----------------------------------
 #
-# Four exits from _ingest_set_to_api, only two of which used to be visible
-# to the run's severity. A delivery path that becomes a no-op because a
+# Four exits from _ingest_set_to_api, each visible to the run's severity.
+# A delivery path that becomes a no-op because a
 # variable is missing, while every instrument reports green, is the shape
 # these pin against.
 
@@ -968,7 +968,7 @@ def _spotify_env(monkeypatch) -> None:
 
 
 def test_spotify_failed_moves_when_sync_returns_not_ok(monkeypatch):
-    """The counter no longer depends on an exception that never propagates."""
+    """The counter does not depend on an exception that never propagates."""
     _spotify_env(monkeypatch)
     stats = process_new_files.CsvPipelineStats()
     outcome = SyncOutcome(False, "RuntimeError: token expired")
@@ -1001,7 +1001,7 @@ def test_spotify_failed_moves_when_sync_returns_not_ok(monkeypatch):
 
 
 def test_a_client_that_will_not_build_is_logged_and_counted(monkeypatch):
-    """Credentials present, client None — used to return in silence."""
+    """Credentials present, client None — not a silent return."""
     _spotify_env(monkeypatch)
     stats = process_new_files.CsvPipelineStats()
     mock_log = MagicMock()

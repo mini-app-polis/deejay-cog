@@ -5,11 +5,10 @@ The key identifies the cog: the API matches it against the keys it holds in
 configuration, so nothing here asserts a name and nothing has to be looked up
 at runtime.
 
-That is what makes the audit trail worth having. Every cog used to share one
-Clerk machine secret, so the API could tell that *a* cog called it and never
-which one — the per-caller attribution Project Keystone set out to get and did
-not land. A key per cog is what makes the subject in the trail mean something,
-and what makes one cog revocable without revoking the fleet.
+That is what makes the audit trail worth having. A key per cog lets the API
+tell which cog called it, not just that *a* cog did. It is what makes the
+subject in the trail mean something, and what makes one cog revocable without
+revoking the fleet.
 
 The key proves who this cog is; it says nothing about what it may do. The API
 decides that from its own declaration, and nothing sent from here can widen
@@ -17,9 +16,7 @@ it.
 
 The shared client derives DEEJAY_COG_API_KEY from MACHINE_NAME, and the API
 derives the same variable from the same name — one convention, no mapping to
-keep in step. The shared Clerk machine secret this replaced is gone: every cog
-holding one credential indistinguishable from every other cog's was the reason
-the API could tell that *a* cog called and never which one.
+keep in step.
 
 The shared client does fall back to the generic ``KAIANO_API_KEY`` when
 DEEJAY_COG_API_KEY is unset. Production sets this cog's own key (SSM,
