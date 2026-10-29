@@ -273,8 +273,8 @@ def test_an_api_rejection_rolls_the_set_back_for_the_next_run(
     assert drive.path("2025", "Archive") is None
     assert api.severities() == ["WARN"]
     description = api.reports()[0]["description"]
-    assert "ingest_failed=1" in description
-    assert "sets_failed=1" in description
+    assert "ingest_failed\n  1" in description
+    assert "sets_failed\n  1" in description
 
     handler(_event("msg-2"))
 
@@ -520,7 +520,9 @@ def test_a_development_run_ingests_to_the_development_api(
     handler(_event())
 
     assert len(dev.bodies("/v1/ingest")) == 1
-    assert dev.severities() == ["SUCCESS"]
+    # The set reaches the development API; its run report stays in the logs,
+    # since nothing is posted to the channels outside production.
+    assert dev.severities() == []
 
 
 # ── the shared run deadline (mini_app_polis.deadline) ────────────────────

@@ -69,7 +69,7 @@ def test_post_run_finding_drops_absorbed_kwargs_from_text(monkeypatch) -> None:
     assert "sets_imported" not in finding
     assert "total_tracks" not in finding
     # Non-absorbed counter does surface
-    assert "ingest_attempted=1" in finding
+    assert "1 ingest attempted" in finding
 
 
 def test_post_run_finding_production_only_false_no_post(monkeypatch) -> None:
@@ -139,7 +139,7 @@ def test_post_run_finding_warn_includes_extras(monkeypatch) -> None:
         )
     # The version stamp follows the counters, at the end of the message.
     assert post.call_args.kwargs["text"] == (
-        f"Completed with issues spotify_failed=2 {VERSION_STAMP}"
+        f"Completed with issues {VERSION_STAMP}\n\nCounts\n  2 spotify failed"
     )
 
 

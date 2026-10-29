@@ -63,7 +63,7 @@ def test_main_posts_single_success_finding_when_llm_and_api_configured(
     # counters, every one of which the cog shim dropped before the text
     # was built, and announced "Run completed successfully."
     text = report.text()
-    assert "+ dj set: 2024-01-02_My Venue.csv" in text
+    assert "dj set\n  + 2024-01-02_My Venue.csv" in text
     assert text.startswith("Run complete in ")
 
 
@@ -116,7 +116,7 @@ def test_main_posts_single_warn_finding_when_sets_failed(monkeypatch) -> None:
     mock_post.assert_called_once()
     report = mock_post.call_args.args[0]
     assert report.severity == "WARN"
-    assert "sets_failed=1" in report.text()
+    assert "sets_failed\n  1" in report.text()
 
 
 # --- Normalization tests -----------------------------------------------------
@@ -1051,7 +1051,7 @@ def test_a_failed_push_is_counted_not_logged_as_none(monkeypatch) -> None:
     mock_post.assert_called_once()
     report = mock_post.call_args.args[0]
     assert report.severity == "WARN"
-    assert "spotify_failed=1" in report.text()
+    assert "spotify_failed\n  1" in report.text()
 
 
 def test_the_run_id_reaches_the_report(monkeypatch) -> None:
