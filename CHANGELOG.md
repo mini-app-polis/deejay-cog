@@ -1,3 +1,10 @@
+## [2.10.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.10.1...v2.10.2) (2026-10-30)
+
+
+### Bug Fixes
+
+* **conformance:** verify the deadline checks in the sweep tests, document the fingerprint helpers, and exempt deploy-fingerprint from CD-026 ([8495eb3](https://github.com/mini-app-polis/deejay-cog/commit/8495eb36d6221562a8edb04ddd94e710353306ce))
+
 ## [2.10.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.10.0...v2.10.1) (2026-10-30)
 
 
