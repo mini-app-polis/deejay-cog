@@ -66,8 +66,8 @@ class CsvPipelineStats:
     #: ingest_failed, which means the API answered and said no.
     ingest_client_unavailable: int = 0
     #: Raised before the POST was attempted — reading the sheet or
-    #: building the payload. Previously uncounted, because the guard on
-    #: the handler below only fires once ingest_attempted has moved.
+    #: building the payload. Counted separately because the guard on the
+    #: handler below only fires once ingest_attempted has moved.
     ingest_prepare_failed: int = 0
     track_read_failed: int = 0
     #: The Archive move failed after a successful upload. The set is
@@ -654,10 +654,9 @@ def _sync_set_to_spotify(
             )
             if stats is not None:
                 stats.spotify_failed += 1
-        # The full playlist snapshot used to be pushed here as well as at
-        # the end of the flow: N+1 enumerations and N+1 POSTs for N files,
-        # with a push failure logged as that CSV's sync failing. The
-        # flow-level push runs unconditionally and covers this.
+        # The full playlist snapshot is not pushed here: the flow-level
+        # push runs unconditionally and covers this, with one enumeration
+        # and one POST per run rather than one per file.
     except SpotifyTokenExpired:
         _record_token_expired(stats)
     except Exception as e:
@@ -682,7 +681,7 @@ def _record_token_expired(stats: CsvPipelineStats | None) -> None:
 def _file_already_in_folder(g: GoogleAPI, file_id: str, folder_id: str) -> bool:
     """Return True if file_id is currently parented under folder_id.
 
-    Used to make archive-step moves idempotent: if a prior run of
+    Makes archive-step moves idempotent: if a prior run of
     process_csv_file archived the file before a later task failed,
     the retry must not crash on "file missing from source parent."
 
@@ -770,9 +769,9 @@ def process_csv_file(
 
     The download goes to a private directory under a fixed file name, and
     the directory goes when this returns, however it returns. The Drive
-    name used to go into the path as-is: a "/" in it (a venue like
-    "AC/DC Night") pointed the download at a directory that does not
-    exist, and the set failed.
+    name stays out of the path, since a "/" in it (a venue like
+    "AC/DC Night") would point the download at a directory that does not
+    exist.
     """
     with tempfile.TemporaryDirectory(
         prefix="deejay-cog-", ignore_cleanup_errors=True

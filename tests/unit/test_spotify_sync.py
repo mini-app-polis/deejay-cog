@@ -247,8 +247,8 @@ def test_update_spotify_radio_playlist_adds_and_trims() -> None:
 def test_trim_is_pointed_at_the_playlist_we_appended_to() -> None:
     """Trim must act on the playlist the tracks just went into.
 
-    It used to take no argument and read config.SPOTIFY_PLAYLIST_ID, a
-    name nothing sets here, so every trim raised OSError.
+    It takes the playlist id as an argument rather than reading
+    config.SPOTIFY_PLAYLIST_ID, a name nothing sets here.
     """
     sp = MagicMock()
     outcome = ss.update_spotify_radio_playlist(sp, "radio-pl", ["u1"])
@@ -340,7 +340,7 @@ def test_create_spotify_playlist_for_file_fails_when_create_returns_no_id() -> N
 
 
 def test_create_spotify_playlist_for_file_returns_failure_on_exception() -> None:
-    """It used to raise while its sibling returned an outcome."""
+    """It returns an outcome on failure, as its sibling does, rather than raising."""
     sp = MagicMock()
     sp.find_playlist_by_name.return_value = {"id": "existing"}
     sp.clear_playlist.return_value = None

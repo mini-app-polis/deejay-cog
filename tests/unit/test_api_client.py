@@ -1,9 +1,8 @@
 """This cog's identity — exercised through the path production actually uses.
 
-These previously asserted on a local ``api_key()`` helper that read the
-variable directly. The shared client derives it from the machine name instead,
-so that helper was a second path only the tests took — it would have kept
-passing while the real one broke.
+The shared client derives the key variable from the machine name, so these
+assert on that path rather than on a helper only the tests would take — one
+that would keep passing while the real path broke.
 """
 
 from __future__ import annotations

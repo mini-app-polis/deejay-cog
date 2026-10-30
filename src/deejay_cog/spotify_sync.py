@@ -158,9 +158,9 @@ def _normalize_playlist_item(p: dict) -> dict:
 def fetch_all_playlists(sp: Any) -> list[dict]:
     """Fetch all playlists visible to the account.
 
-    Pages ``current_user_playlists`` on the underlying spotipy client. A
-    probe over five candidate wrapper method names used to run first; none
-    exists on ``SpotifyAPI``, so every call already landed here.
+    Pages ``current_user_playlists`` on the underlying spotipy client.
+    ``SpotifyAPI`` has no playlist-listing wrapper method, so this goes to
+    the client directly.
 
     Expected return shape is a list of raw Spotify playlist dicts.
     """
@@ -202,9 +202,8 @@ def push_playlists_to_api(sp: Any) -> tuple[int, int] | None:
     "0 pushed" could not distinguish every playlist already being current
     from an empty snapshot. A skip is not a push, and callers log it as one.
 
-    A ``KaianoApiError`` from the POST is re-raised after logging (callers
-    used to read a ``None`` return as success and log "None playlists
-    pushed"). A response outside the contract — no ``upserted`` count,
+    A ``KaianoApiError`` from the POST is re-raised after logging, so a
+    failed push never reads as a ``None`` return. A response outside the contract — no ``upserted`` count,
     say — is also a failed push: the client raises pydantic's
     ``ValidationError``, a ``ValueError``, rather than returning ``None`` or
     a sentinel, so the caller cannot claim the sync completed.
@@ -299,8 +298,9 @@ def create_spotify_playlist_for_file(
     to publish and no playlist is made.
 
     Returns a ``SyncOutcome`` rather than a playlist ID, which no caller
-    used. It used to raise while its sibling returned an outcome, and the
-    exception was caught a level up and flattened into a generic failure.
+    uses. Failures come back as an outcome, as they do from its sibling,
+    rather than raising and being flattened into a generic failure a level
+    up.
     """
     if not found_uris:
         return SyncOutcome.success()
@@ -315,8 +315,8 @@ def create_spotify_playlist_for_file(
 
         playlist_id = sp.create_playlist(set_name, DEFAULT_PLAYLIST_DESCRIPTION)
         if not playlist_id:
-            # Previously an unlogged None, indistinguishable from a set
-            # with no tracks to add.
+            # A failure, not a silent None: a set with no tracks to add
+            # returns success before reaching here.
             return SyncOutcome(
                 False, f"Spotify returned no playlist id for '{set_name}'"
             )
