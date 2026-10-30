@@ -1,3 +1,16 @@
+# [2.10.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.9.1...v2.10.0) (2026-10-30)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 7.3.0 ([db53181](https://github.com/mini-app-polis/deejay-cog/commit/db5318110f9b1b326bce0a3fdfe4f6f2d00d1174))
+
+
+### Features
+
+* **retag-music:** identify untagged files by fingerprint in a second function ([731a6e8](https://github.com/mini-app-polis/deejay-cog/commit/731a6e89ee507ede66f952efa8a20f9d070b028b))
+* **worker:** add retag-music mode that tags upload-folder files from the catalog ([1903b15](https://github.com/mini-app-polis/deejay-cog/commit/1903b154925d212b24e8651a6fafaf653f513704))
+
 ## [2.9.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.9.0...v2.9.1) (2026-10-30)
 
 
