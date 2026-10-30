@@ -13,6 +13,8 @@ dependencies = [
     "pytz",
     "sentry-sdk",
     "music-tag>=0.4.3",
+    # ID3 tags read and written in place by music_tags (pure Python).
+    "mutagen>=1.47",
     "pyacoustid>=1.2.2",
     "musicbrainzngs>=0.7.1",
 ]

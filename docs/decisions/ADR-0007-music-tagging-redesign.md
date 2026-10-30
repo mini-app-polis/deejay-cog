@@ -57,6 +57,10 @@ What exists now that did not then:
     columns, so the next play of the file keys to the same catalog row.
     Which frame VirtualDJ reads Remix from is confirmed in the build
     against a file VirtualDJ has tagged;
+    *Amended 2026-10-29 (owner):* the remix is written in the title's
+    parentheses (`Temple (Niko The Kid Remix)`, the title alone when the
+    catalog has no remix). No separate remix frame is written: ID3 has no
+    standard one that VirtualDJ shares;
   - `TPE1` artist, as the catalog spells it;
   - `TDRC` release year, `TCON` genre, `TBPM` BPM and `TPUB` label, when
     the catalog has them; a field the catalog lacks is left as it is;
