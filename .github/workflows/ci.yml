@@ -37,56 +37,13 @@ jobs:
 
   release:
     needs: [test, security]
-    runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
       contents: write
       issues: write
       pull-requests: write
-    outputs:
-      tag: ${{ steps.released.outputs.tag }}
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      - name: Install dependencies
-        run: uv sync --all-extras
-
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: "22"
-      - name: Install semantic-release plugins
-        run: |
-          npm install --no-save \
-            semantic-release \
-            @semantic-release/changelog \
-            @semantic-release/exec \
-            @semantic-release/git \
-            @semantic-release/github \
-            @semantic-release/commit-analyzer \
-            @semantic-release/release-notes-generator
-
-      - name: Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx semantic-release
-
-      # semantic-release tags the release commit it leaves at HEAD. No tag
-      # there means the push carried nothing releasable, and nothing new
-      # needs deploying.
-      - name: Record the release tag
-        id: released
-        run: echo "tag=$(git tag --points-at HEAD --list 'v*' | head -n1)" >> "$GITHUB_OUTPUT"
+    # VER-006: semantic-release and its plugins from the fleet's shared lockfile.
+    uses: mini-app-polis/.github/.github/workflows/release.yml@v3
 
   # The worker is deployed here, as a job, rather than by a workflow's own
   # trigger: a release published with GITHUB_TOKEN starts no workflows, so
