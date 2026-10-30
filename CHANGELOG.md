@@ -1,3 +1,10 @@
+# [2.9.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.40...v2.9.0) (2026-10-30)
+
+
+### Features
+
+* **music-tags:** tag a Drive music file from the catalog, in place ([edca655](https://github.com/mini-app-polis/deejay-cog/commit/edca655301cb9e0f40321b4c0b638cc839bade19))
+
 ## [2.8.40](https://github.com/mini-app-polis/deejay-cog/compare/v2.8.39...v2.8.40) (2026-10-30)
 
 
