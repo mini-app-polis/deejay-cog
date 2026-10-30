@@ -48,6 +48,38 @@ no separate development Drive. Outside production, `process_new_files.py`
 refuses to run unless `CSV_SOURCE_FOLDER_ID` is set explicitly, so a local
 run cannot archive the production drop zone into the development API.
 
+The **retag-music** worker mode reads two of them:
+
+- `MUSIC_UPLOAD_SOURCE_FOLDER_ID` — the Drive folder whose audio files are
+  tagged.
+- `MAX_UPLOADS_PER_RUN` — files handled per run (default 200; 0 for no cap).
+
+It needs neither `ffmpeg` nor `fpcalc`. A file with no usable title or
+artist is sent to the fingerprint function, one message per file, on the
+queue in `DEEJAY_FINGERPRINT_QUEUE_URL` (set on the function by
+`mini-app-polis/infra`). Unset, as in a local run, nothing is sent and the
+run report names those files instead.
+
+---
+
+## The fingerprint function
+
+`deejay_cog.fingerprint.lambda_handler` is a second Lambda function, behind
+its own FIFO queue, run one file at a time. It reads this repo's Doppler
+project like the worker, and:
+
+- `ACOUSTID_API_KEY` — required; without it every file fails and its
+  message comes back.
+- `RETAG_MIN_CONFIDENCE` — the AcoustID score a match must reach before
+  the file is written (default 0.90). Below it the file is not changed and
+  is named in the run report.
+- `DEEJAY_COG_API_KEY` and `GOOGLE_CREDENTIALS_JSON`, as the worker.
+
+`fpcalc` comes from the function's Lambda layer, found on `PATH` or at
+`/opt/bin/fpcalc`; with neither, every file fails. AcoustID allows three
+requests a second: a lookup refused as over that limit is retried twice,
+then the file's message comes back to the queue.
+
 ---
 
 ## Spotify

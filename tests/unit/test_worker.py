@@ -49,12 +49,18 @@ def reported(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 
 def test_the_router_covers_exactly_the_modes_the_api_accepts() -> None:
-    """The API's DeejayRunRequest accepts these two and no others."""
-    assert set(worker.MODES) == {"process-new-files", "ingest-live-history"}
+    """The API's DeejayRunRequest accepts these and no others."""
+    assert set(worker.MODES) == {
+        "process-new-files",
+        "ingest-live-history",
+        "retag-music",
+    }
     assert set(worker.FLOW_NAMES) == set(worker.MODES)
 
 
-@pytest.mark.parametrize("mode", ["process-new-files", "ingest-live-history"])
+@pytest.mark.parametrize(
+    "mode", ["process-new-files", "ingest-live-history", "retag-music"]
+)
 def test_a_message_runs_its_mode_under_the_message_id(
     flows: dict[str, MagicMock], reported: MagicMock, mode: str
 ) -> None:

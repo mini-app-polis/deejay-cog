@@ -66,6 +66,25 @@ jobs:
       region: ${{ vars.AWS_REGION }}
       function-name: ${{ vars.AWS_FUNCTION_NAME }}
 
+  # The fingerprint function: a second function from the same package and
+  # release, deployed through its own role. Its handler and architecture
+  # match the function declared in mini-app-polis/infra.
+  deploy-fingerprint:
+    needs: release
+    if: needs.release.outputs.tag != ''
+    permissions:
+      id-token: write
+      contents: read
+    uses: mini-app-polis/.github/.github/workflows/lambda-deploy.yml@v3
+    with:
+      ref: ${{ needs.release.outputs.tag }}
+      handler: deejay_cog.fingerprint.lambda_handler
+      architecture: x86_64
+      python-version: "3.11"
+      role-arn: ${{ vars.AWS_FINGERPRINT_DEPLOY_ROLE_ARN }}
+      region: ${{ vars.AWS_REGION }}
+      function-name: ${{ vars.AWS_FINGERPRINT_FUNCTION_NAME }}
+
   # Conformance is graded on each release, after that release is running.
   # Sequential with deploy, as in every Lambda cog: a release that did not
   # deploy is not graded as though it had, and a push that cut no release
