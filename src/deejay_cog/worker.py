@@ -54,6 +54,7 @@ from mini_app_polis.sentry import init_sentry
 from deejay_cog._pipeline_eval import post_run_finding
 from deejay_cog.ingest_live_history import ingest_live_history
 from deejay_cog.process_new_files import process_new_csv_files_flow
+from deejay_cog.retag_music_from_catalog import retag_music
 
 log = logger_mod.get_logger()
 
@@ -75,6 +76,7 @@ REQUEST_HEADROOM_SECONDS = DEFAULT_HTTP_TIMEOUT_SEC
 MODES: dict[str, Callable[..., Any]] = {
     "process-new-files": process_new_csv_files_flow,
     "ingest-live-history": ingest_live_history,
+    "retag-music": retag_music,
 }
 
 #: The flow name a failure is reported under, per mode — the same names the
@@ -83,6 +85,7 @@ MODES: dict[str, Callable[..., Any]] = {
 FLOW_NAMES = {
     "process-new-files": "process-new-csv-files",
     "ingest-live-history": "ingest-live-history",
+    "retag-music": "retag-music",
 }
 
 # At import, not per invocation. A Lambda container is reused across

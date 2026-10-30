@@ -48,6 +48,14 @@ no separate development Drive. Outside production, `process_new_files.py`
 refuses to run unless `CSV_SOURCE_FOLDER_ID` is set explicitly, so a local
 run cannot archive the production drop zone into the development API.
 
+The **retag-music** worker mode reads two of them:
+
+- `MUSIC_UPLOAD_SOURCE_FOLDER_ID` — the Drive folder whose audio files are
+  tagged.
+- `MAX_UPLOADS_PER_RUN` — files handled per run (default 200; 0 for no cap).
+
+It needs neither `ffmpeg` nor `fpcalc`.
+
 ---
 
 ## Spotify
