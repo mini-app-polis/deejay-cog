@@ -83,17 +83,23 @@ class CatalogLookup(Protocol):
 
     def lookup_catalog(
         self, payload: CatalogLookupRequest
-    ) -> list[CatalogMatch | None]: ...
+    ) -> list[CatalogMatch | None]:
+        """One catalog entry, or None, per track in the request, in order."""
+        ...
 
 
 class DriveFiles(Protocol):
     """The part of the Drive facade this module calls."""
 
-    def download_file_bytes(self, file_id: str) -> Any: ...
+    def download_file_bytes(self, file_id: str) -> Any:
+        """The file's name and contents (``.name``, ``.data``)."""
+        ...
 
     def update_file(
         self, file_id: str, filepath: str, *, mime_type: str | None = None
-    ) -> None: ...
+    ) -> None:
+        """Replace the file's contents with the file at ``filepath``, in place."""
+        ...
 
 
 def _load(data: bytes) -> ID3:
