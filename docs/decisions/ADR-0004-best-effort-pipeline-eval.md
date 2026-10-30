@@ -17,6 +17,12 @@ Accepted, amended.
 > `KAIANO_API_BASE_URL` + `ANTHROPIC_API_KEY` pair. The best-effort and
 > production-only guarantees stand.
 
+> **Amended (Oct 2026), by [ADR-0007](./ADR-0007-music-tagging-redesign.md).** `retag_music` is gone. The
+> local-only flows that pass `production_only=False` are
+> `generate_summaries` and `update_deejay_set_collection`; music tagging
+> (the `retag-music` mode and the fingerprint function) runs in production
+> and reports as the other production flows do.
+
 ## Context
 
 Every served flow needs to report its outcome to evaluator-cog so

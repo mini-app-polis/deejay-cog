@@ -16,6 +16,11 @@ Supersedes [ADR-0001](./ADR-0001-prefect-in-process-serve.md) and
 > mini-app-polis/infra `cogs.tf`, so two sweeps no longer overlap and a
 > failing job is received three times in all before it dead-letters.
 
+> **Amended (Oct 2026), by [ADR-0007](./ADR-0007-music-tagging-redesign.md).** `retag_music_file`, named
+> under Task retries below, is gone with `retag_music.py`. Music tagging
+> runs on Lambda too: the `retag-music` worker mode, and a second function
+> behind its own FIFO queue that fingerprints the files the mode cannot tag.
+
 ## Context
 
 deejay-cog held a Railway container open to poll Prefect Cloud every ten

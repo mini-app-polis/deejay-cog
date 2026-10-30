@@ -20,6 +20,9 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 |------|-----------------|--------|--------|
 | `process-new-files` | **process-new-csv-files** | `process_new_files.py` | New CSVs → Sheets → archive → API ingest; optional Spotify sync. |
 | `ingest-live-history` | **ingest-live-history** | `ingest_live_history.py` | Most recent VirtualDJ `.m3u` from Drive → `POST /v1/live-plays` (not every history file). |
+| `retag-music` | **retag-music** | `retag_music_from_catalog.py` | Tags the music upload folder's files from the catalog; a file with no usable title or artist goes to the fingerprint function. |
+
+The **fingerprint function** (`fingerprint.py`) is a second Lambda behind its own queue: it identifies one such file by its sound (AcoustID, MusicBrainz) and tags it — see [ADR-0007](docs/decisions/ADR-0007-music-tagging-redesign.md).
 
 ### Local-only (not served; PostgreSQL cutover helpers)
 
@@ -27,12 +30,6 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 |------|--------|
 | **update-dj-set-collection** | `update_deejay_set_collection.py` |
 | **generate-summaries** | `generate_summaries.py` |
-
-### Work in progress (not served; `ffmpeg` / `fpcalc` required)
-
-| Flow | Script |
-|------|--------|
-| **retag-music** | `retag_music.py` |
 
 ---
 
@@ -61,7 +58,8 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 | **ingest_live_history.py** | Production live-play ingest from the latest `.m3u`. |
 | **update_deejay_set_collection.py** | Local-only collection + JSON rebuild. |
 | **generate_summaries.py** | Local-only summary generation. |
-| **retag_music.py** | Local-only / WIP tagging pipeline (system binaries required). |
+| **retag_music_from_catalog.py** | Production music tagging from the catalog (the `retag-music` mode). |
+| **fingerprint.py** | The fingerprint function: identifies untagged music files by their sound. |
 | **deduplicate_summary.py** | CLI / helper to deduplicate summary spreadsheets. |
 | **spotify_sync.py** | Spotify helpers used from `process_new_files.py`. |
 
@@ -112,12 +110,11 @@ outside production unless `CSV_SOURCE_FOLDER_ID` is set in your shell (a
 test drop-zone folder): left on the default
 it would archive the real drop zone's CSVs into the development API.
 
-**Local-only / WIP flows** — run modules directly. These call `post_run_finding(..., production_only=False)`, so their run reports are logged and never sent, whatever is set in your shell:
+**Local-only flows** — run modules directly. These call `post_run_finding(..., production_only=False)`, so their run reports are logged and never sent, whatever is set in your shell:
 
 ```bash
 doppler run -- uv run python -m deejay_cog.generate_summaries
 doppler run -- uv run python -m deejay_cog.update_deejay_set_collection
-doppler run -- uv run python -m deejay_cog.retag_music   # requires ffmpeg + fpcalc on PATH
 ```
 
 **deduplicate_summary** (spreadsheet IDs as arguments):

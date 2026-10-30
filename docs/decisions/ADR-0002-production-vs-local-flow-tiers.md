@@ -12,6 +12,14 @@ Accepted, amended.
 > are the two modes in `deejay_cog.worker.MODES` (`process-new-files`,
 > `ingest-live-history`), and the other three remain local-only.
 
+> **Amended (Oct 2026), by [ADR-0007](./ADR-0007-music-tagging-redesign.md).** `retag_music` and its
+> `ffmpeg` / `fpcalc` requirement are gone. Music tagging is now a
+> production mode, `retag-music` in `deejay_cog.worker.MODES`, which needs
+> neither binary, plus a separate fingerprint function on Lambda whose
+> `fpcalc` comes from a layer. The local-only tier is `generate_summaries`
+> and `update_deejay_set_collection`. What follows about `retag_music` is
+> left as it was decided.
+
 ## Context
 
 deejay-cog defines five distinct flows, each handling a different

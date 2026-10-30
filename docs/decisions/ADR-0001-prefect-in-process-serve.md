@@ -40,6 +40,10 @@ Other flows (`generate_summaries`, `update_deejay_set_collection`,
 `retag_music`) are deferred - not served on Railway because they are
 run manually or on a different cadence.
 
+> **Amended (Oct 2026), by [ADR-0007](./ADR-0007-music-tagging-redesign.md).** `retag_music` is gone. Music
+> tagging is now the `retag-music` worker mode and a separate fingerprint
+> function, both on Lambda.
+
 ## Consequences
 
 **Easier:**
