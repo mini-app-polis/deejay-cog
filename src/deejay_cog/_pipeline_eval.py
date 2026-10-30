@@ -31,12 +31,13 @@ is everywhere now, it is the shared module logger.
 See ``docs/decisions/ADR-0004-best-effort-pipeline-eval.md`` for the
 decision record on best-effort posting.
 
-Production flows (``process_new_files``, ``ingest_live_history``) report
-through :class:`RunReport` with the default ``production_only=True``, which
-sends only when an API base URL resolves for the environment. The worker
-reports a run that raised through ``post_run_finding``. Local-only and WIP
-flows (``generate_summaries``, ``update_deejay_set_collection``,
-``retag_music``) call with ``production_only=False`` so they never send.
+Production flows (``process_new_files``, ``ingest_live_history``,
+``retag_music_from_catalog`` and ``fingerprint``) report through
+:class:`RunReport` with the default ``production_only=True``, which sends
+only when an API base URL resolves for the environment. The worker reports a
+run that raised through ``post_run_finding``. Local-only flows
+(``generate_summaries``, ``update_deejay_set_collection``) call with
+``production_only=False`` so they never send.
 """
 
 from __future__ import annotations

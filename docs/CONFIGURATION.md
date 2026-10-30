@@ -98,15 +98,3 @@ its Spotify steps; see [SPOTIFY_SETUP.md](SPOTIFY_SETUP.md#when-the-token-has-ex
 
 The columns and column order of summary sheets (`ALLOWED_HEADERS`,
 `desiredOrder`) are constants in `config.py`, not environment variables.
-
-### retag-music system dependencies
-
-retag-music needs two binaries that are not Python packages: `ffmpeg` (audio
-decoding) and `fpcalc` (fingerprinting, from chromaprint).
-
-```bash
-sudo apt-get install -y ffmpeg libchromaprint-tools   # Ubuntu/Debian
-brew install ffmpeg chromaprint                       # macOS
-```
-
-No other flow needs them, and the Lambda runtime does not have them.

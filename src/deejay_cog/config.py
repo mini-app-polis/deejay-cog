@@ -16,10 +16,6 @@ MUSIC_UPLOAD_SOURCE_FOLDER_ID = os.getenv(
     "MUSIC_UPLOAD_SOURCE_FOLDER_ID",
     "1Iu5TwzOXVqCDef2X8S5TZcFo1NdSHpRU",
 )
-MUSIC_TAGGING_OUTPUT_FOLDER_ID = os.getenv(
-    "MUSIC_TAGGING_OUTPUT_FOLDER_ID",
-    "17LjjgX4bFwxR4NOnnT38Aflp8DSPpjOu",
-)
 
 # Spreadsheet config
 OUTPUT_NAME = os.getenv("OUTPUT_NAME", "DJ Set Collection")

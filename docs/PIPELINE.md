@@ -51,9 +51,8 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
 |------|--------|------|
 | **update-dj-set-collection** | `update_deejay_set_collection.py` | Rebuilds the master collection spreadsheet and JSON snapshot. |
 | **generate-summaries** | `generate_summaries.py` | Builds or refreshes per-year summary sheets. |
-| **retag-music** | `retag_music.py` | Work in progress: AcoustID/MusicBrainz tagging. Needs `ffmpeg` and `fpcalc`. |
 
-The first two are validation utilities for the PostgreSQL cutover and will be
+Both are validation utilities for the PostgreSQL cutover and will be
 retired once PostgreSQL is confirmed as the source of truth.
 
 ---
@@ -137,12 +136,16 @@ file whose tags already match is not written again.
   rest wait for the next run.
 - **Deadline:** checked between files. Past it the run stops with
   `RunOutOfTime` and reports `Stopped early`; the redelivery carries on.
-- **Left untouched:** a file the catalog has no song for (`not_in_catalog`), and
-  one with no usable title or artist (`needs_fingerprinting`). Both are only
-  counted and named in the report; fingerprinting them is a later stage.
+- **Left untouched:** a file the catalog has no song for (`not_in_catalog`). It
+  is counted and named in the report.
+- **Fingerprinting:** a file with no usable title or artist is sent to the
+  fingerprint function, one message per file on `DEEJAY_FINGERPRINT_QUEUE_URL`
+  (see [CONFIGURATION.md](CONFIGURATION.md#the-fingerprint-function)). With no
+  queue configured, as in a local run, it is left untouched and named in the
+  report as `needs_fingerprinting` instead.
 - **Report:** counts for `scanned`, `matched_in_catalog`, `not_in_catalog`,
-  `tagged`, `needing_fingerprinting` and `failed`, and the untouched files by
-  name. A failed file is an issue, so the run is WARN. One failing file does
+  `tagged`, `needing_fingerprinting`, `handed_to_fingerprinting` and `failed`,
+  and the untouched files by name. A failed file is an issue, so the run is WARN. One failing file does
   not end the sweep.
 
 ---
