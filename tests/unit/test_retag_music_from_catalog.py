@@ -7,9 +7,15 @@ from unittest.mock import MagicMock
 
 import pytest
 from mini_app_polis import pipeline_status
-from mini_app_polis.lambda_worker import RunOutOfTime
+from mini_app_polis.lambda_worker import RunOutOfTime, parse_message
 
 from deejay_cog import retag_music_from_catalog as flow
+from deejay_cog.fingerprint_jobs import (
+    QUEUE_URL_VAR,
+    FingerprintJobMessage,
+    FingerprintJobs,
+    fingerprint_jobs_from_env,
+)
 from deejay_cog.music_tags import FileResult, Outcome
 
 
@@ -175,3 +181,85 @@ def test_a_run_stopped_at_the_deadline_still_reports(
     assert posted.call_args.kwargs["scanned"] == 1
     assert posted.call_args.kwargs["tagged"] == 1
     assert "Stopped early" in posted.call_args.kwargs["text"]
+
+
+# ---------------------------------------------------------------------------
+# The handoff to the fingerprint function
+# ---------------------------------------------------------------------------
+
+
+def test_each_file_with_no_usable_tags_is_sent_for_fingerprinting(
+    outcomes, deadline
+) -> None:
+    outcomes["untitled"] = Outcome.NEEDS_FINGERPRINT
+    outcomes["nameless"] = Outcome.NEEDS_FINGERPRINT
+    sqs = MagicMock()
+    jobs = FingerprintJobs("https://sqs.test/deejay-fingerprint-jobs.fifo", sqs)
+    summary = flow.RetagSummary()
+
+    flow.tag_files(
+        MagicMock(),
+        MagicMock(),
+        _files("untitled", "known", "nameless"),
+        summary,
+        max_files=0,
+        fingerprint_jobs=jobs,
+    )
+
+    assert summary.handed_to_fingerprinting == ["untitled", "nameless"]
+    assert summary.needs_fingerprinting == []
+    assert sqs.send_message.call_count == 2
+    sent = sqs.send_message.call_args_list[0].kwargs
+    assert sent["QueueUrl"] == "https://sqs.test/deejay-fingerprint-jobs.fifo"
+    assert sent["MessageGroupId"] == "deejay-fingerprint"
+    assert sent["MessageDeduplicationId"] == "id-untitled"
+    message = parse_message(sent["MessageBody"], FingerprintJobMessage)
+    assert message.payload.drive_file_id == "id-untitled"
+    assert message.payload.name == "untitled"
+
+
+def test_a_file_that_cannot_be_sent_is_a_failure_and_the_sweep_goes_on(
+    outcomes, deadline
+) -> None:
+    outcomes["a"] = Outcome.NEEDS_FINGERPRINT
+    outcomes["b"] = Outcome.NEEDS_FINGERPRINT
+    sqs = MagicMock()
+    sqs.send_message.side_effect = [RuntimeError("sqs down"), None]
+    summary = flow.RetagSummary()
+
+    flow.tag_files(
+        MagicMock(),
+        MagicMock(),
+        _files("a", "b"),
+        summary,
+        max_files=0,
+        fingerprint_jobs=FingerprintJobs("https://sqs.test/q.fifo", sqs),
+    )
+
+    assert summary.failed == ["a"]
+    assert summary.handed_to_fingerprinting == ["b"]
+
+
+def test_the_queue_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(QUEUE_URL_VAR, raising=False)
+    assert fingerprint_jobs_from_env() is None
+
+
+def test_the_report_counts_the_files_handed_on(
+    outcomes, deadline, posted, folder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder.extend(_files("untitled", "known"))
+    outcomes["untitled"] = Outcome.NEEDS_FINGERPRINT
+    sqs = MagicMock()
+    monkeypatch.setattr(
+        flow,
+        "fingerprint_jobs_from_env",
+        lambda: FingerprintJobs("https://sqs.test/q.fifo", sqs),
+    )
+
+    flow.retag_music(run_id="m-1")
+
+    sqs.send_message.assert_called_once()
+    kwargs = posted.call_args.kwargs
+    assert kwargs["handed_to_fingerprinting"] == 1
+    assert kwargs["needing_fingerprinting"] == 0

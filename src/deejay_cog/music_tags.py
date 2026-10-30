@@ -182,7 +182,34 @@ def write_catalog_tags(data: bytes, match: CatalogMatch) -> bytes | None:
             TXXX(encoding=3, desc=CATALOG_ID_DESC, text=[str(match.id)]),
         )
     )
+    return _write_frames(data, tags, wanted)
 
+
+def write_recording_tags(
+    data: bytes, *, title: str, artist: str, year: str | None = None
+) -> bytes | None:
+    """The file's bytes with a recording's title, artist and year written, or
+    None when its tags already say so.
+
+    For a file identified by its fingerprint whose song the catalog does not
+    have: it gets usable tags, and no ``TXXX:CATALOG_ID``. Every other frame
+    is left as it is.
+    """
+    tags = _load(data)
+    wanted: list[tuple[str, Any]] = [
+        ("TIT2", TIT2(encoding=3, text=[title])),
+        ("TPE1", TPE1(encoding=3, text=[artist])),
+    ]
+    if year:
+        wanted.append(("TDRC", TDRC(encoding=3, text=[year])))
+    return _write_frames(data, tags, wanted)
+
+
+def _write_frames(
+    data: bytes, tags: ID3, wanted: list[tuple[str, Any]]
+) -> bytes | None:
+    """``data`` with ``wanted`` written over ``tags``, or None when every
+    frame already holds what would be written."""
     if all(_same(tags.get(key), frame) for key, frame in wanted):
         return None
     for key, frame in wanted:
@@ -226,11 +253,11 @@ def tag_file(drive: DriveFiles, api: CatalogLookup, file_id: str) -> FileResult:
     if tagged is None:
         return FileResult(file_id, name, Outcome.ALREADY_TAGGED, match)
 
-    _replace_contents(drive, file_id, name, tagged)
+    replace_contents(drive, file_id, name, tagged)
     return FileResult(file_id, name, Outcome.TAGGED, match)
 
 
-def _replace_contents(drive: DriveFiles, file_id: str, name: str, data: bytes) -> None:
+def replace_contents(drive: DriveFiles, file_id: str, name: str, data: bytes) -> None:
     """Write ``data`` over the Drive file's contents (``files.update`` with
     new media). The file's name, folder and id stay as they are."""
     suffix = os.path.splitext(name)[1] or ".mp3"
