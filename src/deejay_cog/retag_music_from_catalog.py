@@ -70,6 +70,7 @@ class RetagSummary:
 
     @property
     def matched_in_catalog(self) -> int:
+        """Files found in the catalog: tagged now or already tagged."""
         return self.tagged + self.already_tagged
 
 

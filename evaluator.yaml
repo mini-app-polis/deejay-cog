@@ -25,3 +25,12 @@ exemptions:
       checker's pattern match on delete_file(...) is too broad to
       distinguish derivative artifacts from upstream inputs —
       tracked as a future tightening of the PIPE-005 detector.
+  - rule: CD-026
+    reason: >
+      ci.yml has one job outside the canonical set: `deploy-fingerprint`,
+      beside `deploy`. The fingerprint function is a second Lambda built
+      from the same package and release, deployed through its own role
+      (AWS_FINGERPRINT_DEPLOY_ROLE_ARN) to its own function. It can't go
+      in `deploy`, which calls the shared lambda-deploy.yml once, for one
+      function, and takes no extra steps. It isn't `test`: it runs after
+      the release, on main only, against AWS.

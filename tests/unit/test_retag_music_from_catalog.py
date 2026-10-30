@@ -78,6 +78,8 @@ def test_every_file_is_scanned_without_a_cap(outcomes, deadline) -> None:
 
     assert summary.scanned == 3
     assert summary.tagged == 3
+    # The deadline is checked once before each file.
+    assert deadline.call_count == 3
 
 
 def test_the_cap_stops_the_sweep(outcomes, deadline) -> None:
@@ -89,6 +91,8 @@ def test_the_cap_stops_the_sweep(outcomes, deadline) -> None:
 
     assert summary.scanned == 2
     assert summary.tagged == 2
+    # The cap stops the sweep before the third file's deadline check.
+    assert deadline.call_count == 2
 
 
 def test_the_cap_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,6 +133,9 @@ def test_one_failing_file_does_not_end_the_sweep(outcomes, deadline) -> None:
 
     assert summary.failed == ["a"]
     assert summary.tagged == 1
+    # Before each file, and once more after "a" fails, to tell a refusal
+    # past the deadline from a real failure.
+    assert deadline.call_count == 3
 
 
 def test_the_report_counts_and_names_the_untouched_files(
