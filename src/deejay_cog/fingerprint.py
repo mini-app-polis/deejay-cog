@@ -182,7 +182,9 @@ class Identifier(Protocol):
 
     def identify(
         self, path: str, *, fetch_metadata: bool = True
-    ) -> IdentificationResult: ...
+    ) -> IdentificationResult:
+        """Identify the audio file at ``path``."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +249,7 @@ class AcoustIdLookup:
         self._max_candidates = max_candidates
 
     def identify(self, path: str) -> list[TrackId]:
+        """The MusicBrainz recordings AcoustID matches ``path`` to, best first."""
         duration, fingerprint = run_fpcalc(path, fpcalc=self._fpcalc)
         data = self._lookup_answer(fingerprint, duration)
         candidates: list[TrackId] = []
@@ -289,6 +292,8 @@ class AcoustIdLookup:
 
 
 def min_confidence() -> float:
+    """The lowest match score accepted: ``RETAG_MIN_CONFIDENCE``, else
+    ``DEFAULT_MIN_CONFIDENCE``."""
     raw = os.getenv("RETAG_MIN_CONFIDENCE", "").strip()
     return float(raw) if raw else DEFAULT_MIN_CONFIDENCE
 
