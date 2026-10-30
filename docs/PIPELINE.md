@@ -43,6 +43,7 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
 |------|------|--------|--------------|
 | `process-new-files` | **process-new-csv-files** | `process_new_files.py` | Sweeps the CSV drop zone: normalise, upload to Sheets, ingest to the API, archive, sync Spotify. |
 | `ingest-live-history` | **ingest-live-history** | `ingest_live_history.py` | Sends the plays in the **most recent** VirtualDJ `.m3u` to `POST /v1/live-plays`. Not the whole history. |
+| `retag-music` | **retag-music** | `retag_music_from_catalog.py` | Looks each audio file in the music upload folder up in the catalog and writes the catalog's tags over the same Drive file. |
 
 ### Local-only (never run by the worker)
 
@@ -124,6 +125,25 @@ stored:
 Reads the newest `.m3u` in the VirtualDJ history folder, timestamps each
 play in `TIMEZONE` (plays after midnight roll to the next day), and posts
 them. Each run re-sends that file's plays; the API deduplicates.
+
+## retag-music
+
+Lists the audio files in `MUSIC_UPLOAD_SOURCE_FOLDER_ID` and runs the catalog
+lookup and tag writer (`music_tags.py`, ADR-0007) on each. A matched file has
+its tags written in place; its name, folder and file id do not change, and a
+file whose tags already match is not written again.
+
+- **Cap:** at most `MAX_UPLOADS_PER_RUN` files (200; 0 for no cap) a run. The
+  rest wait for the next run.
+- **Deadline:** checked between files. Past it the run stops with
+  `RunOutOfTime` and reports `Stopped early`; the redelivery carries on.
+- **Left untouched:** a file the catalog has no song for (`not_in_catalog`), and
+  one with no usable title or artist (`needs_fingerprinting`). Both are only
+  counted and named in the report; fingerprinting them is a later stage.
+- **Report:** counts for `scanned`, `matched_in_catalog`, `not_in_catalog`,
+  `tagged`, `needing_fingerprinting` and `failed`, and the untouched files by
+  name. A failed file is an issue, so the run is WARN. One failing file does
+  not end the sweep.
 
 ---
 
