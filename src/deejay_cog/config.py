@@ -40,6 +40,25 @@ REPAIR_MAX_PER_RUN = int(os.getenv("REPAIR_MAX_PER_RUN", "3"))
 # SPOTIPY_REDIRECT_URI and LOGGING_LEVEL are read by common-python-utils
 # (mini_app_polis.config, mini_app_polis.logger), not here.
 
+
+def effective_settings() -> dict[str, object]:
+    """The settings above by environment variable name, as resolved."""
+    return {
+        "CSV_SOURCE_FOLDER_ID": CSV_SOURCE_FOLDER_ID,
+        "DJ_SETS_FOLDER_ID": DJ_SETS_FOLDER_ID,
+        "VDJ_HISTORY_FOLDER_ID": VDJ_HISTORY_FOLDER_ID,
+        "MUSIC_UPLOAD_SOURCE_FOLDER_ID": MUSIC_UPLOAD_SOURCE_FOLDER_ID,
+        "OUTPUT_NAME": OUTPUT_NAME,
+        "TEMP_TAB_NAME": TEMP_TAB_NAME,
+        "SUMMARY_TAB_NAME": SUMMARY_TAB_NAME,
+        "SUMMARY_FOLDER_NAME": SUMMARY_FOLDER_NAME,
+        "DEEJAY_SET_COLLECTION_JSON_PATH": DEEJAY_SET_COLLECTION_JSON_PATH,
+        "TIMEZONE": TIMEZONE,
+        "REPAIR_LOOKBACK_DAYS": REPAIR_LOOKBACK_DAYS,
+        "REPAIR_MAX_PER_RUN": REPAIR_MAX_PER_RUN,
+    }
+
+
 # Summary sheet columns (generate_summaries)
 ALLOWED_HEADERS = [
     "title",

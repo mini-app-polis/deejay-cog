@@ -33,6 +33,7 @@ run can be traced from watcher's log to the report without a join table.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -41,6 +42,7 @@ from mini_app_polis import load_secrets, timing
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.api.contract import DeejayRunMessage
 from mini_app_polis.deadline import RunDeadlineReached
+from mini_app_polis.environment import log_settings
 from mini_app_polis.lambda_worker import (
     RunOutOfTime,
     UnprocessableMessage,
@@ -51,10 +53,13 @@ from mini_app_polis.lambda_worker import (
 )
 from mini_app_polis.sentry import init_sentry
 
+import deejay_cog.config as config
 from deejay_cog._pipeline_eval import post_run_finding
+from deejay_cog.fingerprint_jobs import QUEUE_URL_VAR
 from deejay_cog.ingest_live_history import ingest_live_history
 from deejay_cog.process_new_files import process_new_csv_files_flow
-from deejay_cog.retag_music_from_catalog import retag_music
+from deejay_cog.retag_music_from_catalog import _max_uploads_per_run, retag_music
+from deejay_cog.spotify_sync import SPOTIFY_CREDENTIAL_ENV, radio_playlist_id
 
 log = logger_mod.get_logger()
 
@@ -94,6 +99,26 @@ FLOW_NAMES = {
 # An empty DSN in production logs an ERROR rather than passing silently
 # (CD-038); the service tag tells this cog's events apart in the shared project.
 init_sentry("deejay-cog")
+
+
+def effective_settings() -> dict[str, Any]:
+    """Every setting this worker's modes read, by name, as resolved."""
+    return {
+        **config.effective_settings(),
+        "MAX_UPLOADS_PER_RUN": _max_uploads_per_run(),
+        "SPOTIFY_RADIO_PLAYLIST_ID": radio_playlist_id(),
+        **{name: os.getenv(name) for name in SPOTIFY_CREDENTIAL_ENV},
+        QUEUE_URL_VAR: os.getenv(QUEUE_URL_VAR, "").strip(),
+    }
+
+
+# Also once per cold start: the settings in effect, with a value only for
+# the names in SETTINGS_ALLOWLIST. A setting that will not parse fails its
+# run as before, not the cold start.
+try:
+    log_settings(effective_settings())
+except Exception:  # noqa: BLE001 — the report is not the job
+    log.exception("worker: could not log the effective settings")
 
 
 def _mode_of(body: str) -> str:

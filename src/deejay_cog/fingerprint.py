@@ -51,7 +51,7 @@ from mini_app_polis import load_secrets, timing
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.api.contract import CatalogLookupRequest, CatalogMatch
 from mini_app_polis.deadline import RunDeadlineReached
-from mini_app_polis.environment import api_base_url
+from mini_app_polis.environment import api_base_url, log_settings
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.lambda_worker import (
     RunOutOfTime,
@@ -467,6 +467,23 @@ def _record(report: Any, result: FingerprintResult | None, duration_sec: float) 
 # ---------------------------------------------------------------------------
 # The Lambda entrypoint
 # ---------------------------------------------------------------------------
+
+
+def effective_settings() -> dict[str, Any]:
+    """Every setting this function reads, by name, as resolved."""
+    return {
+        "RETAG_MIN_CONFIDENCE": min_confidence(),
+        "ACOUSTID_API_KEY": os.getenv("ACOUSTID_API_KEY", "").strip(),
+    }
+
+
+# Once per cold start: the settings in effect, with a value only for the
+# names in SETTINGS_ALLOWLIST. A setting that will not parse fails its run
+# as before, not the cold start.
+try:
+    log_settings(effective_settings())
+except Exception:  # noqa: BLE001 — the report is not the job
+    log.exception("deejay-fingerprint: could not log the effective settings")
 
 
 def process_message(body: str, *, run_id: str) -> None:
