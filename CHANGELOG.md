@@ -1,3 +1,15 @@
+# [2.11.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.10.3...v2.11.0) (2026-10-31)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 7.8.0 ([6a2c291](https://github.com/mini-app-polis/deejay-cog/commit/6a2c291a4d2350de9750381607050de7511b93e6))
+
+
+### Features
+
+* **settings:** log effective settings once per cold start ([9fe0ba8](https://github.com/mini-app-polis/deejay-cog/commit/9fe0ba8e751e392fc0440d8b0a987d84d3988107))
+
 ## [2.10.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.10.2...v2.10.3) (2026-10-31)
 
 
