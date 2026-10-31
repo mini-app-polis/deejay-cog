@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -371,3 +372,22 @@ def test_a_refusal_past_the_shared_deadline_is_a_deadline_stop(
     assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}]}
     assert reported.called
     assert "stopped at the deadline" in caplog.text
+
+
+def test_effective_settings_show_values_only_for_allowlisted_names(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    secret = "do-not-log-this-secret"
+    monkeypatch.setenv("SETTINGS_ALLOWLIST", "REPAIR_LOOKBACK_DAYS,MAX_UPLOADS_PER_RUN")
+    monkeypatch.delenv("REPAIR_LOOKBACK_DAYS", raising=False)
+    monkeypatch.setenv("MAX_UPLOADS_PER_RUN", "7")
+    monkeypatch.setenv("SPOTIPY_CLIENT_SECRET", secret)
+
+    with caplog.at_level(logging.INFO):
+        worker.log_settings(worker.effective_settings())
+
+    lines = [record.getMessage() for record in caplog.records]
+    assert "REPAIR_LOOKBACK_DAYS=183 (default)" in lines
+    assert "MAX_UPLOADS_PER_RUN=7 (set)" in lines
+    assert "SPOTIPY_CLIENT_SECRET (set)" in lines
+    assert not any(secret in line for line in lines)
