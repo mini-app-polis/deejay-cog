@@ -1,3 +1,11 @@
+## [2.10.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.10.2...v2.10.3) (2026-10-31)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 7.7.0 ([67632a7](https://github.com/mini-app-polis/deejay-cog/commit/67632a76039460a6165c54d9a75b7e0a6984f20b))
+* **deps:** patch vulnerable dependencies (pyasn1) ([dbf4cb0](https://github.com/mini-app-polis/deejay-cog/commit/dbf4cb075ed766ddacc6995041929a40e913e193))
+
 ## [2.10.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.10.1...v2.10.2) (2026-10-30)
 
 
