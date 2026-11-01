@@ -147,9 +147,9 @@ def process_message(body: str, *, run_id: str) -> None:
 def _report_failure(flow_name: str, what: str, exc: BaseException, run_id: str) -> None:
     """Say a run died, in the one place someone is watching.
 
-    Replaces the Prefect ``on_failure`` / ``on_crashed`` hooks. A flow that
-    raises never reaches its own report, so without this a failed run would
-    be visible only in CloudWatch and, three receives later, the DLQ alarm.
+    A flow that raises never reaches its own report, so this sends it
+    instead; without it a failed run would be visible only in CloudWatch
+    and, three receives later, the DLQ alarm.
     """
     try:
         post_run_finding(

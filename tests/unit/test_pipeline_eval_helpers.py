@@ -175,9 +175,9 @@ def test_post_run_finding_source_in_kwargs_does_not_raise(monkeypatch) -> None:
 def test_get_run_id_is_unattributable_without_prefect(monkeypatch) -> None:
     """Why the worker passes the message id as run_id.
 
-    Both of get_run_id's resolution steps are Prefect's. With Prefect gone
-    every run falls back to one id that identifies nothing, so a report
-    that relied on it could not be joined to the run that sent it.
+    get_run_id() finds no run id inside a Lambda run, so every run falls
+    back to one id that identifies nothing, and a report that relied on it
+    could not be joined to the run that sent it.
     """
     monkeypatch.delenv("PREFECT_FLOW_RUN_ID", raising=False)
     assert ps.get_run_id() == "local-run"

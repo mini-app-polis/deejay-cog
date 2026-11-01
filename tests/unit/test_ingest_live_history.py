@@ -222,8 +222,8 @@ def test_ingest_live_history_sends_all_parsed_entries(
 def test_the_run_id_reaches_the_report(monkeypatch) -> None:
     """The worker passes the message id; the report must carry it.
 
-    Without it RunReport falls back to get_run_id(), which only knows
-    Prefect's ids and so answers "local-run" for every Lambda run.
+    Without it RunReport falls back to get_run_id(), which cannot identify
+    a Lambda run and so answers "local-run" for every one.
     """
     monkeypatch.setenv("KAIANO_API_BASE_URL", "")
     fake_g = SimpleNamespace(drive=SimpleNamespace(get_all_m3u_files=MagicMock()))
