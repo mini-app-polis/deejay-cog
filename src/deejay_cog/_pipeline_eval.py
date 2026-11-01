@@ -2,7 +2,7 @@
 
 This module is a thin shim: every cog in the fleet reports the outcome of
 its runs the same way, and the machinery (``post_run_finding``,
-``RunReport``, ``get_prefect_logger``) lives in **common-python-utils** so it
+``RunReport`` and the shared logger) lives in **common-python-utils** so it
 stays in sync across cogs. A report is a message to ``POST /v1/notify``;
 nothing is persisted.
 
@@ -25,8 +25,8 @@ The shim provides three conveniences for deejay-cog callers:
    ``*.dist-info``), and the deploy builds from the release tag, so it is
    the version of what is running.
 
-``get_prefect_logger`` keeps its library name; outside a Prefect run, which
-is everywhere now, it is the shared module logger.
+The logger re-exported here keeps its library name and returns the
+library's shared module logger.
 
 See ``docs/decisions/ADR-0004-best-effort-pipeline-eval.md`` for the
 decision record on best-effort posting.

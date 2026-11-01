@@ -1057,8 +1057,8 @@ def test_a_failed_push_is_counted_not_logged_as_none(monkeypatch) -> None:
 def test_the_run_id_reaches_the_report(monkeypatch) -> None:
     """The worker passes the message id; the report must carry it.
 
-    Without it RunReport falls back to get_run_id(), which only knows
-    Prefect's ids and so answers "local-run" for every Lambda run.
+    Without it RunReport falls back to get_run_id(), which cannot identify
+    a Lambda run and so answers "local-run" for every one.
     """
     monkeypatch.setenv("KAIANO_API_BASE_URL", "")
     g = SimpleNamespace(drive=SimpleNamespace(list_files=MagicMock(return_value=[])))

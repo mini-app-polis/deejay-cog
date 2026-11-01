@@ -954,8 +954,8 @@ def process_new_csv_files_flow(*, run_id: str | None = None) -> None:
     handled finds nothing and reports an idle run.
 
     ``run_id`` is the queue message id when the Lambda worker runs this.
-    Passed rather than resolved: ``get_run_id()`` only knows Prefect's ids,
-    so without it every report would arrive as ``"local-run"``.
+    Passed rather than resolved: ``get_run_id()`` cannot identify a Lambda
+    run, so without it every report would arrive as ``"local-run"``.
     """
     started_at = monotonic()
     logger = get_prefect_logger()
