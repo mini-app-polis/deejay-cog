@@ -50,12 +50,13 @@ def reported(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 
 def test_the_router_covers_exactly_the_modes_the_api_accepts() -> None:
-    """The API's DeejayRunRequest accepts these and no others."""
+    """The API's DeejayRunRequest must accept these and no others."""
     assert set(worker.MODES) == {
         "process-new-files",
         "ingest-live-history",
         "retag-music",
         "new-music",
+        "library-backfill",
     }
     assert set(worker.FLOW_NAMES) == set(worker.MODES)
 
