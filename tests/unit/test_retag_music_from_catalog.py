@@ -270,3 +270,16 @@ def test_the_report_counts_the_files_handed_on(
     kwargs = posted.call_args.kwargs
     assert kwargs["handed_to_fingerprinting"] == 1
     assert kwargs["needing_fingerprinting"] == 0
+
+
+def test_audio_that_would_change_stops_the_sweep(outcomes, deadline) -> None:
+    from deejay_cog.music_safety import AudioChanged
+
+    outcomes["a"] = AudioChanged("differs")
+    summary = flow.RetagSummary()
+
+    with pytest.raises(AudioChanged):
+        flow.tag_files(MagicMock(), MagicMock(), _files("a", "b"), summary, max_files=0)
+
+    assert summary.failed == ["a"]
+    assert summary.scanned == 1

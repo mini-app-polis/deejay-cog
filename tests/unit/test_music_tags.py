@@ -8,10 +8,12 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
 from mini_app_polis.api.contract import CatalogLookupRequest, CatalogMatch
 from mutagen.id3 import ID3, TALB, TBPM, TCON, TDRC, TIT2, TPE1, TPUB, TXXX
 
 from deejay_cog import music_tags
+from deejay_cog.music_safety import AudioChanged
 from deejay_cog.music_tags import Outcome
 
 #: One MPEG-1 Layer III frame header (128 kbps, 44.1 kHz) and its body,
@@ -297,3 +299,16 @@ def test_a_file_with_a_title_but_no_artist_needs_fingerprinting() -> None:
     result = music_tags.tag_file(drive, FakeApi(answer=_match()), "f1")
 
     assert result.outcome is Outcome.NEEDS_FINGERPRINT
+
+
+def test_a_write_that_would_change_the_audio_is_refused(monkeypatch) -> None:
+    data = _mp3(TIT2(encoding=3, text=["temple"]), TPE1(encoding=3, text=["tg"]))
+    drive = FakeDrive({"f1": ("song.mp3", data)})
+    monkeypatch.setattr(
+        music_tags, "write_catalog_tags", lambda *_: data[:-1] + b"\x01"
+    )
+
+    with pytest.raises(AudioChanged):
+        music_tags.tag_file(drive, FakeApi(_match()), "f1")
+
+    assert drive.updates == []

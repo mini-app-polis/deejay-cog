@@ -7,7 +7,15 @@ are this package, so the message is defined here rather than in the shared
 contract:
 
     {"type": "deejay.fingerprint", "version": 1,
-     "payload": {"drive_file_id": "<id>", "name": "<file name>"}}
+     "payload": {"drive_file_id": "<id>", "name": "<file name>",
+                 "flow": "retag-music", "mode": null}}
+
+``flow`` says which flow sent the file and so what the function does with
+it: ``retag-music`` (the default, so a message without it is read as
+before) tags the file in place; ``new-music`` takes it in as the new-music
+mode would (:mod:`deejay_cog.new_music`). For ``new-music``, ``mode`` is the
+sender's ``NEW_MUSIC_MODE``; the function uses the stricter of it and its
+own, and reads a missing one as ``off``.
 
 The deejay worker gets the queue's URL as ``DEEJAY_FINGERPRINT_QUEUE_URL``.
 Unset (a local run), nothing is sent and retag-music names the files in its
@@ -36,6 +44,12 @@ class FingerprintJobPayload(BaseModel):
 
     drive_file_id: str = Field(..., min_length=1, description="The file.")
     name: str = Field(default="", description="Its name, for the run report.")
+    flow: Literal["retag-music", "new-music"] = Field(
+        default="retag-music", description="The flow that sent the file."
+    )
+    mode: Literal["off", "dry-run", "write"] | None = Field(
+        default=None, description="The new-music sender's mode."
+    )
 
 
 class FingerprintJobMessage(QueueMessage[FingerprintJobPayload]):
@@ -54,18 +68,29 @@ class FingerprintJobs:
         # client.
         self._client = client or importlib.import_module("boto3").client("sqs")
 
-    def send(self, file_id: str, name: str) -> None:
-        """Queue one file. The file id is the deduplication id, so a run that
-        is redelivered does not queue the same file twice within SQS's
-        five-minute window."""
+    def send(
+        self,
+        file_id: str,
+        name: str,
+        *,
+        flow: Literal["retag-music", "new-music"] = "retag-music",
+        mode: Literal["off", "dry-run", "write"] | None = None,
+    ) -> None:
+        """Queue one file. The file id (prefixed with the flow for
+        new-music) is the deduplication id, so a run that is redelivered
+        does not queue the same file twice within SQS's five-minute window."""
         message = FingerprintJobMessage(
-            payload=FingerprintJobPayload(drive_file_id=file_id, name=name)
+            payload=FingerprintJobPayload(
+                drive_file_id=file_id, name=name, flow=flow, mode=mode
+            )
         )
         self._client.send_message(
             QueueUrl=self.queue_url,
             MessageBody=message.model_dump_json(),
             MessageGroupId=MESSAGE_GROUP_ID,
-            MessageDeduplicationId=file_id,
+            MessageDeduplicationId=(
+                file_id if flow == "retag-music" else f"{flow}:{file_id}"
+            ),
         )
 
 

@@ -44,6 +44,7 @@ from mutagen.id3 import (
 )
 
 from deejay_cog.ingest_to_api import build_ingest_tracks
+from deejay_cog.music_safety import check_audio_unchanged
 
 #: The user-defined frame that joins a file to its catalog entry.
 CATALOG_ID_DESC = "CATALOG_ID"
@@ -253,6 +254,8 @@ def tag_file(drive: DriveFiles, api: CatalogLookup, file_id: str) -> FileResult:
     if tagged is None:
         return FileResult(file_id, name, Outcome.ALREADY_TAGGED, match)
 
+    # The audio must come back byte for byte; AudioChanged stops the run.
+    check_audio_unchanged(data, tagged)
     replace_contents(drive, file_id, name, tagged)
     return FileResult(file_id, name, Outcome.TAGGED, match)
 

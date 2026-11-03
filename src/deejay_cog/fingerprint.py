@@ -29,6 +29,14 @@ than the file being reported as unidentified.
 
 Each message is one run with its own report, under the message id, as the
 deejay worker's runs are.
+
+**New music.** A message marked ``"flow": "new-music"`` comes from the
+new-music mode instead. Such a file is identified the same way, but is then
+taken in with the new-music steps (:class:`deejay_cog.new_music.Intake`): a
+tagged copy under its new name in the destination folder and the original
+moved to processed-originals on a confident match, the original moved to
+needs-review otherwise. That run is reported under ``new-music`` and follows
+the stricter of the message's mode and ``NEW_MUSIC_MODE``.
 """
 
 from __future__ import annotations
@@ -73,10 +81,21 @@ from mini_app_polis.mp3.identify.providers.musicbrainz_provider import (
 from mini_app_polis.pipeline_status import run_report
 from mini_app_polis.sentry import init_sentry
 
+from deejay_cog import new_music
 from deejay_cog._pipeline_eval import REPO, post_run_finding
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
 from deejay_cog.fingerprint_jobs import FingerprintJobMessage
+from deejay_cog.music_safety import (
+    AudioChanged,
+    FlowMode,
+    TagEmptied,
+    check_audio_unchanged,
+    file_meta,
+    flow_mode,
+    parse_mode,
+    stricter,
+)
 from deejay_cog.music_tags import (
     MP3_MIME_TYPE,
     CatalogLookup,
@@ -388,6 +407,7 @@ def identify_file(
     if tagged is None:
         return FingerprintResult(file_id, name, Outcome.ALREADY_TAGGED, score, match)
 
+    check_audio_unchanged(data, tagged)
     replace_contents(drive, file_id, name, tagged)
     return FingerprintResult(file_id, name, outcome, score, match)
 
@@ -465,6 +485,116 @@ def _record(report: Any, result: FingerprintResult | None, duration_sec: float) 
 
 
 # ---------------------------------------------------------------------------
+# New music (the new-music flow's files)
+# ---------------------------------------------------------------------------
+
+
+def intake_fingerprinted(
+    intake: new_music.Intake,
+    api: CatalogLookup,
+    identifier: Identifier,
+    file_id: str,
+    *,
+    threshold: float,
+) -> None:
+    """Identify one new-music file by its fingerprint and, on a confident
+    match, take it in with the new-music steps; otherwise send it, unchanged,
+    to needs-review.
+
+    A file no longer in the input folder (already taken in, or moved by
+    hand) is left alone.
+    """
+    summary = intake.summary
+    meta = file_meta(intake.drive, file_id)
+    name = str(meta.get("name") or file_id)
+    if meta.get("trashed") or intake.folders.input not in (meta.get("parents") or []):
+        summary.no_longer_in_input.append(name)
+        return
+
+    downloaded = intake.drive.download_file_bytes(file_id)
+    name = str(getattr(downloaded, "name", "") or name)
+    data: bytes = downloaded.data
+    if not new_music.is_mp3(downloaded, name):
+        intake.review(file_id, name, None, "not an MP3: only ID3 tags are written")
+        return
+
+    result = _identify(identifier, name, data)
+    chosen = result.chosen
+    score = float(chosen.confidence or 0.0) if chosen is not None else 0.0
+    if chosen is None or score < threshold:
+        intake.review(
+            file_id,
+            name,
+            data,
+            f"fingerprint below confidence (best score {score:.2f}, "
+            f"needs {threshold:.2f})",
+        )
+        return
+
+    metadata = result.metadata or {}
+    title = str(metadata.get("title") or "").strip()
+    artist = str(metadata.get("artist") or "").strip()
+    year = _year(metadata.get("year"))
+    track = ingest_track({"title": title, "artist": artist, "year": year})
+    if track is None:
+        intake.review(file_id, name, data, "MusicBrainz gave no title or artist")
+        return
+
+    match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+    if match is not None:
+        tagged = write_catalog_tags(data, match)
+        by = f"fingerprint ({score:.2f}) + catalog"
+    else:
+        tagged = write_recording_tags(data, title=title, artist=artist, year=year)
+        by = f"fingerprint ({score:.2f}) + MusicBrainz"
+    intake.deliver(file_id, name, data, tagged or data, identified_by=by)
+
+
+def intake_by_fingerprint(
+    file_id: str,
+    name: str = "",
+    *,
+    run_id: str | None = None,
+    sender_mode: FlowMode = FlowMode.OFF,
+    drive: Any | None = None,
+    api: CatalogLookup | None = None,
+    identifier: Identifier | None = None,
+) -> new_music.IntakeSummary:
+    """One new-music file's fingerprint run, reported under ``new-music``.
+
+    Runs in the stricter of the sender's mode and ``NEW_MUSIC_MODE`` here,
+    so turning the flow off (or to dry-run) also stops files already queued.
+    """
+    mode = stricter(sender_mode, flow_mode(new_music.MODE_VAR))
+    log.info("deejay-fingerprint: new-music file %s in %s", name or file_id, mode.value)
+
+    def work(intake: new_music.Intake) -> None:
+        intake.summary.scanned = 1
+        threshold = min_confidence()
+        try:
+            intake_fingerprinted(
+                intake,
+                api
+                if api is not None
+                else api_client(base_url=api_base_url().strip() or None),
+                identifier
+                if identifier is not None
+                else build_identifier(threshold=threshold),
+                file_id,
+                threshold=threshold,
+            )
+        except AudioChanged:
+            intake.summary.failed.append(name or file_id)
+            raise
+        except TagEmptied as exc:
+            intake.summary.failed.append(f"{name or file_id} ({exc})")
+
+    return new_music.run_intake(
+        stage="fingerprint", run_id=run_id, mode=mode, work=work, drive=drive
+    )
+
+
+# ---------------------------------------------------------------------------
 # The Lambda entrypoint
 # ---------------------------------------------------------------------------
 
@@ -474,6 +604,8 @@ def effective_settings() -> dict[str, Any]:
     return {
         "RETAG_MIN_CONFIDENCE": min_confidence(),
         "ACOUSTID_API_KEY": os.getenv("ACOUSTID_API_KEY", "").strip(),
+        new_music.MODE_VAR: flow_mode(new_music.MODE_VAR).value,
+        **{var: os.getenv(var, "").strip() for var in new_music.FOLDER_VARS.values()},
     }
 
 
@@ -493,7 +625,16 @@ def process_message(body: str, *, run_id: str) -> None:
     file already written is not written again (its tags already say so).
     """
     message = parse_message(body, FingerprintJobMessage)
-    fingerprint(message.payload.drive_file_id, message.payload.name, run_id=run_id)
+    payload = message.payload
+    if payload.flow == "new-music":
+        intake_by_fingerprint(
+            payload.drive_file_id,
+            payload.name,
+            run_id=run_id,
+            sender_mode=parse_mode(payload.mode, setting="message mode"),
+        )
+        return
+    fingerprint(payload.drive_file_id, payload.name, run_id=run_id)
 
 
 def _attempt(record: dict[str, Any]) -> str:

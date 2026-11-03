@@ -33,6 +33,7 @@ from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
 from deejay_cog.fingerprint_jobs import FingerprintJobs, fingerprint_jobs_from_env
+from deejay_cog.music_safety import AudioChanged
 from deejay_cog.music_tags import CatalogLookup, DriveFiles, Outcome, tag_file
 
 log = logger_mod.get_logger()
@@ -123,6 +124,10 @@ def tag_files(
         summary.scanned += 1
         try:
             result = tag_file(drive, api, f.id)
+        except AudioChanged:
+            # Nothing was written for this file; the run stops here.
+            summary.failed.append(name)
+            raise
         except Exception as exc:  # noqa: BLE001 — one file must not end the sweep
             if shared_deadline_passed():
                 raise RunOutOfTime(f"run deadline reached processing {name}") from exc

@@ -4,7 +4,8 @@ Date: 2026-10-29
 
 ## Status
 
-Accepted
+Accepted. Amended 2026-11-03 (owner): two flows and the safety rules, in
+[the section at the end](#amended-2026-11-03-owner-two-flows-and-the-safety-rules).
 
 Supersedes, once built, the retag-music parts of
 [ADR-0002](./ADR-0002-production-vs-local-flow-tiers.md) (retag-music as a
@@ -191,3 +192,104 @@ stages, each its own function (decision 3):
      `docs/CONFIGURATION.md`, `docs/PIPELINE.md`, ADR-0001, ADR-0002,
      ADR-0004, ADR-0006 and `src/deejay_cog/_pipeline_eval.py`.
 - Out of scope: anything beyond the tags of the Drive music library.
+
+## Amended 2026-11-03 (owner): two flows and the safety rules
+
+### Context
+
+Music reaches the Drive library in two ways, and they need different
+handling. Files dropped in a new-music folder are mostly new official
+releases: not yet played, so not yet in the play history or the catalog,
+and not yet anywhere VirtualDJ has a path, cue point or history for. Files
+already in the library number in the thousands and are what VirtualDJ
+plays from. And these flows write to the music the owner DJs from, so a
+mistake must not be able to damage a file, and any run must be possible to
+review before it acts and to undo after.
+
+### Decision
+
+**Two flows.**
+
+- **New-music intake** (the `new-music` worker mode, on the same queue as
+  the others, triggered by watcher-cog when files land in the input folder
+  and on demand through `POST /v1/deejay/runs`). Each file is identified by
+  its tags in the catalog (decision 2, stage 1); otherwise it goes to the
+  fingerprint function (stage 2), whose message now says which flow sent
+  it. A file with a good title and artist that the catalog does not know is
+  fingerprinted to confirm it, not accepted on its own tags: new releases
+  are exactly the files the catalog cannot vouch for. On a confident
+  identification (the AcoustID score reaching `RETAG_MIN_CONFIDENCE`, or a
+  catalog match), the file is tagged by decision 1's rules and **renamed
+  `{title}_{artist}`**: its tagged bytes are uploaded as a new file into the
+  destination folder, and the original is moved, unchanged, to a
+  processed-originals folder. A file that cannot be identified with
+  confidence, or whose new name is already taken in the destination, is
+  moved unchanged to a needs-review folder. **This is the only flow that may
+  rename**: these files are not in the library yet, so no VirtualDJ path
+  refers to them.
+- **Library backfill** (to be built). Files already in the library are
+  **never renamed, moved or deleted** — decision 1's reasoning stands:
+  renaming or moving a library file breaks the path VirtualDJ finds it by,
+  and with it its cue points, history and playlists. They are only
+  retagged from the catalog, in place, in nightly chunks with a stored
+  position so each night resumes where the last stopped; the chunk starts
+  at 10 files and is raised to 200 by the owner once the results are
+  trusted. A nightly schedule is a change to
+  [ADR-0003](./ADR-0003-on-demand-no-cadence.md)'s on-demand stance; it will
+  be recorded there when the backfill is built.
+
+**Safety rules, for every flow that writes music** (`music_safety.py`):
+
+- **A mode per flow**, read from the environment at the start of each run:
+  `off`, `dry-run` or `write`. The default is `off`, and so is an unset or
+  unknown value (logged). Off, the flow does nothing and reports that it is
+  off. A dry run reads, identifies and computes everything, writes nothing
+  to the music folders, and reports per file what it would do (old and new
+  tags, new name, destination). New-music reads `NEW_MUSIC_MODE`; the
+  backfill will have its own. The fingerprint function uses the stricter of
+  the sender's mode and its own.
+- **The audio is never altered.** Before new tag bytes are uploaded, their
+  audio — the bytes left once any ID3v2 tag (with its footer) at the start
+  and any ID3v1, APEv2 or appended ID3v2 tag at the end are removed — must
+  be byte-identical to the original's. After the write the file is
+  downloaded and checked again. A mismatch before the write means nothing
+  is uploaded; after it, the original is restored (in place: the kept
+  revision's bytes; for a copy: the copy goes to the trash and the original
+  never moved). Either way the file counts as failed and the run stops, with
+  an ERROR finding.
+- **No tag is emptied.** A field the source has no value for keeps the
+  file's own.
+- **Nothing is deleted or overwritten.** The only removal is Drive's
+  trash, and only by rollback. A file is moved only from the folder the
+  flow works on, and only while it is in that folder alone.
+- **Every write is recorded.** Each run keeps a JSON run record in
+  `MUSIC_TAGGING_STATE_FOLDER_ID`, named by flow and run id: per file its
+  id, original name, old and new tags, the Drive revision kept, any copy
+  made (id, folder, name) and any move (from, to). A writing run saves it
+  before and after each step, so a run stopped by the deadline still
+  leaves it; a dry run saves the would-be record, marked as one.
+- **Every run can be undone.** `python -m deejay_cog.music_rollback <run id>`,
+  run locally under Doppler, reads a run's record and undoes it: for
+  new-music, the copy to the trash and the original back to the input
+  folder; for in-place writes, the kept revision's contents back. It is a
+  dry run unless given `--apply`, and leaves alone anything moved or changed
+  since the run. It is a local command rather than a worker mode because
+  `POST /v1/deejay/runs` carries a mode and no parameters, so it cannot be
+  given a run id.
+- **A missing required folder setting** means the flow reports it and does
+  nothing.
+
+### Consequences
+
+- Decision 1's "paths: never changed" holds for the library; new-music is
+  the one flow that names files, and only before they reach the library.
+- Decision 3's "neither deletes, moves nor renames a file" holds for
+  retag-music and the backfill; new-music copies, and moves its own input
+  files to processed-originals or needs-review.
+- Until the backfill replaces it, retag-music (and the fingerprint
+  function's retag path) has the audio check before its write, which stops
+  the run on a mismatch, but none of the other rules.
+- A new release AcoustID does not know yet scores low and goes to
+  needs-review, to be tagged by hand.
+- The new-music settings must reach the fingerprint function as well as the
+  worker, and `new-music` must join the modes the API contract accepts.
