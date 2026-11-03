@@ -66,6 +66,7 @@ class Step:
 
     @property
     def line(self) -> str:
+        """The step as one line of the rollback plan."""
         if self.skipped:
             return f"skip  {self.file_name}: {self.what} — {self.skipped}"
         return f"do    {self.file_name}: {self.what}"
@@ -248,6 +249,8 @@ def rollback(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Plan the undo of one run from its record, and carry it out with
+    ``--apply``. Returns the exit status."""
     parser = argparse.ArgumentParser(
         prog="python -m deejay_cog.music_rollback",
         description="Undo a music-tagging run from its run record.",

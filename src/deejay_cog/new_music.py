@@ -145,6 +145,7 @@ class IntakeFolders:
         return cls(**values), []
 
     def as_dict(self) -> dict[str, str]:
+        """The folder ids by role, for the run record."""
         return {
             "input": self.input,
             "destination": self.destination,
@@ -192,13 +193,15 @@ def delivery_name(tags: dict[str, str], original_name: str) -> str | None:
 
 
 def is_mp3(downloaded: Any, name: str) -> bool:
+    """Whether a downloaded file is an MP3, by its type or name: only ID3
+    tags are written."""
     mime_type = str(getattr(downloaded, "mime_type", "") or "")
     return mime_type == MP3_MIME_TYPE or name.lower().endswith(".mp3")
 
 
 class NotInInput(Exception):  # noqa: N818 — named for what happened
-    """The file is no longer in the input folder, so it is not moved: only a
-    file in the input folder is ever moved by this flow."""
+    """The file is not in the input folder, so it is not moved: only a file
+    in the input folder is ever moved by this flow."""
 
 
 class Intake:
@@ -220,6 +223,7 @@ class Intake:
 
     @property
     def mode(self) -> FlowMode:
+        """The mode this run was started in."""
         return self.record.mode
 
     def _move_from_input(self, file_id: str, to_folder: str) -> None:
@@ -400,6 +404,7 @@ def list_audio_files(drive: Any, folder_id: str) -> list[Any]:
 
 
 def max_files_per_run() -> int:
+    """The most files one run takes in (NEW_MUSIC_MAX_FILES_PER_RUN)."""
     raw = os.getenv(MAX_FILES_VAR, "").strip()
     return int(raw) if raw else DEFAULT_MAX_FILES_PER_RUN
 
