@@ -55,6 +55,7 @@ def test_the_router_covers_exactly_the_modes_the_api_accepts() -> None:
         "process-new-files",
         "ingest-live-history",
         "retag-music",
+        "new-music",
     }
     assert set(worker.FLOW_NAMES) == set(worker.MODES)
 

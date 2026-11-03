@@ -57,6 +57,11 @@ import deejay_cog.config as config
 from deejay_cog._pipeline_eval import post_run_finding
 from deejay_cog.fingerprint_jobs import QUEUE_URL_VAR
 from deejay_cog.ingest_live_history import ingest_live_history
+from deejay_cog.music_safety import flow_mode
+from deejay_cog.new_music import FOLDER_VARS as NEW_MUSIC_FOLDER_VARS
+from deejay_cog.new_music import MAX_FILES_VAR as NEW_MUSIC_MAX_FILES_VAR
+from deejay_cog.new_music import MODE_VAR as NEW_MUSIC_MODE_VAR
+from deejay_cog.new_music import max_files_per_run, new_music
 from deejay_cog.process_new_files import process_new_csv_files_flow
 from deejay_cog.retag_music_from_catalog import _max_uploads_per_run, retag_music
 from deejay_cog.spotify_sync import SPOTIFY_CREDENTIAL_ENV, radio_playlist_id
@@ -82,6 +87,7 @@ MODES: dict[str, Callable[..., Any]] = {
     "process-new-files": process_new_csv_files_flow,
     "ingest-live-history": ingest_live_history,
     "retag-music": retag_music,
+    "new-music": new_music,
 }
 
 #: The flow name a failure is reported under, per mode — the same names the
@@ -91,6 +97,7 @@ FLOW_NAMES = {
     "process-new-files": "process-new-csv-files",
     "ingest-live-history": "ingest-live-history",
     "retag-music": "retag-music",
+    "new-music": "new-music",
 }
 
 # At import, not per invocation. A Lambda container is reused across
@@ -109,6 +116,9 @@ def effective_settings() -> dict[str, Any]:
         "SPOTIFY_RADIO_PLAYLIST_ID": radio_playlist_id(),
         **{name: os.getenv(name) for name in SPOTIFY_CREDENTIAL_ENV},
         QUEUE_URL_VAR: os.getenv(QUEUE_URL_VAR, "").strip(),
+        NEW_MUSIC_MODE_VAR: flow_mode(NEW_MUSIC_MODE_VAR).value,
+        NEW_MUSIC_MAX_FILES_VAR: max_files_per_run(),
+        **{var: os.getenv(var, "").strip() for var in NEW_MUSIC_FOLDER_VARS.values()},
     }
 
 

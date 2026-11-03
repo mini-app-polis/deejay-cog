@@ -1,0 +1,178 @@
+"""Rollback from a run record: dry by default, trash never delete, and
+nothing touched that has changed since the run."""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+from music_fakes import FakeDrive, mp3
+from mutagen.id3 import TIT2, TPE1
+
+from deejay_cog import music_rollback as rb
+from deejay_cog import new_music
+from deejay_cog.music_safety import FlowMode, RunRecord, write_in_place
+
+IN, DEST, REVIEW, ORIG, STATE = "in", "dest", "review", "orig", "state"
+FOLDERS = new_music.IntakeFolders(IN, DEST, REVIEW, ORIG, STATE)
+
+
+def _intake_run(drive: FakeDrive, mode: FlowMode = FlowMode.WRITE) -> dict[str, str]:
+    """A new-music run of two files: one delivered, one sent to review."""
+    original = mp3(TIT2(encoding=3, text=["temple"]), TPE1(encoding=3, text=["tg"]))
+    delivered = drive.add("track01.mp3", IN, original)
+    reviewed = drive.add("odd.mp3", IN, original)
+    record = RunRecord("new-music", "r-1", mode, folders=FOLDERS.as_dict()).attach(
+        drive, STATE
+    )
+    intake = new_music.Intake(drive, FOLDERS, record, new_music.IntakeSummary(mode))
+    tagged = mp3(TIT2(encoding=3, text=["Temple"]), TPE1(encoding=3, text=["TG"]))
+    intake.deliver(delivered, "track01.mp3", original, tagged, identified_by="catalog")
+    intake.review(reviewed, "odd.mp3", original, "below confidence")
+    record.finish("complete")
+    copies = drive.in_folder(DEST)
+    return {
+        "delivered": delivered,
+        "reviewed": reviewed,
+        "copy": copies[0].id if copies else "",
+    }
+
+
+def test_a_dry_rollback_changes_nothing(drive: FakeDrive) -> None:
+    ids = _intake_run(drive)
+    before = len(drive.calls)
+
+    name, steps = rb.rollback(drive, STATE, "r-1", apply=False)
+
+    assert name == "new-music-r-1.json"
+    assert drive.calls[before:] == []
+    assert len([s for s in steps if s.action]) == 3
+    assert drive.items[ids["copy"]].trashed is False
+    assert drive.items[ids["delivered"]].parents == [ORIG]
+
+
+def test_rollback_trashes_the_copy_and_moves_the_originals_back(
+    drive: FakeDrive,
+) -> None:
+    ids = _intake_run(drive)
+
+    _, steps = rb.rollback(drive, STATE, "r-1", apply=True)
+
+    assert all(s.result == "done" for s in steps)
+    assert drive.items[ids["copy"]].trashed is True
+    assert ids["copy"] in drive.items  # trashed, not deleted
+    assert drive.items[ids["delivered"]].parents == [IN]
+    assert drive.items[ids["reviewed"]].parents == [IN]
+    assert not any(m.startswith("delete") for m, _ in drive.calls)
+    saved = [i for i in drive.in_folder(STATE) if i.name.startswith("music-rollback-")]
+    assert len(saved) == 1
+    assert len(json.loads(saved[0].data)["steps"]) == 3
+
+
+def test_rollback_leaves_alone_what_moved_or_changed_since(drive: FakeDrive) -> None:
+    ids = _intake_run(drive)
+    drive.items[ids["copy"]].parents = ["library"]  # the owner filed it
+    drive.items[ids["reviewed"]].parents = ["elsewhere"]
+
+    _, steps = rb.rollback(drive, STATE, "r-1", apply=True)
+
+    assert drive.items[ids["copy"]].trashed is False
+    assert drive.items[ids["reviewed"]].parents == ["elsewhere"]
+    assert drive.items[ids["delivered"]].parents == [IN]
+    assert sum(1 for s in steps if s.skipped) == 2
+
+
+def test_a_copy_edited_since_is_not_trashed(drive: FakeDrive) -> None:
+    ids = _intake_run(drive)
+    drive.items[ids["copy"]].data += b"edited"
+
+    rb.rollback(drive, STATE, "r-1", apply=True)
+
+    assert drive.items[ids["copy"]].trashed is False
+
+
+def test_a_second_rollback_finds_nothing_left_to_do(drive: FakeDrive) -> None:
+    _intake_run(drive)
+    rb.rollback(drive, STATE, "r-1", apply=True)
+
+    _, steps = rb.rollback(drive, STATE, "r-1", apply=False)
+
+    assert all(s.action is None for s in steps)
+
+
+def test_a_dry_run_record_is_refused(drive: FakeDrive) -> None:
+    _intake_run(drive, FlowMode.DRY_RUN)
+
+    with pytest.raises(rb.RollbackError, match="dry run"):
+        rb.rollback(drive, STATE, "r-1", apply=True)
+    assert not any(m in ("move_file", "trash_file") for m, _ in drive.calls)
+
+
+def test_an_unknown_run_is_refused(drive: FakeDrive) -> None:
+    with pytest.raises(rb.RollbackError, match="no run record"):
+        rb.rollback(drive, STATE, "nope", apply=True)
+
+
+def test_a_copy_the_record_missed_is_found_by_its_source(drive: FakeDrive) -> None:
+    ids = _intake_run(drive)
+    (item,) = [i for i in drive.in_folder(STATE) if i.name == "new-music-r-1.json"]
+    record = json.loads(item.data)
+    # As a run stopped after the upload and before recording it.
+    record["entries"][0].update({"copy": None, "move": None, "state": "pending"})
+    item.data = json.dumps(record).encode()
+
+    rb.rollback(drive, STATE, "r-1", apply=True)
+
+    assert drive.items[ids["copy"]].trashed is True
+    assert drive.items[ids["delivered"]].parents == [IN]
+
+
+def test_tags_written_in_place_are_undone_from_the_kept_revision(
+    drive: FakeDrive,
+) -> None:
+    original = mp3(TIT2(encoding=3, text=["song"]))
+    file_id = drive.add("Song_Artist.mp3", "library", original)
+    record = RunRecord("music-backfill", "r-2", FlowMode.WRITE).attach(drive, STATE)
+    write_in_place(
+        drive,
+        record,
+        file_id=file_id,
+        name="Song_Artist.mp3",
+        original=original,
+        tagged=mp3(TIT2(encoding=3, text=["Song"])),
+        identified_by="catalog",
+    )
+    record.finish("complete")
+
+    rb.rollback(drive, STATE, "r-2", apply=True)
+
+    assert drive.items[file_id].data == original
+    assert drive.items[file_id].parents == ["library"]
+    assert drive.items[file_id].name == "Song_Artist.mp3"
+
+
+def test_the_command_needs_the_state_folder(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    monkeypatch.delenv("MUSIC_TAGGING_STATE_FOLDER_ID", raising=False)
+    assert rb.main(["r-1"]) == 2
+    assert "not set" in capsys.readouterr().err
+
+
+def test_the_command_is_dry_unless_told_to_apply(
+    drive: FakeDrive, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    ids = _intake_run(drive)
+    monkeypatch.setenv("MUSIC_TAGGING_STATE_FOLDER_ID", STATE)
+    google = MagicMock()
+    google.from_env.return_value = SimpleNamespace(drive=drive)
+    monkeypatch.setattr(rb, "GoogleAPI", google)
+
+    assert rb.main(["r-1"]) == 0
+    assert "Nothing was changed" in capsys.readouterr().out
+    assert drive.items[ids["delivered"]].parents == [ORIG]
+
+    assert rb.main(["r-1", "--apply"]) == 0
+    assert drive.items[ids["delivered"]].parents == [IN]
