@@ -44,6 +44,7 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
 | `process-new-files` | **process-new-csv-files** | `process_new_files.py` | Sweeps the CSV drop zone: normalise, upload to Sheets, ingest to the API, archive, sync Spotify. |
 | `ingest-live-history` | **ingest-live-history** | `ingest_live_history.py` | Sends the plays in the **most recent** VirtualDJ `.m3u` to `POST /v1/live-plays`. Not the whole history. |
 | `retag-music` | **retag-music** | `retag_music_from_catalog.py` | Looks each audio file in the music upload folder up in the catalog and writes the catalog's tags over the same Drive file. |
+| `new-music` | **new-music** | `new_music.py` | Identifies each file in the new-music input folder, sends a tagged copy named `{title}_{artist}` to the destination folder and keeps the original in processed-originals. Off by default. |
 
 ### Local-only (never run by the worker)
 
@@ -138,6 +139,8 @@ file whose tags already match is not written again.
   `RunOutOfTime` and reports `Stopped early`; the redelivery carries on.
 - **Left untouched:** a file the catalog has no song for (`not_in_catalog`). It
   is counted and named in the report.
+- **Audio check:** a write whose audio would not stay byte-identical is not
+  made, and stops the run (`music_safety.check_audio_unchanged`).
 - **Fingerprinting:** a file with no usable title or artist is sent to the
   fingerprint function, one message per file on `DEEJAY_FINGERPRINT_QUEUE_URL`
   (see [CONFIGURATION.md](CONFIGURATION.md#the-fingerprint-function)). With no
@@ -147,6 +150,104 @@ file whose tags already match is not written again.
   `tagged`, `needing_fingerprinting`, `handed_to_fingerprinting` and `failed`,
   and the untouched files by name. A failed file is an issue, so the run is WARN. One failing file does
   not end the sweep.
+
+## new-music
+
+New music intake ([ADR-0007](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-03-owner-two-flows-and-the-safety-rules)).
+It does nothing unless `NEW_MUSIC_MODE` is `dry-run` or `write`, and nothing
+unless all five of its folders are set and different (see
+[CONFIGURATION.md](CONFIGURATION.md#music-tagging-safety-and-new-music)).
+
+Lists the audio files in `NEW_MUSIC_INPUT_FOLDER_ID`, at most
+`NEW_MUSIC_MAX_FILES_PER_RUN` (25; 0 for no cap) a run. Per file:
+
+1. **Not an MP3** → moved, unchanged, to needs-review (only ID3 tags are
+   written).
+2. **Its tags find a catalog entry** (the same lookup as retag-music) →
+   identified; the new tags are the catalog's.
+3. **Otherwise** (the catalog does not know it, or it has no usable title or
+   artist) → sent to the fingerprint function with `"flow": "new-music"` and
+   the run's mode, and left where it is. A file with a good title and artist
+   that the catalog does not know is fingerprinted too, to confirm it: its
+   own tags are not taken on trust. With no queue configured (a local run)
+   it is left in the input folder and named as `needs_fingerprinting`.
+
+The fingerprint function, for such a file: checks it is still in the input
+folder (otherwise leaves it alone), identifies it by AcoustID and
+MusicBrainz, and only when the score reaches `RETAG_MIN_CONFIDENCE` takes it
+in with the same steps, tagged from the catalog if the recording is there
+and from MusicBrainz's title, artist and year if not. Below the score, or
+with no title or artist from MusicBrainz, the file goes to needs-review. It
+uses the stricter of the message's mode and its own `NEW_MUSIC_MODE`, so
+switching the flow off also stops files already queued.
+
+**Taking an identified file in** (write mode):
+
+1. The new tags are built; a field the file has a value for is never
+   emptied, and the audio in the new bytes must be byte-identical to the
+   original's (ID3v2 at the start, ID3v1, APEv2 and an appended ID3v2 at
+   the end are stripped before comparing).
+2. If the destination already holds a file named `{title}_{artist}.<ext>`,
+   it is not overwritten: the original goes to needs-review and the run
+   reports a `name_collision`.
+3. The tagged bytes are uploaded as a **new** file under that name into
+   `NEW_MUSIC_DESTINATION_FOLDER_ID`, marked with the original's file id.
+4. The copy is downloaded again and its audio checked once more.
+5. The original, unchanged, is moved to `NEW_MUSIC_ORIGINALS_FOLDER_ID` —
+   only if it is still in the input folder and nowhere else.
+
+A copy left by a run that stopped between steps 3 and 5 is found by the
+original's id and checked, rather than uploaded twice. Nothing is ever
+deleted or overwritten; names are sanitized (no `/ \ : * ? " < > |` or
+control characters).
+
+**Audio check failure** stops the run at once: nothing is written for that
+file (after an upload, the bad copy goes to the Drive trash and the original
+stays in the input folder), the rest of the folder waits, and an ERROR
+finding names the file. The message is not retried.
+
+**Dry run** reads, identifies and computes everything and writes nothing to
+the music folders. The report names what would happen per file, and the
+would-be run record is saved in the state folder as
+`new-music-<run id>.dry-run.json`, with old and new tags, new names and
+destinations.
+
+**Report:** counts for `scanned`, `identified`, `sent_to_fingerprinting`,
+`needs_fingerprinting`, `needs_review`, `collisions`, `failed`,
+`no_longer_in_input` (and `not_written_dry_run` in a dry run), with the files
+by name. Off, the report says only that the flow is off; a missing setting
+is a WARN naming it.
+
+### Run records
+
+Every run of a music-writing flow that touches a file leaves a JSON record in
+`MUSIC_TAGGING_STATE_FOLDER_ID`, named `<flow>-<run id>.json`; the run id is
+the queue message id (a local run makes one up, `local-<time>-<hex>`). A
+writing run saves it before and after each step, so a run stopped by the
+deadline still leaves it. Per file it holds the file id, original name, old
+and new tags, the action (`deliver`, `review`, `in_place`, `fingerprint`), its
+state (`planned`, `pending`, `done`, `failed`, `restored`), the Drive revision
+kept (in-place writes), any copy made (id, folder, name) and any move (from,
+to).
+
+### Rolling a music run back
+
+```bash
+doppler run -- uv run python -m deejay_cog.music_rollback <run id>          # what it would do
+doppler run -- uv run python -m deejay_cog.music_rollback <run id> --apply  # do it
+```
+
+A dry run unless `--apply`. It reads the run's record and, last file first:
+moves a copy the run made to the Drive **trash** (never deletes it), only
+while it is still in that folder with the contents the run wrote; moves an
+original back to the folder it came from, only while it is still only where
+the run put it; and for tags written in place, writes back the revision the
+run kept, only while the file still holds what the run wrote. Anything moved
+or changed since is left alone and listed. With `--apply` it saves what it
+did as `music-rollback-<run id>-<time>.json` beside the record. A dry run's
+record is refused (it wrote nothing). An original moved back into the input
+folder is taken in again by the next new-music run: set `NEW_MUSIC_MODE` to
+`off` first if that is not wanted.
 
 ---
 

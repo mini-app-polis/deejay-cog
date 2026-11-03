@@ -62,6 +62,37 @@ run report names those files instead.
 
 ---
 
+## Music tagging safety and new-music
+
+Every flow that writes to the music folders reads a mode of its own, at the
+start of each run (so a change in Doppler applies to the next run):
+`off` (the default; unset or any unknown value is `off`, and an unknown one
+is logged), `dry-run` (read, identify and report, write nothing but the
+would-be run record) or `write`.
+
+The **new-music** worker mode reads:
+
+- `NEW_MUSIC_MODE` — `off` | `dry-run` | `write`; default `off`.
+- `NEW_MUSIC_INPUT_FOLDER_ID` — where new music is dropped.
+- `NEW_MUSIC_DESTINATION_FOLDER_ID` — where tagged, renamed copies go.
+- `NEW_MUSIC_REVIEW_FOLDER_ID` — where files not identified with
+  confidence (and name collisions) go, unchanged.
+- `NEW_MUSIC_ORIGINALS_FOLDER_ID` — processed-originals: each identified
+  file's original, unchanged.
+- `MUSIC_TAGGING_STATE_FOLDER_ID` — where every music-writing flow saves
+  its run records, and where `music_rollback` reads them.
+- `NEW_MUSIC_MAX_FILES_PER_RUN` — files handled per run (default 25; 0 for
+  no cap).
+
+None of the folders has a default. With any of them unset, or two of them
+the same folder, the run does nothing and its report (WARN) names the
+problem. The fingerprint function reads the same settings for the
+new-music files it is sent, so they must reach both functions. watcher-cog
+triggers the mode when files land in the input folder; it can also be run
+on demand through `POST /v1/deejay/runs` once the API accepts `new-music`.
+
+---
+
 ## The fingerprint function
 
 `deejay_cog.fingerprint.lambda_handler` is a second Lambda function, behind
@@ -74,6 +105,8 @@ project like the worker, and:
   the file is written (default 0.90). Below it the file is not changed and
   is named in the run report.
 - `DEEJAY_COG_API_KEY` and `GOOGLE_CREDENTIALS_JSON`, as the worker.
+- For files the new-music mode sends: the new-music settings above. It
+  works in the stricter of the sender's mode and its own `NEW_MUSIC_MODE`.
 
 `fpcalc` comes from the function's Lambda layer, found on `PATH` or at
 `/opt/bin/fpcalc`; with neither, every file fails. AcoustID allows three

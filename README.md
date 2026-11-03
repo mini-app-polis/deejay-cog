@@ -8,7 +8,7 @@ Processes DJ set CSV files from Google Drive into Google Sheets (organized by ye
 
 This repository is the backend cog for a Drive-based DJ set pipeline. It reads CSV files (and optionally other files) from a configured Google Drive source folder, normalizes and uploads them as Google Sheets into year-based folders, and can maintain collection and summary artifacts for cross-checks during the PostgreSQL migration.
 
-**Production** runs on AWS Lambda behind its own FIFO SQS queue — see [ADR-0006](docs/decisions/ADR-0006-lambda-behind-sqs.md). The queue, function and alarm are declared in [`mini-app-polis/infra`](https://github.com/mini-app-polis/infra). **watcher-cog** detects Drive changes and POSTs `/v1/deejay/runs` with a `mode` (`process-new-files` or `ingest-live-history`); api-kaianolevine-com enqueues one message, and `deejay_cog.worker.lambda_handler` runs the matching flow. Nothing runs between triggers.
+**Production** runs on AWS Lambda behind its own FIFO SQS queue — see [ADR-0006](docs/decisions/ADR-0006-lambda-behind-sqs.md). The queue, function and alarm are declared in [`mini-app-polis/infra`](https://github.com/mini-app-polis/infra). **watcher-cog** detects Drive changes and POSTs `/v1/deejay/runs` with a `mode` (one of the production modes below); api-kaianolevine-com enqueues one message, and `deejay_cog.worker.lambda_handler` runs the matching flow. Nothing runs between triggers.
 
 ---
 
@@ -21,8 +21,9 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 | `process-new-files` | **process-new-csv-files** | `process_new_files.py` | New CSVs → Sheets → archive → API ingest; optional Spotify sync. |
 | `ingest-live-history` | **ingest-live-history** | `ingest_live_history.py` | Most recent VirtualDJ `.m3u` from Drive → `POST /v1/live-plays` (not every history file). |
 | `retag-music` | **retag-music** | `retag_music_from_catalog.py` | Tags the music upload folder's files from the catalog; a file with no usable title or artist goes to the fingerprint function. |
+| `new-music` | **new-music** | `new_music.py` | New music intake: identifies each file in the new-music input folder (catalog, else the fingerprint function), sends a tagged copy named `{title}_{artist}` to the destination folder and keeps the original in processed-originals; anything not identified with confidence goes to needs-review. Off unless `NEW_MUSIC_MODE` is `dry-run` or `write`. |
 
-The **fingerprint function** (`fingerprint.py`) is a second Lambda behind its own queue: it identifies one such file by its sound (AcoustID, MusicBrainz) and tags it — see [ADR-0007](docs/decisions/ADR-0007-music-tagging-redesign.md).
+The **fingerprint function** (`fingerprint.py`) is a second Lambda behind its own queue: it identifies one such file by its sound (AcoustID, MusicBrainz) and tags it, or for a new-music file takes it in with the new-music steps — see [ADR-0007](docs/decisions/ADR-0007-music-tagging-redesign.md). Every flow that writes music goes through `music_safety.py` (modes, the audio check, run records), and `music_rollback.py` undoes a run from its record.
 
 ### Local-only (not served; PostgreSQL cutover helpers)
 
@@ -60,6 +61,9 @@ The **fingerprint function** (`fingerprint.py`) is a second Lambda behind its ow
 | **generate_summaries.py** | Local-only summary generation. |
 | **retag_music_from_catalog.py** | Production music tagging from the catalog (the `retag-music` mode). |
 | **fingerprint.py** | The fingerprint function: identifies untagged music files by their sound. |
+| **new_music.py** | Production new-music intake (the `new-music` mode). |
+| **music_safety.py** | The safety layer every music-writing flow uses: modes, the audio check, run records. |
+| **music_rollback.py** | Local CLI: undo a music-tagging run from its run record (dry run unless `--apply`). |
 | **deduplicate_summary.py** | CLI / helper to deduplicate summary spreadsheets. |
 | **spotify_sync.py** | Spotify helpers used from `process_new_files.py`. |
 
@@ -115,6 +119,14 @@ it would archive the real drop zone's CSVs into the development API.
 ```bash
 doppler run -- uv run python -m deejay_cog.generate_summaries
 doppler run -- uv run python -m deejay_cog.update_deejay_set_collection
+```
+
+**music_rollback** (a run id as argument; prints what it would undo, and
+does it only with `--apply` — see [PIPELINE.md](docs/PIPELINE.md#rolling-a-music-run-back)):
+
+```bash
+doppler run -- uv run python -m deejay_cog.music_rollback <run_id>
+doppler run -- uv run python -m deejay_cog.music_rollback <run_id> --apply
 ```
 
 **deduplicate_summary** (spreadsheet IDs as arguments):
