@@ -57,6 +57,11 @@ import deejay_cog.config as config
 from deejay_cog._pipeline_eval import post_run_finding
 from deejay_cog.fingerprint_jobs import QUEUE_URL_VAR
 from deejay_cog.ingest_live_history import ingest_live_history
+from deejay_cog.library_backfill import CHUNK_SIZE_VAR as BACKFILL_CHUNK_SIZE_VAR
+from deejay_cog.library_backfill import MODE_VAR as BACKFILL_MODE_VAR
+from deejay_cog.library_backfill import ROOT_FOLDER_VAR as BACKFILL_ROOT_FOLDER_VAR
+from deejay_cog.library_backfill import SKIP_IDS_VAR as BACKFILL_SKIP_IDS_VAR
+from deejay_cog.library_backfill import chunk_size_setting, library_backfill
 from deejay_cog.music_safety import flow_mode
 from deejay_cog.new_music import FOLDER_VARS as NEW_MUSIC_FOLDER_VARS
 from deejay_cog.new_music import MAX_FILES_VAR as NEW_MUSIC_MAX_FILES_VAR
@@ -88,6 +93,7 @@ MODES: dict[str, Callable[..., Any]] = {
     "ingest-live-history": ingest_live_history,
     "retag-music": retag_music,
     "new-music": new_music,
+    "library-backfill": library_backfill,
 }
 
 #: The flow name a failure is reported under, per mode — the same names the
@@ -98,6 +104,7 @@ FLOW_NAMES = {
     "ingest-live-history": "ingest-live-history",
     "retag-music": "retag-music",
     "new-music": "new-music",
+    "library-backfill": "library-backfill",
 }
 
 # At import, not per invocation. A Lambda container is reused across
@@ -119,6 +126,10 @@ def effective_settings() -> dict[str, Any]:
         NEW_MUSIC_MODE_VAR: flow_mode(NEW_MUSIC_MODE_VAR).value,
         NEW_MUSIC_MAX_FILES_VAR: max_files_per_run(),
         **{var: os.getenv(var, "").strip() for var in NEW_MUSIC_FOLDER_VARS.values()},
+        BACKFILL_MODE_VAR: flow_mode(BACKFILL_MODE_VAR).value,
+        BACKFILL_ROOT_FOLDER_VAR: os.getenv(BACKFILL_ROOT_FOLDER_VAR, "").strip(),
+        BACKFILL_CHUNK_SIZE_VAR: chunk_size_setting(),
+        BACKFILL_SKIP_IDS_VAR: os.getenv(BACKFILL_SKIP_IDS_VAR, "").strip(),
     }
 
 

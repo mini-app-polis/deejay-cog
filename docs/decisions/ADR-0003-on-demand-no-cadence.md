@@ -4,7 +4,7 @@ Date: 2026-04-23
 
 ## Status
 
-Accepted, amended.
+Accepted, amended (Oct 2026; 2026-11-03).
 
 > **Amended (Oct 2026).** The two observability channels named in Decision
 > are gone with Prefect ([ADR-0006](./ADR-0006-lambda-behind-sqs.md)). A run
@@ -14,6 +14,27 @@ Accepted, amended.
 > consumes the queue. `evaluator.yaml` no longer carries the CD-010
 > exemption quoted below. The conclusion — no Healthchecks.io ping for an
 > on-demand cog — stands.
+
+> **Amended 2026-11-03 (owner): one scheduled flow, the library backfill.**
+> The `library-backfill` mode
+> ([ADR-0007, amended 2026-11-03](./ADR-0007-music-tagging-redesign.md#amended-2026-11-03-owner-two-flows-and-the-safety-rules))
+> is meant to run nightly, the one flow here with a cadence. Why: it
+> retags the thousands of files already in the music library in small
+> chunks (10 files, raised to 200 once the owner trusts the reports), each
+> resuming from a position stored in Drive, so it needs to be sent again
+> and again until the library is done, and nothing in the owner's DJ
+> workflow happens often or regularly enough to trigger it. Every other
+> flow stays on demand, as decided below.
+>
+> What does not change: the nightly message comes in through the same
+> queue and worker as every other run, and each run sends its own report;
+> the trigger itself (what sends the job each night) is wired outside this
+> repo. A nightly run that finds
+> the library done, or the mode `off`, reports so and does nothing, so the
+> cadence is not a liveness signal either: the backfill ends, and
+> `LIBRARY_BACKFILL_MODE` may be `off` for long stretches. The conclusion
+> — no Healthchecks.io ping — stands; a missed night is seen as the
+> backfill's `remaining` count not falling in its reports.
 
 ## Context
 

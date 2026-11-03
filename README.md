@@ -8,7 +8,7 @@ Processes DJ set CSV files from Google Drive into Google Sheets (organized by ye
 
 This repository is the backend cog for a Drive-based DJ set pipeline. It reads CSV files (and optionally other files) from a configured Google Drive source folder, normalizes and uploads them as Google Sheets into year-based folders, and can maintain collection and summary artifacts for cross-checks during the PostgreSQL migration.
 
-**Production** runs on AWS Lambda behind its own FIFO SQS queue — see [ADR-0006](docs/decisions/ADR-0006-lambda-behind-sqs.md). The queue, function and alarm are declared in [`mini-app-polis/infra`](https://github.com/mini-app-polis/infra). **watcher-cog** detects Drive changes and POSTs `/v1/deejay/runs` with a `mode` (one of the production modes below); api-kaianolevine-com enqueues one message, and `deejay_cog.worker.lambda_handler` runs the matching flow. Nothing runs between triggers.
+**Production** runs on AWS Lambda behind its own FIFO SQS queue — see [ADR-0006](docs/decisions/ADR-0006-lambda-behind-sqs.md). The queue, function and alarm are declared in [`mini-app-polis/infra`](https://github.com/mini-app-polis/infra). **watcher-cog** detects Drive changes and POSTs `/v1/deejay/runs` with a `mode` (one of the production modes below); api-kaianolevine-com enqueues one message, and `deejay_cog.worker.lambda_handler` runs the matching flow. Nothing runs between triggers, except the library backfill, which is meant to be sent nightly ([ADR-0003](docs/decisions/ADR-0003-on-demand-no-cadence.md), amended).
 
 ---
 
@@ -22,6 +22,7 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 | `ingest-live-history` | **ingest-live-history** | `ingest_live_history.py` | Most recent VirtualDJ `.m3u` from Drive → `POST /v1/live-plays` (not every history file). |
 | `retag-music` | **retag-music** | `retag_music_from_catalog.py` | Tags the music upload folder's files from the catalog; a file with no usable title or artist goes to the fingerprint function. |
 | `new-music` | **new-music** | `new_music.py` | New music intake: identifies each file in the new-music input folder (catalog, else the fingerprint function), sends a tagged copy named `{title}_{artist}` to the destination folder and keeps the original in processed-originals; anything not identified with confidence goes to needs-review. Off unless `NEW_MUSIC_MODE` is `dry-run` or `write`. |
+| `library-backfill` | **library-backfill** | `library_backfill.py` | Library backfill: retags the files already in the music library (`LIBRARY_ROOT_FOLDER_ID`) from the catalog, in place, never renaming, moving or deleting one; the next `LIBRARY_BACKFILL_CHUNK_SIZE` files each run, from a manifest and cursor kept in `MUSIC_TAGGING_STATE_FOLDER_ID`. Meant to run nightly (the trigger is wired outside this repo). Off unless `LIBRARY_BACKFILL_MODE` is `dry-run` or `write`. |
 
 The **fingerprint function** (`fingerprint.py`) is a second Lambda behind its own queue: it identifies one such file by its sound (AcoustID, MusicBrainz) and tags it, or for a new-music file takes it in with the new-music steps — see [ADR-0007](docs/decisions/ADR-0007-music-tagging-redesign.md). Every flow that writes music goes through `music_safety.py` (modes, the audio check, run records), and `music_rollback.py` undoes a run from its record.
 
@@ -62,6 +63,7 @@ The **fingerprint function** (`fingerprint.py`) is a second Lambda behind its ow
 | **retag_music_from_catalog.py** | Production music tagging from the catalog (the `retag-music` mode). |
 | **fingerprint.py** | The fingerprint function: identifies untagged music files by their sound. |
 | **new_music.py** | Production new-music intake (the `new-music` mode). |
+| **library_backfill.py** | Production library backfill (the `library-backfill` mode). |
 | **music_safety.py** | The safety layer every music-writing flow uses: modes, the audio check, run records. |
 | **music_rollback.py** | Local CLI: undo a music-tagging run from its run record (dry run unless `--apply`). |
 | **deduplicate_summary.py** | CLI / helper to deduplicate summary spreadsheets. |

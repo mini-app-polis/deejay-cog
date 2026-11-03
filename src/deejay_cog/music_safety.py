@@ -274,22 +274,26 @@ class RecordEntry:
 
     ``action`` is ``deliver`` (a tagged copy into the destination, the
     original to processed-originals), ``review`` (the original to
-    needs-review, unchanged) or ``in_place`` (tags written over the same
-    file). ``state`` is ``planned`` in a dry run, ``pending`` while the
-    steps are under way and ``done`` once all are; a step's field is filled
-    in as soon as that step has happened.
+    needs-review, unchanged), ``in_place`` (tags written over the same
+    file) or ``skip`` (looked at and left as it is; ``reason`` says why).
+    ``folder`` is the folder the file was in, where known. ``state`` is
+    ``planned`` in a dry run, ``pending`` while the steps are under way and
+    ``done`` once all are; a step's field is filled in as soon as that step
+    has happened.
     """
 
     file_id: str
     original_name: str
     action: str
     state: str = "pending"
+    folder: str = ""
     reason: str = ""
     identified_by: str = ""
     old_tags: dict[str, str] = field(default_factory=dict)
     new_tags: dict[str, str] = field(default_factory=dict)
     new_name: str = ""
     revision_kept: str | None = None
+    original_md5: str | None = None
     written_md5: str | None = None
     copy: dict[str, str] | None = None
     move: dict[str, str] | None = None
@@ -397,6 +401,7 @@ def write_in_place(
     original: bytes,
     tagged: bytes,
     identified_by: str,
+    folder: str = "",
 ) -> RecordEntry:
     """Write ``tagged`` over the same Drive file, safely: for the library,
     where a file is never renamed, moved or deleted.
@@ -414,10 +419,12 @@ def write_in_place(
             file_id=file_id,
             original_name=name,
             action="in_place",
+            folder=folder,
             identified_by=identified_by,
             old_tags=tag_snapshot(original),
             new_tags=tag_snapshot(tagged),
             new_name=name,
+            original_md5=md5(original),
         )
     )
     if not record.mode.writes:

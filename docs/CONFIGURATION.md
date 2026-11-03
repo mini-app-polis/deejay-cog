@@ -93,6 +93,31 @@ on demand through `POST /v1/deejay/runs` once the API accepts `new-music`.
 
 ---
 
+## Library backfill
+
+The **library-backfill** worker mode reads:
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `LIBRARY_BACKFILL_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. |
+| `LIBRARY_ROOT_FOLDER_ID` | none | The music library's root folder, listed recursively. |
+| `MUSIC_TAGGING_STATE_FOLDER_ID` | none | Holds the manifest, the cursor and the run records (shared with new-music). |
+| `LIBRARY_BACKFILL_CHUNK_SIZE` | `10` | Files per run; a whole number of at least 1. |
+| `LIBRARY_BACKFILL_SKIP_FILE_IDS` | empty | Comma-separated Drive file ids to pass over, named in the report: how a file whose audio check fails is passed. |
+
+With either folder unset, the two the same folder, or a chunk size that is
+not a whole number of at least 1, the run does nothing and its report
+(WARN) names the problem. The settings are read at the start of each run,
+so a change in Doppler applies to the next night. The nightly trigger is
+not configured here: what sends the `library-backfill` job each night is
+wired outside this repo.
+
+To start the backfill over, move `library-backfill-manifest.json` in the
+state folder to the Drive trash; see
+[PIPELINE.md](PIPELINE.md#library-backfill).
+
+---
+
 ## The fingerprint function
 
 `deejay_cog.fingerprint.lambda_handler` is a second Lambda function, behind
