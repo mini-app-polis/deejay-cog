@@ -1,3 +1,10 @@
+# [2.13.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.12.0...v2.13.0) (2026-11-03)
+
+
+### Features
+
+* add the library-backfill mode, retagging the library in place in resumable nightly chunks ([b64162a](https://github.com/mini-app-polis/deejay-cog/commit/b64162a184a552acb3f110b1e6c01c73fbf97d3a))
+
 # [2.12.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.11.5...v2.12.0) (2026-11-03)
 
 
