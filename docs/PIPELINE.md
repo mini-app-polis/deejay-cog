@@ -28,7 +28,12 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
   the queue's only producer.
 - **The Lambda** runs one flow per message, under the message id as its run
   id, so a run can be traced from watcher's log to its report.
-- Nothing runs between triggers. The queue, function, dead-letter queue and
+- **library-backfill** is the one mode meant to run on a schedule: nightly
+  ([ADR-0003](decisions/ADR-0003-on-demand-no-cadence.md), amended
+  2026-11-03). What sends its message each night is wired outside this
+  repo; it can also be run on demand through `POST /v1/deejay/runs` once
+  the API accepts the mode.
+- Nothing else runs between triggers. The queue, function, dead-letter queue and
   alarms are declared in `mini-app-polis/infra`: a FIFO queue
   with reserved concurrency 1, so two sweeps never race over one folder; a
   300 s timeout; three receives before a message is dead-lettered.
@@ -45,6 +50,7 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
 | `ingest-live-history` | **ingest-live-history** | `ingest_live_history.py` | Sends the plays in the **most recent** VirtualDJ `.m3u` to `POST /v1/live-plays`. Not the whole history. |
 | `retag-music` | **retag-music** | `retag_music_from_catalog.py` | Looks each audio file in the music upload folder up in the catalog and writes the catalog's tags over the same Drive file. |
 | `new-music` | **new-music** | `new_music.py` | Identifies each file in the new-music input folder, sends a tagged copy named `{title}_{artist}` to the destination folder and keeps the original in processed-originals. Off by default. |
+| `library-backfill` | **library-backfill** | `library_backfill.py` | Retags the music library from the catalog, in place, the next chunk of files each night from a stored position. Never renames, moves or deletes a library file. Off by default. |
 
 ### Local-only (never run by the worker)
 
@@ -218,17 +224,112 @@ destinations.
 by name. Off, the report says only that the flow is off; a missing setting
 is a WARN naming it.
 
+## library-backfill
+
+Retags the files already in the music library from the catalog, in place
+([ADR-0007](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-03-owner-two-flows-and-the-safety-rules)).
+A library file is **never renamed, moved or deleted**: VirtualDJ finds it by
+its path. It does nothing unless `LIBRARY_BACKFILL_MODE` is `dry-run` or
+`write`, and nothing unless `LIBRARY_ROOT_FOLDER_ID` and
+`MUSIC_TAGGING_STATE_FOLDER_ID` are set and different (see
+[CONFIGURATION.md](CONFIGURATION.md#library-backfill)).
+
+**Where it has got to** lives in two JSON files in the state folder, so it
+survives redeploys:
+
+- `library-backfill-manifest.json` — the library listed once, recursively
+  from `LIBRARY_ROOT_FOLDER_ID`, metadata only (nothing is downloaded):
+  each file's id, name and folder, breadth first, by name within a folder.
+  Shortcuts are not followed, and the state folder is left out if it sits
+  inside the library. The listing is resumable: the folders still to list
+  are kept in the file, saved every 25 folders and when the deadline stops
+  the run, and the next run carries on from there. No file is processed
+  until the listing is complete. A dry run builds it too (only the state
+  folder is written).
+- `library-backfill-cursor.json` — the index of the next file in the
+  manifest, tied to the manifest's `generation`; the chunk the current run
+  is working through; running counts per outcome; and the files that
+  failed. Saved only by a `write` run, after each file, and only once that
+  file's outcome is saved in the run record.
+
+**Each run** takes the next `LIBRARY_BACKFILL_CHUNK_SIZE` files (10 by
+default) after the cursor. The whole library is never rescanned. When the
+cursor reaches the end, every later run reports `library_done` and does
+nothing. **To start over** (files added to the library since, or another
+root), move `library-backfill-manifest.json` to the Drive trash: the next
+run lists the library again and starts from its first file; files whose
+tags already match are read but not written. A manifest of another root
+than `LIBRARY_ROOT_FOLDER_ID`, or two files of one of these names, stops
+the run with a WARN until resolved.
+
+**Per file:**
+
+1. Its id is in `LIBRARY_BACKFILL_SKIP_FILE_IDS` → passed over, named
+   (`skipped_by_setting`).
+2. Not an MP3 by its listed type or name → passed over, not downloaded,
+   named (`not_mp3`).
+3. In the trash, or no longer in the folder the manifest lists it in →
+   passed over, named (`moved_since`).
+4. No usable title or artist → left as it is, named
+   (`needs_fingerprinting`). Library files are **not** sent to the
+   fingerprint function.
+5. Not in the catalog (the same lookup as new-music) → left as it is,
+   named (`not_in_catalog`).
+6. In the catalog and already carrying its tags → not written
+   (`already_tagged`).
+7. Otherwise written in place (`music_safety.write_in_place`): no tag
+   emptied; the audio of the new bytes byte-identical to the original's;
+   the head revision kept forever; the new contents written over the same
+   file id; the file downloaded again and its audio checked once more.
+   Name, folder and id do not change.
+
+**Audio check failure** stops the run with an ERROR finding. Before the
+write nothing is uploaded; after it, the original bytes are put back. The
+cursor stays **on** that file, so the next run starts with it and, if it
+fails again, stops again: the backfill does not get past a file it cannot
+safely write until the owner has looked. To pass it, add its id to
+`LIBRARY_BACKFILL_SKIP_FILE_IDS`. Any other failure on one file (an API
+error, a tag that would be emptied) is recorded, named as `failed`, kept
+in the cursor's `failed` list, and the run carries on.
+
+**Deadline:** checked between files (and between folders while listing).
+Past it the run saves the record, the cursor and the manifest and stops
+with `RunOutOfTime`; the redelivery of the same message finishes **that
+run's chunk** rather than start a new one, and carries on the same run
+record. A write cut off between the upload and its check is checked before
+the run stops. With the function's 300 s timeout and three receives before
+the dead-letter queue, a chunk has to fit in about three invocations;
+raise `LIBRARY_BACKFILL_CHUNK_SIZE` with that in mind.
+
+**Dry run** writes nothing to any music file and **does not move the
+cursor**, so it can be run, reviewed, and the same chunk then written by
+switching to `write`. Its would-be record,
+`library-backfill-<run id>.dry-run.json`, lists each file's old and new
+tags, and the report names each would-be change (`would_write`).
+
+**Report:** counts for `listed`, `scanned`, `matched`, `written`,
+`would_write`, `already_tagged`, `not_in_catalog`, `needs_fingerprinting`,
+`not_mp3`, `moved_since`, `skipped_by_setting`, `failed`, `remaining` and
+`done`, with the files by name (path under the root). Off, the report says
+only that the flow is off; a missing setting is a WARN naming it.
+
+**Undo:** `python -m deejay_cog.music_rollback <run id>` (below) writes
+back the revision each written file had before the run. It does not move
+the cursor; to retag those files again, start over as above.
+
 ### Run records
 
 Every run of a music-writing flow that touches a file leaves a JSON record in
 `MUSIC_TAGGING_STATE_FOLDER_ID`, named `<flow>-<run id>.json`; the run id is
 the queue message id (a local run makes one up, `local-<time>-<hex>`). A
 writing run saves it before and after each step, so a run stopped by the
-deadline still leaves it. Per file it holds the file id, original name, old
-and new tags, the action (`deliver`, `review`, `in_place`, `fingerprint`), its
-state (`planned`, `pending`, `done`, `failed`, `restored`), the Drive revision
-kept (in-place writes), any copy made (id, folder, name) and any move (from,
-to).
+deadline still leaves it (a redelivery of the same run carries on the same
+record). Per file it holds the file id, original name, folder, old and new
+tags, the action (`deliver`, `review`, `in_place`, `fingerprint`, `skip`),
+its state (`planned`, `pending`, `done`, `skipped`, `failed`, `restored`),
+the reason for a skip or failure, the Drive revision kept and the MD5 of the
+original and written contents (in-place writes), any copy made (id, folder,
+name) and any move (from, to).
 
 ### Rolling a music run back
 

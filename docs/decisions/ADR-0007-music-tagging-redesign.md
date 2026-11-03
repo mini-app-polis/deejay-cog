@@ -227,16 +227,30 @@ review before it acts and to undo after.
   moved unchanged to a needs-review folder. **This is the only flow that may
   rename**: these files are not in the library yet, so no VirtualDJ path
   refers to them.
-- **Library backfill** (to be built). Files already in the library are
-  **never renamed, moved or deleted** — decision 1's reasoning stands:
-  renaming or moving a library file breaks the path VirtualDJ finds it by,
-  and with it its cue points, history and playlists. They are only
-  retagged from the catalog, in place, in nightly chunks with a stored
-  position so each night resumes where the last stopped; the chunk starts
-  at 10 files and is raised to 200 by the owner once the results are
-  trusted. A nightly schedule is a change to
-  [ADR-0003](./ADR-0003-on-demand-no-cadence.md)'s on-demand stance; it will
-  be recorded there when the backfill is built.
+- **Library backfill** (the `library-backfill` worker mode). Files already
+  in the library are **never renamed, moved or deleted** — decision 1's
+  reasoning stands: renaming or moving a library file breaks the path
+  VirtualDJ finds it by, and with it its cue points, history and
+  playlists. They are only retagged from the catalog, in place, in nightly
+  chunks with a stored position so each night resumes where the last
+  stopped; the chunk starts at 10 files and is raised to 200 by the owner
+  once the results are trusted. A nightly schedule is a change to
+  [ADR-0003](./ADR-0003-on-demand-no-cadence.md)'s on-demand stance,
+  recorded there. As built:
+  - The position is a manifest of the library, listed once (metadata
+    only, resumable across runs) and kept in
+    `MUSIC_TAGGING_STATE_FOLDER_ID`, and a cursor into it; the library is
+    never rescanned to find the next chunk. Trashing the manifest is how
+    the backfill is started over.
+  - Only stage 1 applies: a library file with no usable title or artist
+    is named in the report as needing fingerprinting and **not** sent to
+    the fingerprint function, whose stage would write MusicBrainz's tags;
+    a file the catalog does not know is left as it is (decision 2).
+  - A dry run does not move the cursor, so the chunk it showed is the one
+    the next write run writes.
+  - An audio mismatch leaves the cursor on that file, so the next run
+    stops on it again rather than pass it; the owner passes it
+    deliberately by listing its id in `LIBRARY_BACKFILL_SKIP_FILE_IDS`.
 
 **Safety rules, for every flow that writes music** (`music_safety.py`):
 
@@ -246,7 +260,7 @@ review before it acts and to undo after.
   off. A dry run reads, identifies and computes everything, writes nothing
   to the music folders, and reports per file what it would do (old and new
   tags, new name, destination). New-music reads `NEW_MUSIC_MODE`; the
-  backfill will have its own. The fingerprint function uses the stricter of
+  backfill reads `LIBRARY_BACKFILL_MODE`. The fingerprint function uses the stricter of
   the sender's mode and its own.
 - **The audio is never altered.** Before new tag bytes are uploaded, their
   audio — the bytes left once any ID3v2 tag (with its footer) at the start
