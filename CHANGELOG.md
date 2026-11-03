@@ -1,3 +1,15 @@
+# [2.12.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.11.5...v2.12.0) (2026-11-03)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 7.10.0 ([21f0433](https://github.com/mini-app-polis/deejay-cog/commit/21f043345a6212a7411848d57b550247e57a3332))
+
+
+### Features
+
+* add the new-music intake mode, the shared music safety layer and run rollback ([ddd8507](https://github.com/mini-app-polis/deejay-cog/commit/ddd8507beaf28881d08d419943d22237cd14d330))
+
 ## [2.11.5](https://github.com/mini-app-polis/deejay-cog/compare/v2.11.4...v2.11.5) (2026-11-03)
 
 
