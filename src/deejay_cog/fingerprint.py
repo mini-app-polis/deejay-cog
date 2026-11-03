@@ -501,7 +501,7 @@ def intake_fingerprinted(
     match, take it in with the new-music steps; otherwise send it, unchanged,
     to needs-review.
 
-    A file no longer in the input folder (already taken in, or moved by
+    A file that is not in the input folder (already taken in, or moved by
     hand) is left alone.
     """
     summary = intake.summary

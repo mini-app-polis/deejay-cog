@@ -34,3 +34,11 @@ exemptions:
       in `deploy`, which calls the shared lambda-deploy.yml once, for one
       function, and takes no extra steps. It isn't `test`: it runs after
       the release, on main only, against AWS.
+  - rule: CD-003
+    reason: >
+      music_rollback.py is an operator's command-line tool, run by hand as
+      `python -m deejay_cog.music_rollback <run-id>`. Its output is the
+      rollback plan and its result, written for the person at the
+      terminal, so it prints rather than logs. Nothing in the deployed
+      functions imports it.
+    paths: [src/deejay_cog/music_rollback.py]

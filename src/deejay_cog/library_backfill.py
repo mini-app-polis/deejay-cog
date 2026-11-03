@@ -151,6 +151,8 @@ def _now() -> str:
 
 @dataclass(frozen=True)
 class BackfillSettings:
+    """The backfill's settings, read from the environment at the start of a run."""
+
     root: str
     state: str
     chunk_size: int
@@ -223,6 +225,7 @@ class StateFile:
     file_id: str | None = None
 
     def load(self) -> dict[str, Any] | None:
+        """Read the state file, or None when the state folder has none."""
         files = self.drive.list_files(
             parent_id=self.folder, name_contains=self.name, include_folders=False
         )
@@ -245,6 +248,7 @@ class StateFile:
         return data
 
     def save(self, data: dict[str, Any]) -> None:
+        """Write ``data`` to the state file, creating it on the first save."""
         content = json.dumps(data, indent=1).encode()
         if self.file_id is None:
             self.file_id = self.drive.upload_bytes(
@@ -350,6 +354,7 @@ def build_manifest(
 
 
 def new_cursor(generation: str, total: int) -> dict[str, Any]:
+    """A cursor at the first file of the manifest named by ``generation``."""
     return {
         "flow": FLOW_NAME,
         "version": 1,
@@ -391,14 +396,17 @@ class BackfillSummary:
     aborted: str = ""
 
     def add(self, outcome: str, item: str) -> None:
+        """Count ``item`` under ``outcome``."""
         self.outcomes[outcome].append(item)
 
     @property
     def remaining(self) -> int:
+        """Files in the manifest after this run's position."""
         return max(self.total - self.position, 0)
 
     @property
     def matched(self) -> int:
+        """Files the catalog had tags for: written, would write, or already tagged."""
         return sum(
             len(self.outcomes[o]) for o in ("written", "would_write", "already_tagged")
         )
@@ -433,9 +441,11 @@ class Backfill:
 
     @property
     def mode(self) -> FlowMode:
+        """The mode this run was started in."""
         return self.record.mode
 
     def label(self, item: dict[str, Any], name: str | None = None) -> str:
+        """The file's path under the library root, for reports."""
         path = self.manifest["folders"].get(item["folder_id"], "")
         name = name or str(item["name"])
         return f"{path}/{name}" if path else name

@@ -63,6 +63,7 @@ class FlowMode(enum.Enum):
 
     @property
     def writes(self) -> bool:
+        """Whether this mode writes music."""
         return self is FlowMode.WRITE
 
 
@@ -325,15 +326,18 @@ class RunRecord:
 
     @property
     def file_name(self) -> str:
+        """The record's file name in the state folder; a dry run's is marked."""
         suffix = ".dry-run.json" if self.mode is FlowMode.DRY_RUN else ".json"
         return f"{self.flow}-{self.run_id}{suffix}"
 
     def attach(self, drive: Any, state_folder: str) -> RunRecord:
+        """Give the record the Drive client and state folder it saves to."""
         self._drive = drive
         self._state_folder = state_folder
         return self
 
     def to_json(self) -> dict[str, Any]:
+        """The record as the JSON object saved to the state folder."""
         return {
             "flow": self.flow,
             "run_id": self.run_id,
@@ -348,6 +352,7 @@ class RunRecord:
         }
 
     def add(self, entry: RecordEntry) -> RecordEntry:
+        """Append ``entry`` to the record and return it."""
         self.entries.append(entry)
         return entry
 
