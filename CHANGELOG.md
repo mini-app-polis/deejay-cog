@@ -1,3 +1,12 @@
+## [2.13.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.13.1...v2.13.2) (2026-11-04)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 7.12.0 ([e9f5203](https://github.com/mini-app-polis/deejay-cog/commit/e9f5203dcaedff1d7a6d9abd956492984c036c17))
+* **deps:** bump miniapppolis-common-utils to 7.13.0 ([1c6fe1c](https://github.com/mini-app-polis/deejay-cog/commit/1c6fe1c32b8411b4464a8324f913f30d7c5301f9))
+* **deps:** bump miniapppolis-common-utils to 7.14.0 ([597d1fd](https://github.com/mini-app-polis/deejay-cog/commit/597d1fd01c6a32d48c456a3f3a772c05833a9705))
+
 ## [2.13.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.13.0...v2.13.1) (2026-11-03)
 
 
