@@ -576,7 +576,9 @@ def test_files_left_as_they_are_are_named(
     summary = flow.library_backfill(run_id="m-1")
 
     assert _music_writes(drive) == []
-    assert summary.outcomes["not_in_catalog"] == ["Crates/1 unknown.mp3"]
+    assert summary.outcomes["not_in_catalog"] == [
+        "Crates/1 unknown.mp3 (looked up 'never played' by 'nobody')"
+    ]
     assert summary.outcomes["needs_fingerprinting"] == ["Crates/2 untagged.mp3"]
     assert summary.outcomes["not_mp3"] == ["Crates/3 song.flac"]
     assert summary.outcomes["moved_since"] == ["Crates/4 moved.mp3"]
@@ -587,6 +589,11 @@ def test_files_left_as_they_are_are_named(
     assert unknown in downloads and untagged in downloads
     record = _record(drive, "m-1")
     assert {e["action"] for e in record["entries"]} == {"skip"}
+    by_name = {e["original_name"]: e for e in record["entries"]}
+    # A miss keeps the tags it was looked up by, so the record shows why.
+    assert by_name["1 unknown.mp3"]["old_tags"]["title"] == "never played"
+    assert by_name["1 unknown.mp3"]["old_tags"]["artist"] == "nobody"
+    assert by_name["2 untagged.mp3"]["old_tags"]["title"] == ""
     assert _cursor(drive)["position"] == 5
     text = _text(posted)
     for name in ("1 unknown.mp3", "2 untagged.mp3", "3 song.flac", "4 moved.mp3"):

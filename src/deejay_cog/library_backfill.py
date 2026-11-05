@@ -451,7 +451,14 @@ class Backfill:
         return f"{path}/{name}" if path else name
 
     def _skip(
-        self, item: dict[str, Any], outcome: str, reason: str, name: str | None = None
+        self,
+        item: dict[str, Any],
+        outcome: str,
+        reason: str,
+        name: str | None = None,
+        *,
+        old_tags: dict[str, str] | None = None,
+        detail: str = "",
     ) -> None:
         self.record.add(
             RecordEntry(
@@ -461,12 +468,15 @@ class Backfill:
                 state="skipped",
                 folder=str(item["folder_id"]),
                 reason=reason,
+                old_tags=old_tags or {},
             )
         )
         label = self.label(item, name)
-        self.summary.add(
-            outcome, f"{label} ({reason})" if outcome == "failed" else label
-        )
+        if outcome == "failed":
+            label = f"{label} ({reason})"
+        elif detail:
+            label = f"{label} ({detail})"
+        self.summary.add(outcome, label)
 
     def one(self, item: dict[str, Any]) -> str:
         """Process one listed file; return its outcome. Raises
@@ -486,13 +496,27 @@ class Backfill:
             return "moved_since"
 
         data: bytes = self.drive.download_file_bytes(file_id).data
-        track = ingest_track(read_tag_row(data))
+        row = read_tag_row(data)
+        track = ingest_track(row)
         if track is None:
-            self._skip(item, "needs_fingerprinting", "no usable title or artist", name)
+            self._skip(
+                item,
+                "needs_fingerprinting",
+                "no usable title or artist",
+                name,
+                old_tags=tag_snapshot(data),
+            )
             return "needs_fingerprinting"
         match = self.api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
         if match is None:
-            self._skip(item, "not_in_catalog", "not in the catalog", name)
+            self._skip(
+                item,
+                "not_in_catalog",
+                "not in the catalog",
+                name,
+                old_tags=tag_snapshot(data),
+                detail=f"looked up {row['title']!r} by {row['artist']!r}",
+            )
             return "not_in_catalog"
         tagged = write_catalog_tags(data, match)
         if tagged is None:
