@@ -600,6 +600,22 @@ def test_files_left_as_they_are_are_named(
         assert name in text
 
 
+def test_every_file_in_the_chunk_is_named_in_the_report(
+    settings, wired, posted, drive
+) -> None:
+    names = [
+        drive.add(f"{n} unknown.mp3", ROOT, _song(f"never played {n}", "nobody"))
+        for n in range(6)
+    ]
+
+    flow.library_backfill(run_id="m-1")
+
+    text = _text(posted)
+    assert "more" not in text
+    for n in range(len(names)):
+        assert f"{n} unknown.mp3" in text
+
+
 def test_a_failing_file_is_recorded_and_passed(
     settings, wired, posted, drive, api, monkeypatch: pytest.MonkeyPatch
 ) -> None:
