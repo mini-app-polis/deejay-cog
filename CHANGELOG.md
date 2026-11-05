@@ -1,3 +1,15 @@
+# [2.15.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.14.1...v2.15.0) (2026-11-05)
+
+
+### Bug Fixes
+
+* **deps:** bump oauthlib to 4.0.1 and miniapppolis-common-utils to 7.20.0 ([15dc125](https://github.com/mini-app-polis/deejay-cog/commit/15dc125928c6a17eebbdf36678ad8c1ac5eba0a4))
+
+
+### Features
+
+* **library-backfill:** name every file in the chunk in the run report ([88ad7ec](https://github.com/mini-app-polis/deejay-cog/commit/88ad7eca2cef217774f929d314a8687c79affb8b))
+
 ## [2.14.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.14.0...v2.14.1) (2026-11-05)
 
 
