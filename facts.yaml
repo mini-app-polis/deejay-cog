@@ -1,0 +1,9 @@
+# The figures this repository owns, computed into facts.json by `facts
+# generate` (common-python-utils). Facts are generated, never edited by hand.
+repo: deejay-cog
+facts:
+  test_functions:
+    description: Test functions in the test suites (def test_*, each parametrized function once)
+    matches:
+      file: tests/**/test_*.py
+      pattern: '(?m)^\s*(?:async\s+)?def test_\w+'
