@@ -1,3 +1,11 @@
+## [2.14.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.14.0...v2.14.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 7.19.0 ([8e2d6d5](https://github.com/mini-app-polis/deejay-cog/commit/8e2d6d5b5a7c1526cd7a41a096d564784e45d5d3))
+* **library-backfill:** record the tags a catalog miss was looked up by ([49a5cbf](https://github.com/mini-app-polis/deejay-cog/commit/49a5cbfe78a150bb2aa981eed85425a3b125aa2d))
+
 # [2.14.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.13.2...v2.14.0) (2026-11-05)
 
 
