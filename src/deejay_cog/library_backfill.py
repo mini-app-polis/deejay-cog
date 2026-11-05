@@ -678,6 +678,7 @@ def run_backfill(
         notable=True,
         run_id=run_id,
         version=__version__,
+        list_all=True,  # every file in the chunk is named, not the first few
     ) as report:
         try:
             if mode is FlowMode.OFF:
