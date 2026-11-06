@@ -122,6 +122,30 @@ def test_read_tag_row_reads_the_fields_a_set_export_carries() -> None:
     }
 
 
+def test_a_latin1_frame_holding_utf8_bytes_is_read_as_utf8() -> None:
+    data = _mp3(
+        TIT2(encoding=0, text=["Ð\x9c'Ñ\x8fÑ\x82Ð°"]),
+        TPE1(encoding=0, text=["KAZKA"]),
+    )
+
+    row = music_tags.read_tag_row(data)
+
+    assert row["title"] == "М'ята"
+    assert row["artist"] == "KAZKA"
+
+
+def test_genuine_latin1_text_is_left_as_it_is() -> None:
+    data = _mp3(TPE1(encoding=0, text=["Beyoncé"]))
+
+    assert music_tags.read_tag_row(data)["artist"] == "Beyoncé"
+
+
+def test_a_utf8_frame_is_read_as_it_is() -> None:
+    data = _mp3(TIT2(encoding=3, text=["М'ята"]))
+
+    assert music_tags.read_tag_row(data)["title"] == "М'ята"
+
+
 def test_the_ingest_track_is_built_the_way_a_set_import_builds_it() -> None:
     row = music_tags.read_tag_row(
         _mp3(
