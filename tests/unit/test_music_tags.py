@@ -228,6 +228,57 @@ def test_tags_that_already_match_are_not_written_again() -> None:
     assert music_tags.write_catalog_tags(once, _match()) is None
 
 
+def test_fill_only_keeps_every_value_the_file_already_has() -> None:
+    written = music_tags.write_catalog_tags(
+        _mp3(
+            TIT2(encoding=3, text=["6'S To 9'S"]),
+            TPE1(encoding=3, text=["Big Wild"]),
+            TDRC(encoding=3, text=["2016"]),
+            TCON(encoding=3, text=["Electronic"]),
+            TBPM(encoding=3, text=["95.50"]),
+        ),
+        _match(),
+        fill_only=True,
+    )
+
+    assert written is not None
+    tags = _tags(written)
+    assert tags["TIT2"].text == ["6'S To 9'S"]
+    assert tags["TPE1"].text == ["Big Wild"]
+    assert str(tags["TDRC"].text[0]) == "2016"
+    assert tags["TCON"].text == ["Electronic"]
+    assert tags["TBPM"].text == ["95.50"]
+    # Empty fields are filled, and the catalog id is always written.
+    assert tags["TPUB"].text == ["Armada"]
+    assert tags[f"TXXX:{music_tags.CATALOG_ID_DESC}"].text == [str(_CATALOG_ID)]
+
+
+def test_fill_only_fills_a_blank_frame() -> None:
+    written = music_tags.write_catalog_tags(
+        _mp3(
+            TIT2(encoding=3, text=["x"]),
+            TPE1(encoding=3, text=["y"]),
+            TCON(encoding=3, text=[" "]),
+        ),
+        _match(),
+        fill_only=True,
+    )
+
+    assert written is not None
+    assert _tags(written)["TCON"].text == ["House"]
+
+
+def test_fill_only_with_the_catalog_id_present_writes_nothing() -> None:
+    once = music_tags.write_catalog_tags(
+        _mp3(TIT2(encoding=3, text=["x"]), TPE1(encoding=3, text=["y"])),
+        _match(),
+        fill_only=True,
+    )
+    assert once is not None
+
+    assert music_tags.write_catalog_tags(once, _match(), fill_only=True) is None
+
+
 # ---------------------------------------------------------------------------
 # One Drive file, end to end
 # ---------------------------------------------------------------------------

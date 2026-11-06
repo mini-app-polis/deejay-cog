@@ -9,7 +9,9 @@ name the same catalog entry.
 
 On a match the catalog's fields are written over the file's: title (with
 the remix in parentheses), artist, year, genre, BPM, label where the catalog
-has them, and ``TXXX:CATALOG_ID``. Every other frame is left as it is. The
+has them, and ``TXXX:CATALOG_ID``. Every other frame is left as it is. With
+``fill_only`` (the library backfill) a field the file already has keeps its
+value, and only the empty ones and ``TXXX:CATALOG_ID`` are written. The
 new bytes replace the same Drive file, so its name, folder and file id do not
 change and VirtualDJ keeps finding it by its path.
 
@@ -156,12 +158,17 @@ def _bpm_text(bpm: float) -> str:
     return str(round(bpm))
 
 
-def write_catalog_tags(data: bytes, match: CatalogMatch) -> bytes | None:
+def write_catalog_tags(
+    data: bytes, match: CatalogMatch, *, fill_only: bool = False
+) -> bytes | None:
     """The file's bytes with the catalog's tags written, or None when its
     tags already say what the catalog says.
 
     Only the frames the catalog supplies are set; a field the catalog lacks
     keeps the file's own value, and every other frame is left as it is.
+    With ``fill_only``, a field the file already has a value for keeps it
+    too: only empty fields are filled, and ``TXXX:CATALOG_ID`` is always
+    written.
     """
     tags = _load(data)
     wanted: list[tuple[str, Any]] = [
@@ -176,6 +183,8 @@ def write_catalog_tags(data: bytes, match: CatalogMatch) -> bytes | None:
         wanted.append(("TBPM", TBPM(encoding=3, text=[_bpm_text(match.bpm)])))
     if match.label:
         wanted.append(("TPUB", TPUB(encoding=3, text=[match.label])))
+    if fill_only:
+        wanted = [(key, frame) for key, frame in wanted if not _has_text(tags, key)]
     catalog_key = f"TXXX:{CATALOG_ID_DESC}"
     wanted.append(
         (
@@ -222,6 +231,12 @@ def _write_frames(
     buffer = io.BytesIO(data)
     tags.save(buffer, v2_version=4)
     return buffer.getvalue()
+
+
+def _has_text(tags: ID3, key: str) -> bool:
+    """Whether the file already has a non-blank value in a frame."""
+    frame = tags.get(key)
+    return frame is not None and any(str(t).strip() for t in frame.text)
 
 
 def _same(existing: Any, wanted: Any) -> bool:

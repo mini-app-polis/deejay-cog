@@ -488,10 +488,12 @@ def test_a_dry_run_writes_no_music_and_does_not_move_the_cursor(
     assert record["dry_run"] is True
     entry = record["entries"][0]
     assert entry["state"] == "planned"
-    assert entry["old_tags"]["title"] == "song 0"
-    assert entry["new_tags"]["title"] == "Song 0"
+    # Fill-only: the file's own title stays, the empty genre is filled.
+    assert entry["new_tags"]["title"] == entry["old_tags"]["title"] == "song 0"
+    assert entry["new_tags"]["genre"] == "WCS"
     assert entry["folder"] == ROOT
-    assert "'song 0' -> 'Song 0'" in first.outcomes["would_write"][0]
+    assert "genre: '' -> 'WCS'" in first.outcomes["would_write"][0]
+    assert "title:" not in first.outcomes["would_write"][0]
     assert "dry-run" in _text(posted)
 
     # Then written: the same chunk the dry run showed.
@@ -519,7 +521,8 @@ def test_a_catalog_match_is_written_in_place_and_recorded(
     assert item.parents == [ROOT]
     assert not item.trashed
     tags = tag_snapshot(item.data)
-    assert tags["title"] == "Song 0"
+    assert tags["title"] == "song 0"  # fill-only: the file's value stays
+    assert tags["genre"] == "WCS"
     assert tags["catalog_id"] == str(_CATALOG_ID)
     assert "Some Album" in str(item.data)  # other frames kept
     assert [m for m, _ in _music_writes(drive)] == ["keep_revision", "update_file"]
@@ -531,8 +534,8 @@ def test_a_catalog_match_is_written_in_place_and_recorded(
     assert entry["folder"] == ROOT
     assert entry["revision_kept"] == "r1"
     assert entry["original_md5"] and entry["written_md5"]
-    assert entry["old_tags"]["title"] == "song 0"
-    assert entry["new_tags"]["title"] == "Song 0"
+    assert entry["old_tags"]["genre"] == ""
+    assert entry["new_tags"]["genre"] == "WCS"
 
 
 def test_a_file_already_tagged_from_the_catalog_is_not_written(
@@ -668,7 +671,9 @@ def test_no_tag_is_emptied(
     settings, wired, drive, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     file_id = drive.add("a.mp3", ROOT, _song("song 0", "artist"))
-    monkeypatch.setattr(flow, "write_catalog_tags", lambda *_: mp3(TALB(text=["x"])))
+    monkeypatch.setattr(
+        flow, "write_catalog_tags", lambda *_, **__: mp3(TALB(text=["x"]))
+    )
 
     summary = flow.library_backfill(run_id="m-1")
 
@@ -687,7 +692,7 @@ def test_audio_that_would_change_stops_the_run_and_keeps_the_cursor_on_it(
 ) -> None:
     ids = _library(drive, 3)
     bad = _song("Song 0", "Artist", audio=AUDIO[:-1] + b"\x01")
-    monkeypatch.setattr(flow, "write_catalog_tags", lambda *_: bad)
+    monkeypatch.setattr(flow, "write_catalog_tags", lambda *_, **__: bad)
 
     summary = flow.library_backfill(run_id="m-1")
 
