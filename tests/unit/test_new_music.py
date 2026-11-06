@@ -53,10 +53,22 @@ def _tagged(title: str = "temple", artist: str = "thomas gold") -> bytes:
 class FakeApi:
     answers: dict[str, CatalogMatch | None] = field(default_factory=dict)
     requests: list[CatalogLookupRequest] = field(default_factory=list)
+    #: Paths in the library registry; listing raises this while it is set.
+    library: list[str] = field(default_factory=list)
+    registry_down: Exception | None = None
+    listings: list[dict] = field(default_factory=list)
 
     def lookup_catalog(self, payload: CatalogLookupRequest):
         self.requests.append(payload)
         return [self.answers.get(t.title.lower()) for t in payload.tracks]
+
+    def list_library_files(self, *, present=None, limit=None, offset=None):
+        self.listings.append({"present": present, "limit": limit, "offset": offset})
+        if self.registry_down is not None:
+            raise self.registry_down
+        start = offset or 0
+        rows = self.library[start : start + (limit or 100)]
+        return [SimpleNamespace(path=p) for p in rows]
 
 
 @pytest.fixture
@@ -552,3 +564,126 @@ def test_a_file_that_left_the_input_folder_is_never_moved(
     assert summary.failed and "no longer only in the input folder" in summary.failed[0]
     assert drive.items[file_id].parents == [IN, "library"]
     assert not any(m == "move_file" for m, _ in drive.calls)
+
+
+# ---------------------------------------------------------------------------
+# Names: the main artist, featured artists only to avoid a clash
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("artist", "main", "featured"),
+    [
+        ("Emotional Oranges", ["Emotional Oranges"], []),
+        ("Pink Sweat$ feat. Kehlani", ["Pink Sweat$"], ["Kehlani"]),
+        ("Pink Sweat$ ft. Kehlani", ["Pink Sweat$"], ["Kehlani"]),
+        ("Pink Sweat$ (featuring Kehlani)", ["Pink Sweat$"], ["Kehlani"]),
+        ("Wale feat. Usher, Rick Ross", ["Wale"], ["Usher", "Rick Ross"]),
+        ("Kelly Clarkson, Dolly Parton", ["Kelly Clarkson", "Dolly Parton"], []),
+    ],
+)
+def test_an_artist_tag_splits_into_main_and_featured(
+    artist: str, main: list[str], featured: list[str]
+) -> None:
+    assert flow.split_artist(artist) == (main, featured)
+
+
+def test_a_plain_song_is_named_by_its_title_and_artist() -> None:
+    assert flow.delivery_names(
+        {"title": "Sundays", "artist": "Emotional Oranges"}, "a.mp3"
+    ) == ["Sundays_Emotional Oranges.mp3"]
+
+
+def test_a_song_with_features_is_named_by_its_main_artist_first() -> None:
+    assert flow.delivery_names(
+        {"title": "At My Worst", "artist": "Pink Sweat$ feat. Kehlani"}, "a.mp3"
+    ) == [
+        "At My Worst_Pink Sweat$.mp3",
+        "At My Worst_Pink Sweat$ feat. Kehlani.mp3",
+    ]
+
+
+def _featured_match() -> CatalogMatch:
+    return _match(title="At My Worst", remix=None, artist="Pink Sweat$ feat. Kehlani")
+
+
+def test_a_song_with_features_is_delivered_under_its_main_artist(
+    settings, wired, drive, api: FakeApi
+) -> None:
+    api.answers["temple"] = _featured_match()
+    drive.add("track01.mp3", IN, _tagged())
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == ["track01.mp3 -> At My Worst_Pink Sweat$.mp3"]
+    assert [i.name for i in drive.in_folder(DEST)] == ["At My Worst_Pink Sweat$.mp3"]
+
+
+def test_a_name_taken_in_the_library_adds_the_featured_artists(
+    settings, wired, drive, api: FakeApi
+) -> None:
+    api.answers["temple"] = _featured_match()
+    api.library = ["R&B/At My Worst_Pink Sweat$.mp3"]
+    drive.add("track01.mp3", IN, _tagged())
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == [
+        "track01.mp3 -> At My Worst_Pink Sweat$ feat. Kehlani.mp3"
+    ]
+    assert api.listings[0]["present"] is True
+
+
+def test_a_name_taken_even_with_the_features_goes_to_review(
+    settings, wired, drive, api: FakeApi
+) -> None:
+    api.answers["temple"] = _featured_match()
+    api.library = ["a/At My Worst_Pink Sweat$.mp3"]
+    drive.add("At My Worst_Pink Sweat$ feat. Kehlani.mp3", DEST, b"mine")
+    file_id = drive.add("track01.mp3", IN, _tagged())
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == []
+    assert len(summary.collisions) == 1
+    assert drive.items[file_id].parents == [REVIEW]
+    (entry,) = _record(drive)["entries"]
+    assert "name collision" in entry["reason"]
+
+
+def test_a_name_taken_with_no_features_to_add_goes_to_review(
+    settings, wired, drive, api: FakeApi
+) -> None:
+    api.library = ["House/Temple (Niko The Kid Remix)_Thomas Gold.mp3"]
+    file_id = drive.add("track01.mp3", IN, _tagged())
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == []
+    assert drive.items[file_id].parents == [REVIEW]
+
+
+def test_a_registry_that_cannot_be_read_sends_the_file_to_review(
+    settings, wired, drive, api: FakeApi
+) -> None:
+    api.registry_down = RuntimeError("API down")
+    file_id = drive.add("track01.mp3", IN, _tagged())
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == []
+    assert drive.items[file_id].parents == [REVIEW]
+    assert "library registry could not be read" in summary.needs_review[0]
+
+
+def test_the_registry_is_read_once_a_run_and_paged(
+    settings, wired, drive, api: FakeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(flow.LibraryNames, "PAGE", 2)
+    api.library = ["a/1.mp3", "a/2.mp3", "a/3.mp3"]
+    drive.add("track01.mp3", IN, _tagged())
+    drive.add("track02.mp3", IN, _tagged("temple", "thomas gold"))
+
+    flow.new_music(run_id="m-1")
+
+    assert [c["offset"] for c in api.listings] == [0, 2]
