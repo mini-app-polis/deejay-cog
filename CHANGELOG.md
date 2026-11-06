@@ -1,3 +1,10 @@
+# [2.17.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.16.0...v2.17.0) (2026-11-06)
+
+
+### Features
+
+* **library-backfill:** register every file the backfill reaches in the library registry ([4b9fd06](https://github.com/mini-app-polis/deejay-cog/commit/4b9fd067b25b6ac77844bacc80bccac3093cb437))
+
 # [2.16.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.15.3...v2.16.0) (2026-11-06)
 
 
