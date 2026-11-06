@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from mini_app_polis.api.contract import CatalogLookupRequest, CatalogMatch
-from mutagen.id3 import ID3, TALB, TBPM, TCON, TDRC, TIT2, TPE1, TPUB, TXXX
+from mutagen.id3 import APIC, COMM, ID3, TALB, TBPM, TCON, TDRC, TIT2, TPE1, TPUB, TXXX
 
 from deejay_cog import music_tags
 from deejay_cog.music_safety import AudioChanged
@@ -228,55 +228,57 @@ def test_tags_that_already_match_are_not_written_again() -> None:
     assert music_tags.write_catalog_tags(once, _match()) is None
 
 
-def test_fill_only_keeps_every_value_the_file_already_has() -> None:
+def test_id_only_writes_just_the_catalog_id_to_a_file_with_empty_fields() -> None:
     written = music_tags.write_catalog_tags(
-        _mp3(
-            TIT2(encoding=3, text=["6'S To 9'S"]),
-            TPE1(encoding=3, text=["Big Wild"]),
-            TDRC(encoding=3, text=["2016"]),
-            TCON(encoding=3, text=["Electronic"]),
-            TBPM(encoding=3, text=["95.50"]),
-        ),
+        _mp3(TIT2(encoding=3, text=["x"]), TPE1(encoding=3, text=["y"])),
         _match(),
-        fill_only=True,
+        id_only=True,
     )
 
     assert written is not None
     tags = _tags(written)
-    assert tags["TIT2"].text == ["6'S To 9'S"]
-    assert tags["TPE1"].text == ["Big Wild"]
-    assert str(tags["TDRC"].text[0]) == "2016"
-    assert tags["TCON"].text == ["Electronic"]
-    assert tags["TBPM"].text == ["95.50"]
-    # Empty fields are filled, and the catalog id is always written.
-    assert tags["TPUB"].text == ["Armada"]
+    assert sorted(tags.keys()) == sorted(
+        ["TIT2", "TPE1", f"TXXX:{music_tags.CATALOG_ID_DESC}"]
+    )
+    assert tags["TIT2"].text == ["x"]
+    assert tags["TPE1"].text == ["y"]
     assert tags[f"TXXX:{music_tags.CATALOG_ID_DESC}"].text == [str(_CATALOG_ID)]
 
 
-def test_fill_only_fills_a_blank_frame() -> None:
-    written = music_tags.write_catalog_tags(
-        _mp3(
-            TIT2(encoding=3, text=["x"]),
-            TPE1(encoding=3, text=["y"]),
-            TCON(encoding=3, text=[" "]),
-        ),
-        _match(),
-        fill_only=True,
-    )
-
-    assert written is not None
-    assert _tags(written)["TCON"].text == ["House"]
-
-
-def test_fill_only_with_the_catalog_id_present_writes_nothing() -> None:
+def test_id_only_with_the_catalog_id_present_writes_nothing() -> None:
     once = music_tags.write_catalog_tags(
         _mp3(TIT2(encoding=3, text=["x"]), TPE1(encoding=3, text=["y"])),
         _match(),
-        fill_only=True,
+        id_only=True,
     )
     assert once is not None
 
-    assert music_tags.write_catalog_tags(once, _match(), fill_only=True) is None
+    assert music_tags.write_catalog_tags(once, _match(), id_only=True) is None
+
+
+def test_id_only_leaves_every_other_frame_identical() -> None:
+    original = _mp3(
+        TIT2(encoding=3, text=["x"]),
+        TPE1(encoding=3, text=["y"]),
+        TCON(encoding=3, text=[" "]),
+        COMM(encoding=3, lang="eng", desc="", text=["a comment"]),
+        APIC(encoding=3, mime="image/png", type=3, desc="", data=b"\x89PNG-bytes"),
+        TXXX(encoding=3, desc="MOOD", text=["dark"]),
+        TXXX(encoding=3, desc=music_tags.CATALOG_ID_DESC, text=["old-id"]),
+    )
+    before = _tags(original)
+
+    written = music_tags.write_catalog_tags(original, _match(), id_only=True)
+
+    assert written is not None
+    after = _tags(written)
+    catalog_key = f"TXXX:{music_tags.CATALOG_ID_DESC}"
+    assert sorted(after.keys()) == sorted(before.keys())
+    for key in sorted(before.keys()):
+        if key == catalog_key:
+            assert after[key].text == [str(_CATALOG_ID)]
+        else:
+            assert after[key] == before[key]
 
 
 # ---------------------------------------------------------------------------

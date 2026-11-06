@@ -488,11 +488,14 @@ def test_a_dry_run_writes_no_music_and_does_not_move_the_cursor(
     assert record["dry_run"] is True
     entry = record["entries"][0]
     assert entry["state"] == "planned"
-    # Fill-only: the file's own title stays, the empty genre is filled.
-    assert entry["new_tags"]["title"] == entry["old_tags"]["title"] == "song 0"
-    assert entry["new_tags"]["genre"] == "WCS"
+    # Only the link changes: the empty genre stays empty.
+    changed = {
+        k for k, v in entry["new_tags"].items() if entry["old_tags"].get(k, "") != v
+    }
+    assert changed == {"catalog_id"}
     assert entry["folder"] == ROOT
-    assert "genre: '' -> 'WCS'" in first.outcomes["would_write"][0]
+    assert "catalog_id: '' -> " in first.outcomes["would_write"][0]
+    assert "genre:" not in first.outcomes["would_write"][0]
     assert "title:" not in first.outcomes["would_write"][0]
     assert "dry-run" in _text(posted)
 
@@ -521,8 +524,8 @@ def test_a_catalog_match_is_written_in_place_and_recorded(
     assert item.parents == [ROOT]
     assert not item.trashed
     tags = tag_snapshot(item.data)
-    assert tags["title"] == "song 0"  # fill-only: the file's value stays
-    assert tags["genre"] == "WCS"
+    assert tags["title"] == "song 0"
+    assert tags["genre"] == ""  # empty stays empty: only the id is written
     assert tags["catalog_id"] == str(_CATALOG_ID)
     assert "Some Album" in str(item.data)  # other frames kept
     assert [m for m, _ in _music_writes(drive)] == ["keep_revision", "update_file"]
@@ -534,8 +537,8 @@ def test_a_catalog_match_is_written_in_place_and_recorded(
     assert entry["folder"] == ROOT
     assert entry["revision_kept"] == "r1"
     assert entry["original_md5"] and entry["written_md5"]
-    assert entry["old_tags"]["genre"] == ""
-    assert entry["new_tags"]["genre"] == "WCS"
+    assert entry["old_tags"]["genre"] == entry["new_tags"]["genre"] == ""
+    assert entry["new_tags"]["catalog_id"] == str(_CATALOG_ID)
 
 
 def test_a_file_already_tagged_from_the_catalog_is_not_written(
