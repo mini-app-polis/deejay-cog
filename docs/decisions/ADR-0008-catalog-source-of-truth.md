@@ -58,7 +58,21 @@ carries: title (with its version), artist, year, genre, BPM and label. What
 VirtualDJ owns is never written: cue points, comments, ratings, play counts,
 stems, and the file's name and path.
 
-### 4. Four flows keep files and catalog in step
+### 4. The catalog stores a song's parts; display rules write them out
+
+An entry holds the parts of a song separately: the title, the version (a
+remix, an acoustic or live take, a session), the main artist, and the
+featured artists, in order. The title and artist a file carries are not
+stored; they are written out from the parts by display rules (for example
+where featured artists go, how a version is bracketed, how BPM is rounded).
+The rules are configuration, one set for the whole catalog.
+
+So a change to how songs are shown is a change to a rule, not an edit to
+every entry: the next sync run writes the new display to every linked file.
+A change to one song is an edit to its parts. Anything that reads the
+catalog (stats, summaries, the collection) uses the same rules.
+
+### 5. Four flows keep files and catalog in step
 
 - **Add.** A new file in the library (watcher-cog sees the Drive change) is
   identified (tags, then fingerprint, as in ADR-0007), linked to its catalog
@@ -67,22 +81,24 @@ stems, and the file's name and path.
 - **Remove.** A file gone from the library, or in the trash, is marked not
   present. Its catalog entry keeps its play history. An entry left with no
   plays and no present files is archived, never deleted.
-- **Edit.** A change to an entry's owned fields is recorded with when it
-  changed. A sync run writes the change to every present file linked to that
-  entry that has not had it yet. Catalog edits are the only way owned fields
-  change once the library is reconciled.
+- **Edit.** A change to an entry's parts, or to a display rule, is recorded
+  with when it changed. A sync run writes the result to every present file
+  linked to an entry it affects that has not had it yet. Catalog edits and
+  rule changes are the only way owned fields change once the library is
+  reconciled.
 - **Fill up.** When a file has a value for a field the catalog leaves empty,
   the value goes up to the catalog. A value the catalog already has is kept,
   as the set import already does.
 
-### 5. Getting there, in order
+### 6. Getting there, in order
 
 1. **Link.** The library backfill writes only `TXXX:CATALOG_ID` and registers
    each file it reaches. Nothing VirtualDJ shows changes. Every later step
    needs the link.
 2. **Set the standard and clean the catalog.** The owner fixes the open
-   decisions below; the catalog's entries are brought to that standard
-   (genres mapped, duplicate entries merged, titles and artists normalized).
+   decisions below; the catalog's entries are split into their parts
+   (version and featured artists out of the title and artist), genres are
+   mapped, and duplicate entries are merged.
 3. **Reconcile.** A dry run lists, for every linked file, each owned field
    where file and catalog differ, grouped by kind of change (case only, a
    genre mapping, a different year, BPM precision, and so on), plus the
@@ -101,9 +117,11 @@ share a catalog entry but are kept).
 Waiting on the owner before step 2:
 
 1. The genre vocabulary: a short fixed list and what maps to each.
-2. How featured artists are written: in the title (`Song (feat. X)`) or in
-   the artist (`A feat. X`).
-3. BPM precision: whole numbers, or one decimal.
+2. The first display rules: where featured artists go (`Song (feat. X)` or
+   `A feat. X`), how a version is bracketed, and BPM precision (whole numbers
+   or one decimal). These can be changed later; a change rewrites every
+   file on the next sync.
+3. How several featured artists are joined (`X & Y`, `X, Y`).
 4. Whether the catalog owns anything beyond title, artist, year, genre, BPM
    and label (for example key).
 
@@ -111,10 +129,16 @@ Waiting on the owner before step 2:
 
 - The catalog becomes the one place a song's tags are corrected, and a
   correction reaches every copy of the song.
+- How songs are shown can be changed for the whole library at once, by
+  changing a display rule, without editing entries.
+- Splitting entries into parts is the largest piece of the clean-up: the
+  version and featured artists have to be pulled out of titles and artists
+  that today mix them, with a review of what the split proposes.
 - The library registry gives the catalog a view it lacks today: what music
   the owner has, not only what he has played.
 - api-kaianolevine-com takes on a registry, library entries with no plays,
-  change tracking on entries, and a wider catalog edit; watcher-cog watches
+  structured song parts with display rules, change tracking on entries and
+  rules, and a wider catalog edit; watcher-cog watches
   the library folder; deejay-cog gains link, reconcile and sync runs.
 - Every visible change to the library is reviewed before it is written:
   first as kinds of change in step 3, then as catalog edits.
