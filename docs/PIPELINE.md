@@ -288,6 +288,18 @@ the run with a WARN until resolved.
    file id; the file downloaded again and its audio checked once more.
    Name, folder and id do not change.
 
+**Registry:** every MP3 the run downloads (steps 4 to 7), in `dry-run` and
+`write`, is registered in the API's library registry
+(`POST /v1/catalog/library/files`): Drive id, library root, path, size, md5
+and duration (of the file as it now is), the catalog entry it links to
+(`identified`) or none (`unidentified`), the release label its title carries
+(Clean, Explicit, Radio Edit, No Intro Edit, Super Clean…), and its comment
+frame as a backup. Registering never changes a music file; a re-run updates
+the same row. A registration that fails does not stop the run: the file is
+named (`registry_failed`) and, in a `write` run, kept in the cursor's
+`registry_retry` list and registered again at the start of the next run,
+with its link read from its own `TXXX:CATALOG_ID`.
+
 **Audio check failure** stops the run with an ERROR finding. Before the
 write nothing is uploaded; after it, the original bytes are put back. The
 cursor stays **on** that file, so the next run starts with it and, if it
@@ -314,8 +326,8 @@ tags, and the report names each would-be change (`would_write`).
 
 **Report:** counts for `listed`, `scanned`, `matched`, `written`,
 `would_write`, `already_tagged`, `not_in_catalog`, `needs_fingerprinting`,
-`not_mp3`, `moved_since`, `skipped_by_setting`, `failed`, `remaining` and
-`done`, with the files by name (path under the root). Off, the report says
+`not_mp3`, `moved_since`, `skipped_by_setting`, `failed`, `remaining`,
+`done`, `registered` and `registry_failed`, with the files by name (path under the root). Off, the report says
 only that the flow is off; a missing setting is a WARN naming it.
 
 **Undo:** `python -m deejay_cog.music_rollback <run id>` (below) writes
