@@ -205,8 +205,9 @@ catalog (stats, summaries, the collection) uses the same rules.
     rounding only (0.5 or less apart); BPM differs; label differs; a file
     value going up to an empty catalog field; anything else, reviewed file by
     file. Once a kind is approved, the catalog wins, for year and BPM too.
-16. **Adds and removes are noticed nightly,** from Drive's change feed, in
-    the same nightly run as the sync.
+16. **Adds and removes are noticed nightly,** in the same nightly run as the
+    sync, by listing the library's metadata (no downloads) and comparing it
+    with the registry.
 
 ## Consequences
 
