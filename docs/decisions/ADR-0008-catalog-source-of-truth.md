@@ -164,6 +164,20 @@ catalog (stats, summaries, the collection) uses the same rules.
    file's edit label; its displayed title is the song's title followed by
    that label in parentheses (`Baby What You Want Me To Do (No Intro
    Edit)`), and a file with no label shows the song's title alone.
+7. **Every distinct recording is its own entry.** A version (remix, acoustic,
+   live, session, instrumental, extended or club mix, cover) has an entry and
+   plays of its own; only release labels (clean, explicit, radio edit, no
+   intro edit, original mix, remastered and the like) share the song's entry.
+8. **Garbled tags are repaired on read:** a tag written in UTF-8 but marked
+   as Latin-1 is read as UTF-8, and the file's tags are rewritten properly at
+   its next catalog write.
+9. **New-music filenames** stay `{title}_{artist}` with the main artist only;
+   featured artists are added only when the name would otherwise clash with
+   a file already in the library.
+10. **Testing is up front, not by rollback.** Each write mode is proven by
+    its tests and a dry run before it writes; after a first write run, a
+    dry run of the same chunk must show every written file as already
+    tagged with every other frame unchanged.
 
 ## Consequences
 
