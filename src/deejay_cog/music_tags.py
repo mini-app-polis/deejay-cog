@@ -10,8 +10,7 @@ name the same catalog entry.
 On a match the catalog's fields are written over the file's: title (with
 the remix in parentheses), artist, year, genre, BPM, label where the catalog
 has them, and ``TXXX:CATALOG_ID``. Every other frame is left as it is. With
-``fill_only`` (the library backfill) a field the file already has keeps its
-value, and only the empty ones and ``TXXX:CATALOG_ID`` are written. The
+``id_only`` (the library backfill) only ``TXXX:CATALOG_ID`` is written. The
 new bytes replace the same Drive file, so its name, folder and file id do not
 change and VirtualDJ keeps finding it by its path.
 
@@ -117,7 +116,22 @@ def _text(tags: ID3, frame_id: str) -> str:
     frame = tags.get(frame_id)
     if frame is None or not getattr(frame, "text", None):
         return ""
-    return str(frame.text[0]).strip()
+    text = str(frame.text[0])
+    if getattr(frame, "encoding", None) == 0:
+        text = _repair_latin1(text)
+    return text.strip()
+
+
+def _repair_latin1(text: str) -> str:
+    """The text as UTF-8 when a Latin-1 frame holds valid UTF-8 bytes.
+
+    Some taggers write UTF-8 but mark the frame Latin-1. Genuine Latin-1
+    text is almost never valid UTF-8, so it is returned unchanged.
+    """
+    try:
+        return text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
 
 
 def read_tag_row(data: bytes) -> dict[str, str]:
@@ -159,16 +173,15 @@ def _bpm_text(bpm: float) -> str:
 
 
 def write_catalog_tags(
-    data: bytes, match: CatalogMatch, *, fill_only: bool = False
+    data: bytes, match: CatalogMatch, *, id_only: bool = False
 ) -> bytes | None:
     """The file's bytes with the catalog's tags written, or None when its
     tags already say what the catalog says.
 
     Only the frames the catalog supplies are set; a field the catalog lacks
     keeps the file's own value, and every other frame is left as it is.
-    With ``fill_only``, a field the file already has a value for keeps it
-    too: only empty fields are filled, and ``TXXX:CATALOG_ID`` is always
-    written.
+    With ``id_only``, only ``TXXX:CATALOG_ID`` is written: no other frame
+    changes, even an empty one.
     """
     tags = _load(data)
     wanted: list[tuple[str, Any]] = [
@@ -183,12 +196,11 @@ def write_catalog_tags(
         wanted.append(("TBPM", TBPM(encoding=3, text=[_bpm_text(match.bpm)])))
     if match.label:
         wanted.append(("TPUB", TPUB(encoding=3, text=[match.label])))
-    if fill_only:
-        wanted = [(key, frame) for key, frame in wanted if not _has_text(tags, key)]
-    catalog_key = f"TXXX:{CATALOG_ID_DESC}"
+    if id_only:
+        wanted = []
     wanted.append(
         (
-            catalog_key,
+            f"TXXX:{CATALOG_ID_DESC}",
             TXXX(encoding=3, desc=CATALOG_ID_DESC, text=[str(match.id)]),
         )
     )
@@ -229,14 +241,15 @@ def _write_frames(
         tags.add(frame)
 
     buffer = io.BytesIO(data)
-    tags.save(buffer, v2_version=4)
+    if tags.version[:2] == (2, 3):
+        # mutagen reads a v2.3 tag as v2.4 (TYER becomes TDRC, and so on).
+        # Saving it back as v2.3 keeps the file's own frames as they were,
+        # so a write changes only the frames in ``wanted``.
+        tags.update_to_v23()
+        tags.save(buffer, v2_version=3)
+    else:
+        tags.save(buffer, v2_version=4)
     return buffer.getvalue()
-
-
-def _has_text(tags: ID3, key: str) -> bool:
-    """Whether the file already has a non-blank value in a frame."""
-    frame = tags.get(key)
-    return frame is not None and any(str(t).strip() for t in frame.text)
 
 
 def _same(existing: Any, wanted: Any) -> bool:

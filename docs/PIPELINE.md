@@ -276,11 +276,12 @@ the run with a WARN until resolved.
 5. Not in the catalog (the same lookup as new-music) → left as it is,
    named (`not_in_catalog`).
 6. In the catalog and already carrying its tags → not written
-   (`already_tagged`). The backfill is **fill-only**: a field the file
-   already has a value for (title, artist, year, genre, BPM, label) keeps
-   it, the catalog only fills empty fields, and the catalog id is always
-   written. So a file with every field set and the catalog id is
-   `already_tagged`.
+   (`already_tagged`). The backfill writes **only the catalog id**
+   (`TXXX:CATALOG_ID`): no title, artist, year, genre, BPM, label or
+   comment frame changes, even when the file's field is empty, and the
+   dry-run report and record show only `catalog_id` changes. So a file
+   carrying the catalog id is `already_tagged`, and after a write run a dry
+   run of the same chunk shows every written file as `already_tagged`.
 7. Otherwise written in place (`music_safety.write_in_place`): no tag
    emptied; the audio of the new bytes byte-identical to the original's;
    the head revision kept forever; the new contents written over the same
