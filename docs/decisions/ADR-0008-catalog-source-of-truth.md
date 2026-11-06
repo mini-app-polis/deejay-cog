@@ -137,13 +137,17 @@ catalog (stats, summaries, the collection) uses the same rules.
 
 ## Decided with the owner, 2026-11-05
 
-1. **Genre is two-level:** about a dozen broad genres, each with optional
-   subgenres (for example R&B/Soul > Contemporary R&B). Every existing
-   catalog genre maps onto one; the mapping is reviewed with the owner
-   before the clean-up applies it.
-2. **Missing genres are filled** from the library files' own tags (mapped to
-   the vocabulary), then from an outside lookup (Spotify artist genres), and
-   what is left is listed for the owner to set in the editor.
+1. **Genre is two-level:** thirteen broad genres (Pop, R&B/Soul, Hip-Hop,
+   Dance/Electronic, Alternative/Indie, Rock, Blues, Country, Folk &
+   Acoustic, Jazz, Funk/Disco, Latin & World, Soundtrack & Seasonal), each
+   with optional subgenres (for example R&B/Soul > Soul). Every existing
+   catalog genre value maps onto one, by a mapping agreed with the owner;
+   values that are not genres (Miscellaneous, Other) are cleared, and
+   Instrumental moves to the version.
+2. **Missing genres are filled** from the library files' own tags (mapped
+   the same way), and what is left is listed for the owner to set in the
+   editor. An outside lookup is left for a later iteration, once every
+   song's identity is managed.
 3. **First display rules** (changeable later; a change reaches every file on
    the next sync):
    - Featured artists go in the artist: `Pink Sweat$ feat. Kehlani`.
