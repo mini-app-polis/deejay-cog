@@ -276,7 +276,11 @@ the run with a WARN until resolved.
 5. Not in the catalog (the same lookup as new-music) → left as it is,
    named (`not_in_catalog`).
 6. In the catalog and already carrying its tags → not written
-   (`already_tagged`).
+   (`already_tagged`). The backfill is **fill-only**: a field the file
+   already has a value for (title, artist, year, genre, BPM, label) keeps
+   it, the catalog only fills empty fields, and the catalog id is always
+   written. So a file with every field set and the catalog id is
+   `already_tagged`.
 7. Otherwise written in place (`music_safety.write_in_place`): no tag
    emptied; the audio of the new bytes byte-identical to the original's;
    the head revision kept forever; the new contents written over the same
