@@ -1,3 +1,10 @@
+## [2.15.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.15.1...v2.15.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* **library-backfill:** fill only empty tag fields and keep the file's own values ([5738f4a](https://github.com/mini-app-polis/deejay-cog/commit/5738f4ab12cca8e927dcb4c9900718d7f2af2ddf))
+
 ## [2.15.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.15.0...v2.15.1) (2026-11-05)
 
 
