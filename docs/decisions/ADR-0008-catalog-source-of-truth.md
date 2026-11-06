@@ -38,6 +38,10 @@ intake, which delivers into it). The system never deletes a library file and,
 as in ADR-0007, never renames or moves one. The catalog observes the library
 and follows it.
 
+The library is one Drive folder, `LIBRARY_ROOT_FOLDER_ID`, with everything
+under it. Other folders may be added later, so the registry records which
+library root each file is under rather than assuming one.
+
 ### 2. The catalog registers the library's files
 
 api-kaianolevine-com keeps a library registry: one row per Drive file in the
@@ -85,7 +89,9 @@ catalog (stats, summaries, the collection) uses the same rules.
   with when it changed. A sync run writes the result to every present file
   linked to an entry it affects that has not had it yet. Catalog edits and
   rule changes are the only way owned fields change once the library is
-  reconciled.
+  reconciled: a tag edited in a file by another tool (VirtualDJ can write
+  tags back) is not read back, and the next sync for that entry writes the
+  catalog's value over it.
 - **Fill up.** When a file has a value for a field the catalog leaves empty,
   the value goes up to the catalog. A value the catalog already has is kept,
   as the set import already does.
