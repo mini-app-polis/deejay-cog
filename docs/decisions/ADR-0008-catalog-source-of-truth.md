@@ -6,8 +6,8 @@ Date: 2026-11-05
 
 Accepted (owner, 2026-11-05). Builds on
 [ADR-0007](./ADR-0007-music-tagging-redesign.md): its safety rules hold for
-every write described here. Some decisions wait on the owner; they are listed
-under [Open decisions](#open-decisions).
+every write described here. The standards the catalog is cleaned to are
+[decided with the owner](#decided-with-the-owner-2026-11-05).
 
 ## Context
 
@@ -55,6 +55,12 @@ A song in the library that has never been played gets a catalog entry of its
 own, marked as coming from the library, with no plays. Play counts, stats and
 summaries count plays only, so these entries do not appear in them.
 
+A library entry is created only from a confident identification. A file
+without usable tags is identified by fingerprint first (the fingerprint
+function of ADR-0007, which looks the recording up in MusicBrainz); if that
+is not confident either, the file is listed for the owner to identify in the
+catalog editor, and no entry is made from it until he does.
+
 ### 3. The catalog owns how a song is written
 
 For the fields it owns, the catalog's value is the one every linked file
@@ -89,7 +95,8 @@ catalog (stats, summaries, the collection) uses the same rules.
   with when it changed. A sync run writes the result to every present file
   linked to an entry it affects that has not had it yet. Catalog edits and
   rule changes are the only way owned fields change once the library is
-  reconciled: a tag edited in a file by another tool (VirtualDJ can write
+  reconciled. Sync runs nightly: edits made during the day reach the files
+  overnight. A tag edited in a file by another tool (VirtualDJ can write
   tags back) is not read back, and the next sync for that entry writes the
   catalog's value over it.
 - **Fill up.** When a file has a value for a field the catalog leaves empty,
@@ -101,16 +108,18 @@ catalog (stats, summaries, the collection) uses the same rules.
 1. **Link.** The library backfill writes only `TXXX:CATALOG_ID` and registers
    each file it reaches. Nothing VirtualDJ shows changes. Every later step
    needs the link.
-2. **Set the standard and clean the catalog.** The owner fixes the open
-   decisions below; the catalog's entries are split into their parts
+2. **Set the standard and clean the catalog.** To the standards decided
+   below, the catalog's entries are split into their parts
    (version and featured artists out of the title and artist), genres are
    mapped, and duplicate entries are merged.
 3. **Reconcile.** A dry run lists, for every linked file, each owned field
    where file and catalog differ, grouped by kind of change (case only, a
    genre mapping, a different year, BPM precision, and so on), plus the
    values that would go up to the catalog. The owner approves kinds of
-   change, not files; the approved kinds are written with the catalog
-   winning. A dry run keeps its own position, so repeated dry runs step
+   change, not files, by going through each dry run in a working session;
+   the approved kinds are saved where the write run reads them (an
+   approvals file in the music-tagging state folder), and the write run
+   applies only those, with the catalog winning. A dry run keeps its own position, so repeated dry runs step
    through the whole library.
 4. **Steady state.** From then on the four flows run.
 
@@ -126,18 +135,35 @@ catalog (stats, summaries, the collection) uses the same rules.
   catalog entry but are different files). A file the owner deletes goes
   through the remove flow like any other.
 
-## Open decisions
+## Decided with the owner, 2026-11-05
 
-Waiting on the owner before step 2:
-
-1. The genre vocabulary: a short fixed list and what maps to each.
-2. The first display rules: where featured artists go (`Song (feat. X)` or
-   `A feat. X`), how a version is bracketed, and BPM precision (whole numbers
-   or one decimal). These can be changed later; a change rewrites every
-   file on the next sync.
-3. How several featured artists are joined (`X & Y`, `X, Y`).
-4. Whether the catalog owns anything beyond title, artist, year, genre, BPM
-   and label (for example key).
+1. **Genre is two-level:** about a dozen broad genres, each with optional
+   subgenres (for example R&B/Soul > Contemporary R&B). Every existing
+   catalog genre maps onto one; the mapping is reviewed with the owner
+   before the clean-up applies it.
+2. **Missing genres are filled** from the library files' own tags (mapped to
+   the vocabulary), then from an outside lookup (Spotify artist genres), and
+   what is left is listed for the owner to set in the editor.
+3. **First display rules** (changeable later; a change reaches every file on
+   the next sync):
+   - Featured artists go in the artist: `Pink Sweat$ feat. Kehlani`.
+   - Several featured artists, and several main artists, are joined with
+     commas: `Kelly Clarkson, Dolly Parton`; `Wale feat. Usher, Rick Ross,
+     Big Sean`.
+   - A version is shown in parentheses: `Attention (Lash Remix)`.
+   - BPM has one decimal: `95.5`.
+   - Capitalisation is kept as the artist styles it (`6 foot deep`,
+     `ILLENIUM`); no automatic case changes.
+4. **Owned fields** are title (with version), artist, year, genre and
+   subgenre, BPM and label. Nothing else is pushed to files.
+5. **The comment field is preserved:** never written, and each file's
+   comment is recorded in the library registry when the file is registered,
+   as a backup.
+6. **Each file keeps its own edit label.** Clean, explicit, radio-edit and
+   no-intro copies share a catalog entry, and the registry records each
+   file's edit label; its displayed title is the song's title followed by
+   that label in parentheses (`Baby What You Want Me To Do (No Intro
+   Edit)`), and a file with no label shows the song's title alone.
 
 ## Consequences
 
