@@ -52,6 +52,9 @@ class FakeApi:
     def lookup_catalog(self, payload: CatalogLookupRequest):
         return [self.answer for _ in payload.tracks]
 
+    def list_library_files(self, **_):
+        return []  # an empty library registry
+
 
 @pytest.fixture(autouse=True)
 def settings(monkeypatch: pytest.MonkeyPatch) -> None:

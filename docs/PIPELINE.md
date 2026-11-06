@@ -193,9 +193,16 @@ switching the flow off also stops files already queued.
    emptied, and the audio in the new bytes must be byte-identical to the
    original's (ID3v2 at the start, ID3v1, APEv2 and an appended ID3v2 at
    the end are stripped before comparing).
-2. If the destination already holds a file named `{title}_{artist}.<ext>`,
-   it is not overwritten: the original goes to needs-review and the run
-   reports a `name_collision`.
+2. The file is named `{title}_{artist}.<ext>` with the **main artist
+   only**: the artist tag up to a feat./ft./featuring credit, main artists
+   split on commas (ADR-0008 decision 9). When a file of that name is
+   already in the destination, or anywhere in the library (the API's
+   library registry, read once a run), the featured artists are added:
+   `{title}_{artist} feat. {featured}.<ext>`. If that is taken too, or there
+   are no featured artists to add, nothing is overwritten: the original
+   goes to needs-review and the run reports a `name_collision`. If the
+   registry cannot be read, the name cannot be checked, so the original
+   goes to needs-review as well.
 3. The tagged bytes are uploaded as a **new** file under that name into
    `NEW_MUSIC_DESTINATION_FOLDER_ID`, marked with the original's file id.
 4. The copy is downloaded again and its audio checked once more.

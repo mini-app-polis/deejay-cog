@@ -19,9 +19,13 @@ For each file, at most ``NEW_MUSIC_MAX_FILES_PER_RUN`` a run:
 An identified file is **copied**, never changed: its tagged bytes are
 uploaded as a new file named ``{title}_{artist}.<ext>`` into
 ``NEW_MUSIC_DESTINATION_FOLDER_ID``, and the original is then moved,
-unchanged, to ``NEW_MUSIC_ORIGINALS_FOLDER_ID``. A file that cannot be
-identified with confidence, or whose new name is already taken in the
-destination, is moved unchanged to ``NEW_MUSIC_REVIEW_FOLDER_ID``. Nothing
+unchanged, to ``NEW_MUSIC_ORIGINALS_FOLDER_ID``. The name carries the main
+artist only (the artist tag up to a feat./ft./featuring credit); when that
+name is already taken, in the destination or by any file in the library
+(the API's library registry), the featured artists are added. A file that
+cannot be identified with confidence, whose name is taken even so (or has
+no featured artists to add), or whose name cannot be checked because the
+registry cannot be read, is moved unchanged to ``NEW_MUSIC_REVIEW_FOLDER_ID``. Nothing
 is deleted and nothing is overwritten. This is the only flow that names a
 file; files already in the library are never renamed.
 
@@ -39,7 +43,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.api.contract import CatalogLookupRequest
@@ -179,17 +183,103 @@ def safe_name_part(text: str) -> str:
     return cleaned.strip(" .")
 
 
-def delivery_name(tags: dict[str, str], original_name: str) -> str | None:
-    """``{title}_{artist}.<ext>`` from the new tags, or None when either is
-    missing. The extension is the original's."""
+_FEAT = re.compile(r"\s*[\[(]?\s*\b(?:feat\.?|ft\.?|featuring)\s+", re.IGNORECASE)
+
+
+def split_artist(artist: str) -> tuple[list[str], list[str]]:
+    """The main artists and the featured artists an artist tag credits:
+    split at a feat./ft./featuring credit, then on commas.
+
+    "Wale feat. Usher, Rick Ross" -> (["Wale"], ["Usher", "Rick Ross"]).
+    """
+    head, *tail = _FEAT.split(artist, maxsplit=1)
+
+    def names(text: str) -> list[str]:
+        return [n.strip(" )]") for n in text.split(",") if n.strip(" )]")]
+
+    return names(head), names(tail[0]) if tail else []
+
+
+def delivery_names(tags: dict[str, str], original_name: str) -> list[str]:
+    """The names a delivered file may take, in order: ``{title}_{artist}``
+    with the main artist only, then, when the song has featured artists,
+    with them added (``{title}_{artist} feat. {featured}``). Empty when the
+    title or artist is missing. The extension is the original's."""
     title = safe_name_part(tags.get("title", ""))
-    artist = safe_name_part(tags.get("artist", ""))
+    main, featured = split_artist(tags.get("artist", ""))
+    artist = safe_name_part(", ".join(main))
     if not title or not artist:
-        return None
+        return []
     ext = os.path.splitext(original_name)[1].lower() or ".mp3"
     if not re.fullmatch(r"\.[a-z0-9]{1,5}", ext):
         ext = ".mp3"
-    return f"{title}_{artist}"[:_MAX_NAME_LENGTH].rstrip(" .") + ext
+
+    def named(credit: str) -> str:
+        return f"{title}_{credit}"[:_MAX_NAME_LENGTH].rstrip(" .") + ext
+
+    names = [named(artist)]
+    with_featured = safe_name_part(f"{artist} feat. {', '.join(featured)}")
+    if featured and named(with_featured) not in names:
+        names.append(named(with_featured))
+    return names
+
+
+def delivery_name(tags: dict[str, str], original_name: str) -> str | None:
+    """The first name a delivered file may take, or None."""
+    names = delivery_names(tags, original_name)
+    return names[0] if names else None
+
+
+class LibraryFiles(Protocol):
+    """The part of the API client that lists the library registry."""
+
+    def list_library_files(
+        self,
+        *,
+        present: bool | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[Any]:
+        """One page of registered library files."""
+        ...
+
+
+class RegistryUnavailable(Exception):  # noqa: N818 — named for what happened
+    """The library registry could not be read, so a name cannot be checked."""
+
+
+class LibraryNames:
+    """The file names already in the library, from the API's library
+    registry: read once, on the first name checked, then kept for the run."""
+
+    PAGE = 500
+
+    def __init__(self, api: LibraryFiles | None) -> None:
+        self.api = api
+        self._names: set[str] | None = None
+
+    def taken(self, name: str) -> bool:
+        """Whether a present library file already has this name (any case)."""
+        if self.api is None:
+            return False
+        if self._names is None:
+            names: set[str] = set()
+            offset = 0
+            try:
+                while True:
+                    page = self.api.list_library_files(
+                        present=True, limit=self.PAGE, offset=offset
+                    )
+                    names.update(
+                        str(row.path).rsplit("/", 1)[-1].lower() for row in page
+                    )
+                    if len(page) < self.PAGE:
+                        break
+                    offset += self.PAGE
+            except Exception as exc:
+                raise RegistryUnavailable(f"{type(exc).__name__}: {exc}") from exc
+            self._names = names
+        return name.lower() in self._names
 
 
 def is_mp3(downloaded: Any, name: str) -> bool:
@@ -215,11 +305,13 @@ class Intake:
         folders: IntakeFolders,
         record: RunRecord,
         summary: IntakeSummary,
+        library: LibraryNames | None = None,
     ) -> None:
         self.drive = drive
         self.folders = folders
         self.record = record
         self.summary = summary
+        self.library = library or LibraryNames(None)
 
     @property
     def mode(self) -> FlowMode:
@@ -257,26 +349,43 @@ class Intake:
         check_no_emptied_tags(original, tagged)
         check_audio_unchanged(original, tagged)
         new_tags = tag_snapshot(tagged)
-        new_name = delivery_name(new_tags, name)
-        if new_name is None:
+        candidates = delivery_names(new_tags, name)
+        if not candidates:
             self.review(file_id, name, original, "no title or artist to name it by")
             return
 
         earlier = self.drive.find_files_by_app_property(
             self.folders.destination, key=SOURCE_PROPERTY, value=file_id
         )
-        if not earlier and self.drive.find_file_in_folder(
-            self.folders.destination, name=new_name
-        ):
-            self.summary.collisions.append(f"{name} -> {new_name}")
-            self.review(
-                file_id,
-                name,
-                original,
-                f"name collision: {new_name} is already in the destination",
-                count=False,
+        if earlier:
+            # The copy an earlier run made keeps the name it was given.
+            new_name = str(
+                file_meta(self.drive, earlier[0]).get("name") or candidates[0]
             )
-            return
+        else:
+            try:
+                free = [c for c in candidates if not self._name_taken(c)]
+            except RegistryUnavailable as exc:
+                self.review(
+                    file_id,
+                    name,
+                    original,
+                    f"the library registry could not be read to check the name ({exc})",
+                )
+                return
+            if not free:
+                self.summary.collisions.append(f"{name} -> {candidates[-1]}")
+                tried = " or ".join(candidates)
+                self.review(
+                    file_id,
+                    name,
+                    original,
+                    f"name collision: {tried} is already in the library or the "
+                    "destination",
+                    count=False,
+                )
+                return
+            new_name = free[0]
 
         entry = self.record.add(
             RecordEntry(
@@ -339,6 +448,12 @@ class Intake:
         entry.move = {"from": self.folders.input, "to": self.folders.originals}
         entry.state = "done"
         self.record.checkpoint()
+
+    def _name_taken(self, new_name: str) -> bool:
+        """Whether a file of this name is in the destination or the library."""
+        if self.drive.find_file_in_folder(self.folders.destination, name=new_name):
+            return True
+        return self.library.taken(new_name)
 
     def review(
         self,
@@ -490,6 +605,7 @@ def run_intake(
     mode: FlowMode,
     work: Callable[[Intake], None],
     drive: Any | None = None,
+    library: LibraryFiles | None = None,
 ) -> IntakeSummary:
     """One run of either stage: the mode, the settings, the run record, the
     report, and the stop on an audio mismatch, around ``work``."""
@@ -516,7 +632,7 @@ def run_intake(
                 FLOW_NAME, run_id, mode, stage=stage, folders=folders.as_dict()
             ).attach(drive, folders.state)
             summary.record_name = record.file_name
-            intake = Intake(drive, folders, record, summary)
+            intake = Intake(drive, folders, record, summary, LibraryNames(library))
             status = "failed"
             try:
                 work(intake)
@@ -558,18 +674,19 @@ def new_music(*, run_id: str | None = None) -> IntakeSummary:
     ``run_id`` is the queue message id when the Lambda worker runs this.
     """
     mode = flow_mode(MODE_VAR)
+    api = api_client(base_url=api_base_url().strip() or None)
 
     def work(intake: Intake) -> None:
         files = list_audio_files(intake.drive, intake.folders.input)
         intake_files(
             intake,
-            api_client(base_url=api_base_url().strip() or None),
+            api,
             files,
             max_files=max_files_per_run(),
             fingerprint_jobs=fingerprint_jobs_from_env(),
         )
 
-    return run_intake(stage="intake", run_id=run_id, mode=mode, work=work)
+    return run_intake(stage="intake", run_id=run_id, mode=mode, work=work, library=api)
 
 
 def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:

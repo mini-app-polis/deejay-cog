@@ -568,15 +568,17 @@ def intake_by_fingerprint(
     mode = stricter(sender_mode, flow_mode(new_music.MODE_VAR))
     log.info("deejay-fingerprint: new-music file %s in %s", name or file_id, mode.value)
 
+    client = (
+        api if api is not None else api_client(base_url=api_base_url().strip() or None)
+    )
+
     def work(intake: new_music.Intake) -> None:
         intake.summary.scanned = 1
         threshold = min_confidence()
         try:
             intake_fingerprinted(
                 intake,
-                api
-                if api is not None
-                else api_client(base_url=api_base_url().strip() or None),
+                client,
                 identifier
                 if identifier is not None
                 else build_identifier(threshold=threshold),
@@ -590,7 +592,12 @@ def intake_by_fingerprint(
             intake.summary.failed.append(f"{name or file_id} ({exc})")
 
     return new_music.run_intake(
-        stage="fingerprint", run_id=run_id, mode=mode, work=work, drive=drive
+        stage="fingerprint",
+        run_id=run_id,
+        mode=mode,
+        work=work,
+        drive=drive,
+        library=client,  # type: ignore[arg-type]
     )
 
 
