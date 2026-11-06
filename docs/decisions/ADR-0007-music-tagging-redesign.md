@@ -246,6 +246,14 @@ review before it acts and to undo after.
     is named in the report as needing fingerprinting and **not** sent to
     the fingerprint function, whose stage would write MusicBrainz's tags;
     a file the catalog does not know is left as it is (decision 2).
+  - The backfill writes only the link: `TXXX:CATALOG_ID`. No title,
+    artist, year, genre, BPM, label or comment frame changes, even when
+    the file's field is empty, and every other frame is left as it is. A
+    file already carrying the id is not written, so a dry run after a write
+    run shows every written file as already tagged. Catalog values reach
+    the file later, once the catalog is clean
+    ([ADR-0008](./ADR-0008-catalog-source-of-truth.md)); new-music intake
+    still writes the catalog's values.
   - A dry run does not move the cursor, so the chunk it showed is the one
     the next write run writes.
   - An audio mismatch leaves the cursor on that file, so the next run

@@ -39,9 +39,9 @@ named. No usable title or artist → skipped and named as needing
 fingerprinting (library files are **not** sent to the fingerprint function:
 that writes MusicBrainz tags). Not in the catalog → skipped, named. In the
 catalog and already carrying its tags → nothing written. Otherwise written
-in place, fill-only: a field the file already has a value for keeps it (the
-catalog only fills empty fields), and the catalog id is always written; with the head revision kept forever, the audio checked before and
-after, and the original restored if the check after fails.
+in place, writing only ``TXXX:CATALOG_ID`` (no other frame changes, even an
+empty field), with the head revision kept forever, the audio checked before
+and after, and the original restored if the check after fails.
 
 **Safety:** ``LIBRARY_BACKFILL_MODE`` is ``off`` unless ``dry-run`` or
 ``write``. A dry run writes nothing to any music file, does not move the
@@ -519,8 +519,8 @@ class Backfill:
                 detail=f"looked up {row['title']!r} by {row['artist']!r}",
             )
             return "not_in_catalog"
-        # A library file keeps every value it already has: fill only.
-        tagged = write_catalog_tags(data, match, fill_only=True)
+        # A library file gets only the link to its catalog entry.
+        tagged = write_catalog_tags(data, match, id_only=True)
         if tagged is None:
             self.record.add(
                 RecordEntry(
