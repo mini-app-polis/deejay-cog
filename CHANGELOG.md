@@ -1,3 +1,17 @@
+# [2.16.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.15.3...v2.16.0) (2026-11-06)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 8.2.0 ([f9ab496](https://github.com/mini-app-polis/deejay-cog/commit/f9ab496637fa76c95a405be4f4b623b4b080af19))
+* **music-tags:** keep a v2.3 tag v2.3 so an id-only write leaves every other frame byte-identical ([a572de5](https://github.com/mini-app-polis/deejay-cog/commit/a572de595f454c76e92e8aeb23046f19b7951649))
+* **music-tags:** repair UTF-8 text marked Latin-1 when reading tags ([b603b33](https://github.com/mini-app-polis/deejay-cog/commit/b603b338190b89c0e6d935bbc7bad20ef1018ada))
+
+
+### Features
+
+* **library-backfill:** write only TXXX:CATALOG_ID to matched files ([6945b0a](https://github.com/mini-app-polis/deejay-cog/commit/6945b0ad1a70443abd636728497bbe2c13df5c71))
+
 ## [2.15.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.15.2...v2.15.3) (2026-11-06)
 
 
