@@ -116,7 +116,22 @@ def _text(tags: ID3, frame_id: str) -> str:
     frame = tags.get(frame_id)
     if frame is None or not getattr(frame, "text", None):
         return ""
-    return str(frame.text[0]).strip()
+    text = str(frame.text[0])
+    if getattr(frame, "encoding", None) == 0:
+        text = _repair_latin1(text)
+    return text.strip()
+
+
+def _repair_latin1(text: str) -> str:
+    """The text as UTF-8 when a Latin-1 frame holds valid UTF-8 bytes.
+
+    Some taggers write UTF-8 but mark the frame Latin-1. Genuine Latin-1
+    text is almost never valid UTF-8, so it is returned unchanged.
+    """
+    try:
+        return text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
 
 
 def read_tag_row(data: bytes) -> dict[str, str]:
