@@ -34,8 +34,10 @@ added to and removed from the library as it is today.
 
 Music is added to and removed from the library by putting files into, or
 taking them out of, the library folder in Drive (or through the new-music
-intake, which delivers into it). The system never deletes a library file and,
-as in ADR-0007, never renames or moves one. The catalog observes the library
+intake, which delivers into it). As in ADR-0007, the system never renames or
+moves a library file, and it removes one only when the owner picks the keeper
+of a duplicate group on the WCS site (decision 7), and then only to Drive's
+trash. The catalog observes the library
 and follows it.
 
 The library is one Drive folder, `LIBRARY_ROOT_FOLDER_ID`, with everything
@@ -128,12 +130,17 @@ catalog (stats, summaries, the collection) uses the same rules.
 - **Editing the catalog** happens on the WCS website (wcs.kaianolevine.com):
   an owner-only page to edit an entry's parts and the display rules, through
   the API's catalog edit.
-- **Duplicates** are removed by the owner in Drive. The catalog only helps
-  find them: a report groups the files that look like copies of one song
-  (same catalog entry, checksum or tags), leaving apart the ones that are
-  kept on purpose (a no-intro edit, or a clean and an explicit copy, share a
-  catalog entry but are different files). A file the owner deletes goes
-  through the remove flow like any other.
+- **Duplicates** are handled on the WCS site too. A report groups the files
+  that look like copies of one song (same catalog entry, checksum or tags),
+  leaving apart the ones that are kept on purpose (a no-intro edit, or a
+  clean and an explicit copy, share a catalog entry but are different
+  files). On a duplicates page the owner picks the keeper of a group; the
+  catalog merges the group's entries and links (keeping every play), and the
+  other copies are moved to Drive's trash, where they stay recoverable. A
+  file the owner deletes in Drive himself goes through the remove flow like
+  any other.
+- **Signing in** to the editor and the duplicates page uses the ecosystem's
+  existing identity sign-in, with an owner-only scope for catalog writes.
 
 ## Decided with the owner, 2026-11-05
 
@@ -182,6 +189,24 @@ catalog (stats, summaries, the collection) uses the same rules.
     its tests and a dry run before it writes; after a first write run, a
     dry run of the same chunk must show every written file as already
     tagged with every other frame unchanged.
+11. **Display rules live in the database** and are edited on the WCS site;
+    a rule change is tracked like an entry edit.
+12. **Splitting entries into parts:** clear patterns (feat., ft., featuring;
+    version words such as Remix, Acoustic, Live) split automatically and are
+    approved as one kind; anything ambiguous is reviewed entry by entry.
+13. **Merging duplicate entries:** the most-played entry's values win, its
+    empty fields fill from the others, and every merge is reviewed.
+14. **Matching keeps every past spelling.** Each entry remembers every title
+    and artist it has been matched under, so set imports match the current
+    display or any earlier spelling, and nothing that matched stops matching.
+15. **Reconcile groups differences into twelve kinds:** case or punctuation
+    only; featured artist moved; artist joiner; version brackets; genre
+    remapped; genre filled where the file is empty; year differs; BPM
+    rounding only (0.5 or less apart); BPM differs; label differs; a file
+    value going up to an empty catalog field; anything else, reviewed file by
+    file. Once a kind is approved, the catalog wins, for year and BPM too.
+16. **Adds and removes are noticed nightly,** from Drive's change feed, in
+    the same nightly run as the sync.
 
 ## Consequences
 
