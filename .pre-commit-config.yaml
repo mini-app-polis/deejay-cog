@@ -16,3 +16,14 @@ repos:
     rev: v8.28.0
     hooks:
       - id: gitleaks
+  # ADR-0016. The same command CI runs as `facts check`: regenerates
+  # facts.json before every commit, and stops the commit when it changed
+  # (add facts.json and commit again).
+  - repo: local
+    hooks:
+      - id: facts
+        name: facts generate
+        entry: uvx --from miniapppolis-common-utils facts generate
+        language: system
+        pass_filenames: false
+        always_run: true
