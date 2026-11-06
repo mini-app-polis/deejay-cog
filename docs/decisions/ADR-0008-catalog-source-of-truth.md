@@ -114,9 +114,17 @@ catalog (stats, summaries, the collection) uses the same rules.
    through the whole library.
 4. **Steady state.** From then on the four flows run.
 
-Duplicate files are found and handled separately, with the owner's approval
-for each kind of duplicate (a no-intro edit, or a clean and an explicit copy,
-share a catalog entry but are kept).
+### 7. Where editing and clean-up happen
+
+- **Editing the catalog** happens on the WCS website (wcs.kaianolevine.com):
+  an owner-only page to edit an entry's parts and the display rules, through
+  the API's catalog edit.
+- **Duplicates** are removed by the owner in Drive. The catalog only helps
+  find them: a report groups the files that look like copies of one song
+  (same catalog entry, checksum or tags), leaving apart the ones that are
+  kept on purpose (a no-intro edit, or a clean and an explicit copy, share a
+  catalog entry but are different files). A file the owner deletes goes
+  through the remove flow like any other.
 
 ## Open decisions
 
@@ -146,6 +154,8 @@ Waiting on the owner before step 2:
   structured song parts with display rules, change tracking on entries and
   rules, and a wider catalog edit; watcher-cog watches
   the library folder; deejay-cog gains link, reconcile and sync runs.
+- VirtualDJ reloads tags it finds changed, so a sync shows up there without
+  re-adding tracks.
 - Every visible change to the library is reviewed before it is written:
   first as kinds of change in step 3, then as catalog edits.
 - Until step 3 is done, files and catalog can disagree; the link-only write
