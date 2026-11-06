@@ -10,7 +10,20 @@ from pathlib import Path
 
 import pytest
 from mini_app_polis.api.contract import CatalogLookupRequest, CatalogMatch
-from mutagen.id3 import APIC, COMM, ID3, TALB, TBPM, TCON, TDRC, TIT2, TPE1, TPUB, TXXX
+from mutagen.id3 import (
+    APIC,
+    COMM,
+    ID3,
+    TALB,
+    TBPM,
+    TCON,
+    TDRC,
+    TIT2,
+    TPE1,
+    TPUB,
+    TXXX,
+    TYER,
+)
 
 from deejay_cog import music_tags
 from deejay_cog.music_safety import AudioChanged
@@ -303,6 +316,64 @@ def test_id_only_leaves_every_other_frame_identical() -> None:
             assert after[key].text == [str(_CATALOG_ID)]
         else:
             assert after[key] == before[key]
+
+
+def _mp3_v23(*frames) -> bytes:
+    """An MP3 whose ID3 tag is v2.3, as many taggers write it."""
+    tags = ID3()
+    for frame in frames:
+        tags.add(frame)
+    buffer = io.BytesIO(_AUDIO)
+    tags.save(buffer, v2_version=3)
+    return buffer.getvalue()
+
+
+def _raw_frames(data: bytes) -> dict[str, bytes]:
+    """Each frame of a v2.3 tag as the bytes it is stored as, by frame key."""
+    tags = ID3(io.BytesIO(data), translate=False)
+    assert tags.version[:2] == (2, 3)
+    raw: dict[str, bytes] = {}
+    body = data[10 : 10 + tags.size]
+    offset = 0
+    while offset + 10 <= len(body) and body[offset : offset + 4] != b"\x00" * 4:
+        size = int.from_bytes(body[offset + 4 : offset + 8], "big")
+        frame = body[offset : offset + 10 + size]
+        raw[frame[:4].decode() + ":" + str(offset)] = frame
+        offset += 10 + size
+    return raw
+
+
+def test_id_only_keeps_a_v23_file_v23_with_its_other_frames_byte_identical() -> None:
+    original = _mp3_v23(
+        TIT2(encoding=1, text=["Caf\u00e9"]),
+        TPE1(encoding=1, text=["y"]),
+        TYER(encoding=0, text=["2019"]),
+        COMM(encoding=1, lang="eng", desc="", text=["a comment"]),
+        APIC(encoding=0, mime="image/png", type=3, desc="", data=b"\x89PNG-bytes"),
+        TXXX(encoding=1, desc="MOOD", text=["dark"]),
+    )
+
+    written = music_tags.write_catalog_tags(original, _match(), id_only=True)
+
+    assert written is not None
+    assert ID3(io.BytesIO(written), translate=False).version[:2] == (2, 3)
+    after = set(_raw_frames(written).values())
+    for frame in _raw_frames(original).values():
+        assert frame in after
+    tags = ID3(io.BytesIO(written), translate=False)
+    assert "TDRC" not in tags
+    assert tags[f"TXXX:{music_tags.CATALOG_ID_DESC}"].text == [str(_CATALOG_ID)]
+
+
+def test_a_v23_file_with_the_catalog_id_written_needs_nothing_more() -> None:
+    once = music_tags.write_catalog_tags(
+        _mp3_v23(TIT2(encoding=1, text=["x"]), TPE1(encoding=1, text=["y"])),
+        _match(),
+        id_only=True,
+    )
+    assert once is not None
+
+    assert music_tags.write_catalog_tags(once, _match(), id_only=True) is None
 
 
 # ---------------------------------------------------------------------------

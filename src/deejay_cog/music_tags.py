@@ -241,7 +241,14 @@ def _write_frames(
         tags.add(frame)
 
     buffer = io.BytesIO(data)
-    tags.save(buffer, v2_version=4)
+    if tags.version[:2] == (2, 3):
+        # mutagen reads a v2.3 tag as v2.4 (TYER becomes TDRC, and so on).
+        # Saving it back as v2.3 keeps the file's own frames as they were,
+        # so a write changes only the frames in ``wanted``.
+        tags.update_to_v23()
+        tags.save(buffer, v2_version=3)
+    else:
+        tags.save(buffer, v2_version=4)
     return buffer.getvalue()
 
 
