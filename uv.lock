@@ -970,16 +970,16 @@ wheels = [
 
 [[package]]
 name = "miniapppolis-common-utils"
-version = "8.0.1"
+version = "8.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6b/8b/3607a803c64912e0da1ed1dda5f10bc996010f40bc23015a0c1e8db0b164/miniapppolis_common_utils-8.0.1.tar.gz", hash = "sha256:5687796912936d8032d7f7d6d7752ceed9e8d038633ed505b4af8cda35758aee", size = 500631, upload-time = "2026-11-05T23:48:50.302Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fc/43/60afaeffd1bebc41f754d653efae5c60c0678caf7be7c27bb42feb57309f/miniapppolis_common_utils-8.1.0.tar.gz", hash = "sha256:a55382deb4d23af55e8f48c702f27d346ebf397a492bc6f0b57c9daf0cf5ddf1", size = 501157, upload-time = "2026-11-06T00:32:28.077Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/70/95/593f0ee49e5d7ec138cda0b2905811a4789241e95e8407a53b9a783afe61/miniapppolis_common_utils-8.0.1-py3-none-any.whl", hash = "sha256:eb85728c59f7c4ae1a56bade428d7ff5ce65c0eae06b1782f9fcb0d1a0f55709", size = 230263, upload-time = "2026-11-05T23:48:48.776Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/36/cd97f2adb82b4b4d2c0bd1abc779d9dad23d5239d64d9e3331070e1cfe51/miniapppolis_common_utils-8.1.0-py3-none-any.whl", hash = "sha256:db14c72dba6359d6c59ed01e17eaa0102d82fd09d946ec78f795a52b399c33b4", size = 230266, upload-time = "2026-11-06T00:32:26.684Z" },
 ]
 
 [package.optional-dependencies]
