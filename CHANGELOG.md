@@ -1,3 +1,10 @@
+# [2.18.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.17.0...v2.18.0) (2026-11-06)
+
+
+### Features
+
+* **new-music:** name files by the main artist, adding featured artists only to avoid a clash ([ed528d2](https://github.com/mini-app-polis/deejay-cog/commit/ed528d24d3a6242ef01c764462284411db8f52df))
+
 # [2.17.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.16.0...v2.17.0) (2026-11-06)
 
 
