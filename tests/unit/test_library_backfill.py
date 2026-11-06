@@ -12,7 +12,11 @@ from unittest.mock import MagicMock
 
 import pytest
 from mini_app_polis import pipeline_status
-from mini_app_polis.api.contract import CatalogLookupRequest, CatalogMatch
+from mini_app_polis.api.contract import (
+    CatalogLookupRequest,
+    CatalogMatch,
+    LibraryFileRegister,
+)
 from mini_app_polis.lambda_worker import RunOutOfTime
 from music_fakes import AUDIO, DriveItem, FakeDrive, mp3
 from mutagen.id3 import TALB, TIT2, TPE1
@@ -50,10 +54,22 @@ def _song(title: str = "temple", artist: str = "thomas gold", **kw) -> bytes:
 class FakeApi:
     answers: dict[str, CatalogMatch | None] = field(default_factory=dict)
     requests: list[CatalogLookupRequest] = field(default_factory=list)
+    #: The library registry: rows by Drive file id, as registered last.
+    registry: dict[str, LibraryFileRegister] = field(default_factory=dict)
+    registrations: list[LibraryFileRegister] = field(default_factory=list)
+    #: Raised by every registration while set.
+    registry_down: Exception | None = None
 
     def lookup_catalog(self, payload: CatalogLookupRequest):
         self.requests.append(payload)
         return [self.answers.get(t.title.lower()) for t in payload.tracks]
+
+    def register_library_file(self, payload: LibraryFileRegister):
+        if self.registry_down is not None:
+            raise self.registry_down
+        self.registrations.append(payload)
+        self.registry[payload.drive_file_id] = payload
+        return payload
 
 
 @pytest.fixture
@@ -825,3 +841,115 @@ def test_a_dry_backfill_run_cannot_be_rolled_back(
 
 
 _real_write_catalog_tags = flow.write_catalog_tags
+
+
+# ---------------------------------------------------------------------------
+# The library registry
+# ---------------------------------------------------------------------------
+
+
+def test_a_matched_file_is_registered_with_its_link_label_and_comment(
+    settings, wired, drive, api: FakeApi
+) -> None:
+    file_id = drive.add(
+        "Song_Artist.mp3",
+        ROOT,
+        _song(
+            "song 0 (No Intro Edit)",
+            "artist",
+        ),
+    )
+    api.answers["song 0 (no intro edit)"] = _match("Song 0", "Artist")
+    data = drive.items[file_id].data
+    drive.items[file_id].data = rb_comment(data, "cue at 0:32")
+
+    summary = flow.library_backfill(run_id="m-1")
+
+    assert summary.outcomes["written"] == ["Song_Artist.mp3"]
+    assert summary.registered == 1
+    row = api.registry[file_id]
+    assert row.library_root_id == ROOT
+    assert row.path == "Song_Artist.mp3"
+    assert row.identification_status == "identified"
+    assert row.catalog_id == _CATALOG_ID
+    assert row.edit_label == "No Intro Edit"
+    assert row.comment_backup == "cue at 0:32"
+    # The row describes the file as it is now: the written bytes.
+    assert row.size_bytes == len(drive.items[file_id].data)
+    assert row.duration_secs is not None
+
+
+def test_a_file_the_catalog_does_not_have_is_registered_unidentified(
+    settings, wired, drive, api: FakeApi
+) -> None:
+    file_id = drive.add("x.mp3", ROOT, _song("nothing known", "nobody"))
+    untagged = drive.add("y.mp3", ROOT, _song("", ""))
+
+    flow.library_backfill(run_id="m-1")
+
+    assert api.registry[file_id].identification_status == "unidentified"
+    assert api.registry[file_id].catalog_id is None
+    assert api.registry[untagged].identification_status == "unidentified"
+
+
+def test_a_dry_run_registers_files_but_writes_no_music(
+    settings, wired, drive, api: FakeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(flow.MODE_VAR, "dry-run")
+    ids = _library(drive, 2)
+    before = {i: drive.items[i].data for i in ids}
+
+    flow.library_backfill(run_id="d-1")
+
+    assert set(api.registry) == set(ids)
+    assert all(api.registry[i].catalog_id == _CATALOG_ID for i in ids)
+    assert {i: drive.items[i].data for i in ids} == before
+
+
+def test_a_rerun_updates_the_same_rows(settings, wired, drive, api: FakeApi) -> None:
+    ids = _library(drive, 1)
+    flow.library_backfill(run_id="m-1")
+    (item,) = [i for i in drive.in_folder(STATE) if i.name == flow.MANIFEST_NAME]
+    item.trashed = True  # start over over the same library
+
+    flow.library_backfill(run_id="m-2")
+
+    assert [r.drive_file_id for r in api.registrations] == ids * 2
+    assert len(api.registry) == 1
+
+
+def test_a_failed_registration_is_reported_and_retried_next_run(
+    settings, wired, drive, api: FakeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(flow.CHUNK_SIZE_VAR, "1")
+    ids = _library(drive, 2)
+    api.registry_down = RuntimeError("API down")
+
+    first = flow.library_backfill(run_id="m-1")
+
+    # The run carried on: the file was written and the cursor moved.
+    assert first.outcomes["written"] == ["00 song.mp3"]
+    assert first.registry_failed == ["00 song.mp3 (RuntimeError: API down)"]
+    assert _cursor(drive)["registry_retry"] == [ids[0]]
+    assert _cursor(drive)["position"] == 1
+
+    api.registry_down = None
+    second = flow.library_backfill(run_id="m-2")
+
+    assert set(api.registry) == set(ids)
+    assert api.registry[ids[0]].catalog_id == _CATALOG_ID  # read from its tag
+    assert _cursor(drive)["registry_retry"] == []
+    assert second.registered == 2
+
+
+def rb_comment(data: bytes, text: str) -> bytes:
+    """``data`` with a comment frame added."""
+    import io
+
+    from mutagen.id3 import COMM, ID3
+
+    tags = ID3(io.BytesIO(data))
+    tags.add(COMM(encoding=3, lang="eng", desc="", text=[text]))
+    buffer = io.BytesIO(data)
+    tags.save(buffer, v2_version=4)
+    return buffer.getvalue()

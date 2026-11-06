@@ -460,3 +460,32 @@ def test_a_write_that_would_change_the_audio_is_refused(monkeypatch) -> None:
         music_tags.tag_file(drive, FakeApi(_match()), "f1")
 
     assert drive.updates == []
+
+
+@pytest.mark.parametrize(
+    ("title", "label"),
+    [
+        ("Song (No Intro Edit)", "No Intro Edit"),
+        ("Song [Clean]", "Clean"),
+        ("Song (super clean)", "Super Clean"),
+        ("Song - Radio Edit", "Radio Edit"),
+        ("Song (Explicit)", "Explicit"),
+        ("Song (Lash Remix)", None),
+        ("Song", None),
+    ],
+)
+def test_a_files_edit_label_is_read_from_its_title(
+    title: str, label: str | None
+) -> None:
+    assert music_tags.edit_label(title) == label
+
+
+def test_the_comment_and_link_are_read_from_the_tags() -> None:
+    data = _mp3(
+        COMM(encoding=3, lang="eng", desc="", text=["cue at 0:32"]),
+        TXXX(encoding=3, desc=music_tags.CATALOG_ID_DESC, text=[str(_CATALOG_ID)]),
+    )
+    assert music_tags.comment_text(data) == "cue at 0:32"
+    assert music_tags.linked_catalog_id(data) == str(_CATALOG_ID)
+    assert music_tags.comment_text(_mp3()) == ""
+    assert music_tags.linked_catalog_id(_mp3()) == ""

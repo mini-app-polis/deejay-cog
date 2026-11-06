@@ -23,6 +23,7 @@ from __future__ import annotations
 import enum
 import io
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -43,6 +44,7 @@ from mutagen.id3 import (
     TXXX,
     ID3NoHeaderError,
 )
+from mutagen.mp3 import MP3
 
 from deejay_cog.ingest_to_api import build_ingest_tracks
 from deejay_cog.music_safety import check_audio_unchanged
@@ -151,6 +153,60 @@ def read_tag_row(data: bytes) -> dict[str, str]:
         "bpm": _text(tags, "TBPM"),
         "year": year[:4] if year[:4].isdigit() else "",
     }
+
+
+#: Release labels a file's title may carry: copies with different labels are
+#: one song in the catalog, and each file keeps its own label.
+EDIT_LABELS = (
+    "Super Clean",
+    "Clean Version",
+    "Clean",
+    "Explicit Version",
+    "Explicit",
+    "Dirty",
+    "Radio Edit",
+    "No Intro Edit",
+    "Intro Edit",
+    "Edited",
+)
+_LABEL_PART = re.compile(r"[\[(]([^\])]*)[\])]|\s+-\s+(.*)$")
+
+
+def edit_label(title: str) -> str | None:
+    """The release label in a file's title ("Song (No Intro Edit)" -> "No
+    Intro Edit"), or None when it carries none."""
+    for match in _LABEL_PART.finditer(title):
+        part = " ".join((match.group(1) or match.group(2) or "").split())
+        for label in EDIT_LABELS:
+            if part.lower() == label.lower():
+                return label
+    return None
+
+
+def comment_text(data: bytes) -> str:
+    """The file's comment frame, as text: empty when it has none."""
+    tags = _load(data)
+    frames = tags.getall("COMM")
+    for frame in frames:
+        text = " ".join(str(t) for t in frame.text).strip()
+        if text:
+            return text
+    return ""
+
+
+def linked_catalog_id(data: bytes) -> str:
+    """The catalog entry the file is linked to (``TXXX:CATALOG_ID``), or ""."""
+    return _text(_load(data), f"TXXX:{CATALOG_ID_DESC}")
+
+
+def duration_secs(data: bytes) -> float | None:
+    """The audio's length in seconds, or None when it cannot be read."""
+    try:
+        info = MP3(io.BytesIO(data)).info
+    except Exception:  # noqa: BLE001 — a length is a nice-to-have
+        return None
+    length = getattr(info, "length", None)
+    return float(length) if length else None
 
 
 def ingest_track(row: dict[str, str]) -> IngestTrack | None:

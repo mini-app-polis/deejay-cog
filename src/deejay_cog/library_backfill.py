@@ -43,6 +43,15 @@ in place, writing only ``TXXX:CATALOG_ID`` (no other frame changes, even an
 empty field), with the head revision kept forever, the audio checked before
 and after, and the original restored if the check after fails.
 
+**Registry:** every MP3 the run reads, in ``dry-run`` and ``write``, is
+registered in the API's library registry (``POST /v1/catalog/library/files``):
+its Drive id, library root, path, size, md5, duration, the catalog entry it
+is linked to (identified) or none (unidentified), the release label its title
+carries, and its comment frame as a backup. Registering never changes a music
+file, and a re-run updates the same row. A registration that fails does not
+stop the run: the file is named in the report and, in a ``write`` run, kept in
+the cursor's ``registry_retry`` and registered again at the start of the next.
+
 **Safety:** ``LIBRARY_BACKFILL_MODE`` is ``off`` unless ``dry-run`` or
 ``write``. A dry run writes nothing to any music file, does not move the
 cursor (so the same chunk can be reviewed and then written) and saves the
@@ -59,13 +68,18 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import uuid
 from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Any
+from typing import Any, Protocol
 
 from mini_app_polis import logger as logger_mod
-from mini_app_polis.api.contract import CatalogLookupRequest
+from mini_app_polis.api.contract import (
+    CatalogLookupRequest,
+    LibraryFile,
+    LibraryFileRegister,
+)
 from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
@@ -89,13 +103,18 @@ from deejay_cog.music_safety import (
     file_meta,
     flow_mode,
     local_run_id,
+    md5,
     tag_snapshot,
     update_contents,
     write_in_place,
 )
 from deejay_cog.music_tags import (
     CatalogLookup,
+    comment_text,
+    duration_secs,
+    edit_label,
     ingest_track,
+    linked_catalog_id,
     read_tag_row,
     write_catalog_tags,
 )
@@ -209,6 +228,14 @@ def chunk_size_setting() -> int | str:
 # ---------------------------------------------------------------------------
 # State files in the state folder
 # ---------------------------------------------------------------------------
+
+
+class LibraryRegistry(Protocol):
+    """The part of the API client the registry calls use."""
+
+    def register_library_file(self, payload: LibraryFileRegister) -> LibraryFile:
+        """Register a library file, or bring its row up to date."""
+        ...
 
 
 class StateProblem(Exception):  # noqa: N818 — named for what it is
@@ -395,6 +422,10 @@ class BackfillSummary:
     restarted: bool = False
     done: bool = False
     aborted: str = ""
+    registered: int = 0
+    registry_failed: list[str] = field(default_factory=list)
+    #: File ids whose registration failed this run, to try again.
+    registry_retry: set[str] = field(default_factory=set)
 
     def add(self, outcome: str, item: str) -> None:
         """Count ``item`` under ``outcome``."""
@@ -435,6 +466,8 @@ class Backfill:
     ) -> None:
         self.drive = drive
         self.api = api
+        # The same API client: it registers files as well as looking them up.
+        self.registry: LibraryRegistry = api  # type: ignore[assignment]
         self.settings = settings
         self.record = record
         self.summary = summary
@@ -479,6 +512,64 @@ class Backfill:
             label = f"{label} ({detail})"
         self.summary.add(outcome, label)
 
+    def register(
+        self,
+        item: dict[str, Any],
+        name: str,
+        meta: dict[str, Any],
+        data: bytes,
+        catalog_id: str | None,
+    ) -> None:
+        """Register the file in the library registry. A failure is reported
+        and kept to try again; it never stops the run."""
+        file_id = str(item["id"])
+        row = read_tag_row(data)
+        comment = comment_text(data)
+        try:
+            link = uuid.UUID(catalog_id) if catalog_id else None
+        except ValueError:
+            link = None
+        payload = LibraryFileRegister(
+            drive_file_id=file_id,
+            library_root_id=self.settings.root,
+            path=self.label(item, name),
+            size_bytes=len(data),
+            md5=str(meta.get("md5Checksum") or "") or None,
+            duration_secs=duration_secs(data),
+            identification_status="identified" if link else "unidentified",
+            catalog_id=link,
+            edit_label=edit_label(row["title"]),
+            comment_backup=comment or None,
+        )
+        try:
+            self.registry.register_library_file(payload)
+        except Exception as exc:  # noqa: BLE001 — registering must not stop the run
+            if shared_deadline_passed():
+                raise
+            log.warning("library-backfill: registering %s failed: %s", name, exc)
+            self.summary.registry_failed.append(
+                f"{self.label(item, name)} ({type(exc).__name__}: {exc})"
+            )
+            self.summary.registry_retry.add(file_id)
+            return
+        self.summary.registered += 1
+        self.summary.registry_retry.discard(file_id)
+
+    def retry_registrations(self, file_ids: list[str]) -> None:
+        """Register again the files an earlier run could not register,
+        reading each one's link from its own ``TXXX:CATALOG_ID``."""
+        by_id = {str(item["id"]): item for item in self.manifest["files"]}
+        for file_id in file_ids:
+            item = by_id.get(file_id)
+            if item is None:
+                continue
+            meta = file_meta(self.drive, file_id)
+            if meta.get("trashed"):
+                continue
+            name = str(meta.get("name") or item["name"])
+            data: bytes = self.drive.download_file_bytes(file_id).data
+            self.register(item, name, meta, data, linked_catalog_id(data) or None)
+
     def one(self, item: dict[str, Any]) -> str:
         """Process one listed file; return its outcome. Raises
         :class:`AudioChanged` (the run stops) and lets anything unexpected
@@ -507,6 +598,7 @@ class Backfill:
                 name,
                 old_tags=tag_snapshot(data),
             )
+            self.register(item, name, meta, data, None)
             return "needs_fingerprinting"
         match = self.api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
         if match is None:
@@ -518,6 +610,7 @@ class Backfill:
                 old_tags=tag_snapshot(data),
                 detail=f"looked up {row['title']!r} by {row['artist']!r}",
             )
+            self.register(item, name, meta, data, None)
             return "not_in_catalog"
         # A library file gets only the link to its catalog entry.
         tagged = write_catalog_tags(data, match, id_only=True)
@@ -535,6 +628,7 @@ class Backfill:
                 )
             )
             self.summary.add("already_tagged", self.label(item, name))
+            self.register(item, name, meta, data, str(match.id))
             return "already_tagged"
 
         entries_before = len(self.record.entries)
@@ -564,6 +658,11 @@ class Backfill:
             )
             label = f"{label} ({changes})"
         self.summary.add(outcome, label)
+        if outcome == "written":
+            # The file's contents are now the tagged bytes.
+            meta = {**meta, "md5Checksum": md5(tagged)}
+            data = tagged
+        self.register(item, name, meta, data, str(match.id))
         return outcome
 
     def _check_unfinished_write(
@@ -645,6 +744,7 @@ def _process_chunk(
                         "run_id": work.record.run_id,
                     }
                 )
+            cursor["registry_retry"] = sorted(summary.registry_retry)
             cursor["updated_at"] = _now()
             cursor_store.save(cursor)
             summary.position = index
@@ -778,6 +878,12 @@ def _run(
     work = Backfill(drive, api, settings, record, summary, manifest)
     status = "failed"
     try:
+        retry = [str(i) for i in cursor.get("registry_retry") or []]
+        if retry:
+            work.retry_registrations(retry)
+            if mode.writes:
+                cursor["registry_retry"] = sorted(summary.registry_retry)
+                cursor_store.save(cursor)
         _process_chunk(work, cursor, cursor_store, end)
         status = "complete"
     except AudioChanged as exc:
@@ -878,6 +984,8 @@ def _record(report: Any, summary: BackfillSummary, duration_sec: float) -> None:
     for outcome in OUTCOMES:
         report.count(outcome, len(summary.outcomes[outcome]))
     report.count("remaining", summary.remaining)
+    report.count("registered", summary.registered)
+    report.count("registry_failed", len(summary.registry_failed))
     report.count("done", 1 if summary.done else 0)
     for name in summary.outcomes["written"]:
         report.created("tags written", name)
@@ -893,6 +1001,8 @@ def _record(report: Any, summary: BackfillSummary, duration_sec: float) -> None:
             report.notice(outcome, name)
     for name in summary.outcomes["failed"]:
         report.issue("failed", name)
+    for name in summary.registry_failed:
+        report.notice("registry_failed", name)
     if summary.aborted:
         report.issue("audio_changed_run_stopped", summary.aborted)
 
