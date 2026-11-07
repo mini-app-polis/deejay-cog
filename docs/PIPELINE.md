@@ -534,8 +534,8 @@ The API's approvals hold the current choices.
 - `approvals` prints the approvals the write runs apply, as the API holds
   them. They are changed only on the review page.
 - `seed [--apply]` carries `library-reconcile-approvals.json` over to the
-  API, checked as a write run read it; sent only with `--apply`, and refused
-  by the API once any approvals are set.
+  API, checked as a write run read it; sent only with `--apply`. Once the
+  API holds approvals it sends nothing and says so.
 - `cursor` prints the cursor; `cursor --position <n> --apply` moves it
   (0 starts the next run from the first identified file).
 - `run [--mode dry-run|write] [--chunk <n>]` runs the reconcile once,
