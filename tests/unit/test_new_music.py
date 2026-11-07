@@ -305,7 +305,7 @@ def test_a_catalog_value_never_empties_a_tag(
     emptied = mp3(
         TIT2(encoding=3, text=["Temple"]), TPE1(encoding=3, text=["Thomas Gold"])
     )
-    monkeypatch.setattr(flow, "write_catalog_tags", lambda *_: emptied)
+    monkeypatch.setattr(flow, "write_catalog_tags", lambda *_, **__: emptied)
 
     summary = flow.new_music(run_id="m-1")
 
@@ -348,6 +348,25 @@ def test_a_file_the_catalog_does_not_know_gets_an_entry_from_its_own_tags(
     (entry,) = _record(drive)["entries"]
     assert entry["identified_by"] == "own tags + new catalog entry"
     assert posted.call_args.kwargs["new_entries"] == 1
+
+
+@pytest.mark.parametrize(
+    ("title", "label"), [("temple [Clean]", "Clean"), ("temple (Explicit)", "Explicit")]
+)
+def test_a_file_keeps_its_own_release_label_in_its_title_and_name(
+    settings, wired, drive, api, title, label
+) -> None:
+    # The real lookup sets the label aside; the fake matches the title as is.
+    api.answers[title.lower()] = _match()
+    drive.add("track01.mp3", IN, _tagged(title))
+
+    summary = flow.new_music(run_id="m-1")
+
+    name = f"Temple (Niko The Kid Remix) ({label})_Thomas Gold.mp3"
+    assert summary.identified == [f"track01.mp3 -> {name}"]
+    (copy,) = drive.in_folder(DEST)
+    assert copy.name == name
+    assert tag_snapshot(copy.data)["title"] == f"Temple (Niko The Kid Remix) ({label})"
 
 
 def test_dry_run_previews_the_entry_and_writes_nothing(
@@ -493,7 +512,7 @@ def test_audio_that_would_change_stops_the_run_before_any_write(
         TALB(encoding=3, text=["Some Album"]),
         audio=AUDIO[:-1] + b"\x01",
     )
-    monkeypatch.setattr(flow, "write_catalog_tags", lambda *_: bad)
+    monkeypatch.setattr(flow, "write_catalog_tags", lambda *_, **__: bad)
 
     summary = flow.new_music(run_id="m-1")
 

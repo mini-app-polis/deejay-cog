@@ -181,7 +181,10 @@ Lists the audio files in `NEW_MUSIC_INPUT_FOLDER_ID`, at most
    (`created_entry`, or `would_create_entry` in a dry run).
 4. **No usable title or artist** → moved, unchanged, to needs-review.
 
-No new-music file is sent to the fingerprint function.
+No new-music file is sent to the fingerprint function. A release label in
+the file's own title (Clean, Explicit, Radio Edit, No Intro Edit) is kept
+in parentheses after the catalog's title, and so in the new name: clean and
+explicit copies are one catalog song but two files (ADR-0008, decision 6).
 
 **Taking an identified file in** (write mode):
 
