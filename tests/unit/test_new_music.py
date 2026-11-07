@@ -11,13 +11,17 @@ from unittest.mock import MagicMock
 
 import pytest
 from mini_app_polis import pipeline_status
-from mini_app_polis.api.contract import CatalogLookupRequest, CatalogMatch
-from mini_app_polis.lambda_worker import RunOutOfTime, parse_message
+from mini_app_polis.api.contract import (
+    CatalogLookupRequest,
+    CatalogMatch,
+    LibraryEntryCreate,
+    LibraryEntryCreated,
+)
+from mini_app_polis.lambda_worker import RunOutOfTime
 from music_fakes import AUDIO, FakeDrive, mp3
 from mutagen.id3 import TALB, TCON, TIT2, TPE1
 
 from deejay_cog import new_music as flow
-from deejay_cog.fingerprint_jobs import FingerprintJobMessage, FingerprintJobs
 from deejay_cog.music_safety import (
     SOURCE_PROPERTY,
     audio_payload,
@@ -26,6 +30,7 @@ from deejay_cog.music_safety import (
 
 IN, DEST, REVIEW, ORIG, STATE = "in", "dest", "review", "orig", "state"
 _CATALOG_ID = uuid.UUID("11111111-2222-3333-4444-555555555555")
+_NEW_ID = uuid.UUID("99999999-8888-7777-6666-555555555555")
 
 
 def _match(**overrides) -> CatalogMatch:
@@ -57,10 +62,29 @@ class FakeApi:
     library: list[str] = field(default_factory=list)
     registry_down: Exception | None = None
     listings: list[dict] = field(default_factory=list)
+    entries: list[LibraryEntryCreate] = field(default_factory=list)
+    #: False: the entry already existed (another call made it first).
+    entry_is_new: bool = True
 
     def lookup_catalog(self, payload: CatalogLookupRequest):
         self.requests.append(payload)
         return [self.answers.get(t.title.lower()) for t in payload.tracks]
+
+    def create_library_entry(self, payload: LibraryEntryCreate):
+        """The catalog's standardized entry for the tags it was sent."""
+        self.entries.append(payload)
+        entry = CatalogMatch(
+            id=_NEW_ID,
+            title="Brand New Song",
+            artist="New Artist",
+            genre="Pop",
+        )
+        new = self.entry_is_new
+        return LibraryEntryCreated(
+            entry=entry,
+            created=new and not payload.preview,
+            previewed=new and payload.preview,
+        )
 
     def list_library_files(self, *, present=None, limit=None, offset=None):
         self.listings.append({"present": present, "limit": limit, "offset": offset})
@@ -105,24 +129,12 @@ def api() -> FakeApi:
 
 
 @pytest.fixture
-def sqs() -> MagicMock:
-    return MagicMock()
-
-
-@pytest.fixture
-def wired(
-    monkeypatch: pytest.MonkeyPatch, drive: FakeDrive, api: FakeApi, sqs: MagicMock
-) -> MagicMock:
-    """The real flow on the fake Drive, API and queue."""
+def wired(monkeypatch: pytest.MonkeyPatch, drive: FakeDrive, api: FakeApi) -> MagicMock:
+    """The real flow on the fake Drive and API."""
     google = MagicMock()
     google.from_env.return_value = SimpleNamespace(drive=drive)
     monkeypatch.setattr(flow, "GoogleAPI", google)
     monkeypatch.setattr(flow, "api_client", lambda **_: api)
-    monkeypatch.setattr(
-        flow,
-        "fingerprint_jobs_from_env",
-        lambda: FingerprintJobs("https://sqs.test/q.fifo", sqs),
-    )
     monkeypatch.setattr(flow, "shared_deadline_passed", lambda: False)
     return google
 
@@ -303,46 +315,94 @@ def test_a_catalog_value_never_empties_a_tag(
 
 
 # ---------------------------------------------------------------------------
-# Handed to the fingerprint function
+# Not in the catalog: its own tags, standardized by a new catalog entry
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("data", "reason"),
-    [
-        (_tagged("brand new song", "new artist"), "not in the catalog"),
-        (mp3(TALB(encoding=3, text=["Album only"])), "no usable title or artist"),
-    ],
-)
-def test_a_file_the_catalog_does_not_know_goes_to_fingerprinting_untouched(
-    settings, wired, drive, sqs, data, reason
+def test_a_file_the_catalog_does_not_know_gets_an_entry_from_its_own_tags(
+    settings, wired, posted, drive, api
 ) -> None:
-    file_id = drive.add("new.mp3", IN, data)
+    original = _tagged("brand new song", "new artist")
+    file_id = drive.add("new.mp3", IN, original)
 
     summary = flow.new_music(run_id="m-1")
 
-    assert summary.sent_to_fingerprinting == [f"new.mp3 ({reason})"]
+    (sent,) = api.entries
+    assert (sent.title, sent.artist, sent.preview) == (
+        "brand new song",
+        "new artist",
+        False,
+    )
+    assert summary.new_entries == ["new.mp3 -> New Artist - Brand New Song"]
+    assert summary.identified == ["new.mp3 -> Brand New Song_New Artist.mp3"]
+    (copy,) = drive.in_folder(DEST)
+    tags = tag_snapshot(copy.data)
+    assert (tags["title"], tags["artist"], tags["genre"]) == (
+        "Brand New Song",
+        "New Artist",
+        "Pop",
+    )
+    assert tags["catalog_id"] == str(_NEW_ID)
+    assert drive.items[file_id].parents == [ORIG]
+    assert drive.items[file_id].data == original
+    (entry,) = _record(drive)["entries"]
+    assert entry["identified_by"] == "own tags + new catalog entry"
+    assert posted.call_args.kwargs["new_entries"] == 1
+
+
+def test_dry_run_previews_the_entry_and_writes_nothing(
+    settings, wired, posted, drive, api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(flow.MODE_VAR, "dry-run")
+    file_id = drive.add("new.mp3", IN, _tagged("brand new song", "new artist"))
+
+    summary = flow.new_music(run_id="m-1")
+
+    (sent,) = api.entries
+    assert sent.preview is True
+    assert summary.new_entries == ["new.mp3 -> New Artist - Brand New Song"]
     assert drive.writes(except_folder=STATE) == []
     assert drive.items[file_id].parents == [IN]
-    sent = sqs.send_message.call_args.kwargs
-    assert sent["MessageDeduplicationId"] == f"new-music:{file_id}"
-    payload = parse_message(sent["MessageBody"], FingerprintJobMessage).payload
-    assert payload.flow == "new-music"
-    assert payload.mode == "write"
-    assert payload.drive_file_id == file_id
+    (entry,) = _record(drive)["entries"]
+    assert entry["new_name"] == "Brand New Song_New Artist.mp3"
+    assert entry["new_tags"]["title"] == "Brand New Song"
+    assert "would_create_entry" in posted.call_args.kwargs["text"]
 
 
-def test_with_no_queue_a_file_stays_in_the_input_folder(
-    settings, wired, drive, monkeypatch: pytest.MonkeyPatch
+def test_an_entry_another_call_made_first_counts_as_the_catalog_s(
+    settings, wired, drive, api
 ) -> None:
-    monkeypatch.setattr(flow, "fingerprint_jobs_from_env", lambda: None)
-    file_id = drive.add("new.mp3", IN, _tagged("brand new", "someone"))
+    api.entry_is_new = False
+    drive.add("new.mp3", IN, _tagged("brand new song", "new artist"))
 
     summary = flow.new_music(run_id="m-1")
 
-    assert summary.needs_fingerprinting == ["new.mp3 (not in the catalog)"]
-    assert drive.writes() == []
-    assert drive.items[file_id].parents == [IN]
+    assert summary.new_entries == []
+    assert summary.identified == ["new.mp3 -> Brand New Song_New Artist.mp3"]
+    (entry,) = _record(drive)["entries"]
+    assert entry["identified_by"] == "own tags + catalog"
+
+
+def test_a_file_with_no_usable_title_or_artist_goes_to_review(
+    settings, wired, drive, api
+) -> None:
+    file_id = drive.add("new.mp3", IN, mp3(TALB(encoding=3, text=["Album only"])))
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert api.entries == []
+    assert summary.needs_review == ["new.mp3 (no usable title or artist)"]
+    assert drive.items[file_id].parents == [REVIEW]
+
+
+def test_a_bpm_of_zero_and_an_odd_year_are_left_out_of_the_entry() -> None:
+    track = flow.IngestTrack(title="Song", artist="Someone", bpm=0, release_year=99)
+
+    request = flow.entry_request(track, preview=True)
+
+    assert request.bpm is None
+    assert request.release_year is None
+    assert request.preview is True
 
 
 # ---------------------------------------------------------------------------

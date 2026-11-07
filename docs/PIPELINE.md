@@ -160,7 +160,8 @@ file whose tags already match is not written again.
 
 ## new-music
 
-New music intake ([ADR-0007](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-03-owner-two-flows-and-the-safety-rules)).
+New music intake ([ADR-0007](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-03-owner-two-flows-and-the-safety-rules),
+amended [2026-11-07](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-07-owner-new-music-trusts-its-own-tags-standardized-by-the-catalog)).
 It does nothing unless `NEW_MUSIC_MODE` is `dry-run` or `write`, and nothing
 unless all five of its folders are set and different (see
 [CONFIGURATION.md](CONFIGURATION.md#music-tagging-safety-and-new-music)).
@@ -172,21 +173,15 @@ Lists the audio files in `NEW_MUSIC_INPUT_FOLDER_ID`, at most
    written).
 2. **Its tags find a catalog entry** (the same lookup as retag-music) →
    identified; the new tags are the catalog's.
-3. **Otherwise** (the catalog does not know it, or it has no usable title or
-   artist) → sent to the fingerprint function with `"flow": "new-music"` and
-   the run's mode, and left where it is. A file with a good title and artist
-   that the catalog does not know is fingerprinted too, to confirm it: its
-   own tags are not taken on trust. With no queue configured (a local run)
-   it is left in the input folder and named as `needs_fingerprinting`.
+3. **The catalog does not know it** → identified by its own tags,
+   standardized by the catalog: the API makes the song's catalog entry from
+   them (`POST /v1/catalog/library/entries`; in a dry run, a preview that
+   saves nothing), with the catalog's parsing, genre vocabulary and display
+   rules, and the new tags are that entry's. The report names the entry
+   (`created_entry`, or `would_create_entry` in a dry run).
+4. **No usable title or artist** → moved, unchanged, to needs-review.
 
-The fingerprint function, for such a file: checks it is still in the input
-folder (otherwise leaves it alone), identifies it by AcoustID and
-MusicBrainz, and only when the score reaches `RETAG_MIN_CONFIDENCE` takes it
-in with the same steps, tagged from the catalog if the recording is there
-and from MusicBrainz's title, artist and year if not. Below the score, or
-with no title or artist from MusicBrainz, the file goes to needs-review. It
-uses the stricter of the message's mode and its own `NEW_MUSIC_MODE`, so
-switching the flow off also stops files already queued.
+No new-music file is sent to the fingerprint function.
 
 **Taking an identified file in** (write mode):
 
@@ -226,8 +221,8 @@ would-be run record is saved in the state folder as
 `new-music-<run id>.dry-run.json`, with old and new tags, new names and
 destinations.
 
-**Report:** counts for `scanned`, `identified`, `sent_to_fingerprinting`,
-`needs_fingerprinting`, `needs_review`, `collisions`, `failed`,
+**Report:** counts for `scanned`, `identified`, `new_entries`,
+`needs_review`, `collisions`, `failed`,
 `no_longer_in_input` (and `not_written_dry_run` in a dry run), with the files
 by name. Off, the report says only that the flow is off; a missing setting
 is a WARN naming it.

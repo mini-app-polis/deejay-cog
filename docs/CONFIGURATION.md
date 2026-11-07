@@ -86,8 +86,9 @@ The **new-music** worker mode reads:
 
 None of the folders has a default. With any of them unset, or two of them
 the same folder, the run does nothing and its report (WARN) names the
-problem. The fingerprint function reads the same settings for the
-new-music files it is sent, so they must reach both functions. watcher-cog
+problem. The mode sends no file to the fingerprint function (ADR-0007,
+amended 2026-11-07); a file the catalog does not know gets a catalog entry
+from its own tags. watcher-cog
 triggers the mode when files land in the input folder; it can also be run
 on demand through `POST /v1/deejay/runs` once the API accepts `new-music`.
 
@@ -206,8 +207,9 @@ project like the worker, and:
   the file is written (default 0.90). Below it the file is not changed and
   is named in the run report.
 - `DEEJAY_COG_API_KEY` and `GOOGLE_CREDENTIALS_JSON`, as the worker.
-- For files the new-music mode sends: the new-music settings above. It
-  works in the stricter of the sender's mode and its own `NEW_MUSIC_MODE`.
+- For a new-music message: the new-music settings above, in the stricter
+  of the message's mode and its own `NEW_MUSIC_MODE`. The new-music mode
+  sends none at present (ADR-0007, amended 2026-11-07).
 
 `fpcalc` comes from the function's Lambda layer, found on `PATH` or at
 `/opt/bin/fpcalc`; with neither, every file fails. AcoustID allows three
