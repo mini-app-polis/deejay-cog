@@ -153,6 +153,32 @@ def test_genuine_latin1_text_is_left_as_it_is() -> None:
     assert music_tags.read_tag_row(data)["artist"] == "Beyoncé"
 
 
+@pytest.mark.parametrize("encoding", [1, 3])
+def test_garbled_text_copied_into_a_unicode_frame_is_read_as_utf8(
+    encoding: int,
+) -> None:
+    data = _mp3(
+        TIT2(
+            encoding=encoding, text=["Sittin\u00e2\u0080\u0099 on the Dock of the Bay"]
+        ),
+        TPE1(encoding=encoding, text=["Ð\x9c'Ñ\x8fÑ\x82Ð°"]),
+    )
+
+    row = music_tags.read_tag_row(data)
+
+    assert row["title"] == "Sittin\u2019 on the Dock of the Bay"
+    assert row["artist"] == "М'ята"
+
+
+@pytest.mark.parametrize("encoding", [1, 3])
+def test_genuine_accents_in_a_unicode_frame_are_left_as_they_are(
+    encoding: int,
+) -> None:
+    data = _mp3(TPE1(encoding=encoding, text=["Beyoncé"]))
+
+    assert music_tags.read_tag_row(data)["artist"] == "Beyoncé"
+
+
 def test_a_utf8_frame_is_read_as_it_is() -> None:
     data = _mp3(TIT2(encoding=3, text=["М'ята"]))
 
