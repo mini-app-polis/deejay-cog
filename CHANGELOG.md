@@ -1,3 +1,15 @@
+# [2.23.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.22.0...v2.23.0) (2026-11-07)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 8.4.0 ([801a910](https://github.com/mini-app-polis/deejay-cog/commit/801a910b2f82880629279b5c29a1b65d6f3aea5c))
+
+
+### Features
+
+* **library-sync:** the nightly run writes catalog edits to the linked files ([221a809](https://github.com/mini-app-polis/deejay-cog/commit/221a8096eb0ff25b09140778092c7a486e42b02e))
+
 # [2.22.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.21.0...v2.22.0) (2026-11-07)
 
 
