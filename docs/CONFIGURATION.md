@@ -131,6 +131,23 @@ library registry in step with what is in the library. It reads
 A problem with a setting is a WARN in the scan's report; the backfill runs
 regardless. See [PIPELINE.md](PIPELINE.md#library-scan).
 
+## Library identify
+
+Between the scan and the backfill's chunk the nightly job runs the
+**library-identify** step: unidentified library files are identified (by
+their tags, else by the fingerprint function), linked to the catalog and
+written with its values. It reads `LIBRARY_ROOT_FOLDER_ID` and
+`MUSIC_TAGGING_STATE_FOLDER_ID` as the backfill does, sends to
+`DEEJAY_FINGERPRINT_QUEUE_URL`, and:
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `LIBRARY_IDENTIFY_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Off, the step reads nothing and sends no report. The fingerprint function reads it too, and uses the stricter of it and the sender's mode. |
+| `LIBRARY_IDENTIFY_CHUNK_SIZE` | `20` | Unidentified files tried per run; a whole number of at least 1. Each is downloaded to read its tags. |
+
+The fingerprint function's confidence threshold is `RETAG_MIN_CONFIDENCE`
+(see above). See [PIPELINE.md](PIPELINE.md#library-identify).
+
 ## Library reconcile
 
 After the backfill's chunk the same nightly job runs the

@@ -14,7 +14,12 @@ from deejay_cog import library_nightly as nightly
 @pytest.fixture
 def order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     seen: list[str] = []
-    for name in ("library_scan", "library_backfill", "library_reconcile"):
+    for name in (
+        "library_scan",
+        "library_identify",
+        "library_backfill",
+        "library_reconcile",
+    ):
         monkeypatch.setattr(nightly, name, lambda _n=name, **_: seen.append(_n))
     return seen
 
@@ -26,14 +31,21 @@ def finding(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return fake
 
 
-def test_the_job_scans_backfills_then_reconciles(order, finding) -> None:
+def test_the_job_scans_identifies_backfills_then_reconciles(order, finding) -> None:
     nightly.nightly_library_run(run_id="m-1")
 
-    assert order == ["library_scan", "library_backfill", "library_reconcile"]
+    assert order == [
+        "library_scan",
+        "library_identify",
+        "library_backfill",
+        "library_reconcile",
+    ]
     finding.assert_not_called()
 
 
-@pytest.mark.parametrize("broken", ["library_scan", "library_reconcile"])
+@pytest.mark.parametrize(
+    "broken", ["library_scan", "library_identify", "library_reconcile"]
+)
 def test_a_failed_step_is_reported_and_the_rest_runs(
     order, finding, monkeypatch: pytest.MonkeyPatch, broken: str
 ) -> None:

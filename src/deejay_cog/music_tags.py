@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from mini_app_polis.api.contract import (
+    CatalogDisplay,
     CatalogLookupRequest,
     CatalogMatch,
     IngestTrack,
@@ -258,6 +259,46 @@ def write_catalog_tags(
         (
             f"TXXX:{CATALOG_ID_DESC}",
             TXXX(encoding=3, desc=CATALOG_ID_DESC, text=[str(match.id)]),
+        )
+    )
+    return _write_frames(data, tags, wanted)
+
+
+def display_title(display: CatalogDisplay, label: str | None) -> str:
+    """The title a file carries: the entry's displayed title, followed by
+    the file's own release label in parentheses when it has one
+    (ADR-0008, decision 6)."""
+    return f"{display.title} ({label})" if label else display.title
+
+
+def write_display_tags(
+    data: bytes, display: CatalogDisplay, *, label: str | None
+) -> bytes | None:
+    """The file's bytes with the catalog's owned fields written as the
+    display rules render them, or None when its tags already say so.
+
+    Title (with the file's own release label), artist, year, genre, BPM (as
+    the rules round it) and label where the catalog has them, and
+    ``TXXX:CATALOG_ID``. A field the catalog leaves empty keeps the file's
+    value; the comment and every other frame are left as they are.
+    """
+    tags = _load(data)
+    wanted: list[tuple[str, Any]] = [
+        ("TIT2", TIT2(encoding=3, text=[display_title(display, label)])),
+        ("TPE1", TPE1(encoding=3, text=[display.artist])),
+    ]
+    if display.release_year is not None:
+        wanted.append(("TDRC", TDRC(encoding=3, text=[str(display.release_year)])))
+    if display.genre:
+        wanted.append(("TCON", TCON(encoding=3, text=[display.genre])))
+    if display.bpm is not None:
+        wanted.append(("TBPM", TBPM(encoding=3, text=[f"{display.bpm:g}"])))
+    if display.label:
+        wanted.append(("TPUB", TPUB(encoding=3, text=[display.label])))
+    wanted.append(
+        (
+            f"TXXX:{CATALOG_ID_DESC}",
+            TXXX(encoding=3, desc=CATALOG_ID_DESC, text=[str(display.id)]),
         )
     )
     return _write_frames(data, tags, wanted)
