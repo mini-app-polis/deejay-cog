@@ -467,9 +467,12 @@ VirtualDJ-owned frame are left out. A `TXXX:CATALOG_ID` naming another
 entry than the registry's link is listed under `other`.
 
 **Kinds:** `case_punctuation`, `featured_moved`, `artist_joiner`,
-`version_brackets`, `genre_remapped`, `genre_filled`, `year_differs`,
-`bpm_rounding` (0.5 BPM or less), `bpm_differs`, `label_differs`, `fill_up`
-(a file value for a field the catalog leaves empty) and `other`.
+`version_brackets`, `genre_remapped`, `genre_filled`, `year_filled` (the
+file has none), `year_earlier` (the catalog's year is older), `year_later`
+(the file's year is older: left unapproved, the file keeps the older year),
+`year_differs` (a year that is not a number), `bpm_rounding` (0.5 BPM or
+less), `bpm_differs`, `label_differs`, `fill_up` (a file value for a field
+the catalog leaves empty) and `other`.
 
 **Record:** `library-reconcile-<run id>.dry-run.json` in the state folder,
 every difference under its kind (path, field, the file's value, the
