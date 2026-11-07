@@ -36,7 +36,7 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
 - Nothing else runs between triggers. The queue, function, dead-letter queue and
   alarms are declared in `mini-app-polis/infra`: a FIFO queue
   with reserved concurrency 1, so two sweeps never race over one folder; a
-  300 s timeout; three receives before a message is dead-lettered.
+  600 s timeout; three receives before a message is dead-lettered.
 
 ---
 
@@ -321,7 +321,7 @@ Past it the run saves the record, the cursor and the manifest and stops
 with `RunOutOfTime`; the redelivery of the same message finishes **that
 run's chunk** rather than start a new one, and carries on the same run
 record. A write cut off between the upload and its check is checked before
-the run stops. With the function's 300 s timeout and three receives before
+the run stops. With the function's 600 s timeout and three receives before
 the dead-letter queue, a chunk has to fit in about three invocations;
 raise `LIBRARY_BACKFILL_CHUNK_SIZE` with that in mind.
 
