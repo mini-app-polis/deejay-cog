@@ -321,9 +321,14 @@ Past it the run saves the record, the cursor and the manifest and stops
 with `RunOutOfTime`; the redelivery of the same message finishes **that
 run's chunk** rather than start a new one, and carries on the same run
 record. A write cut off between the upload and its check is checked before
-the run stops. With the function's 600 s timeout and three receives before
-the dead-letter queue, a chunk has to fit in about three invocations;
-raise `LIBRARY_BACKFILL_CHUNK_SIZE` with that in mind.
+the run stops. Before that, the backfill starts no file with less than
+`LIBRARY_BACKFILL_RESERVE_SECONDS` (default 120) left before the run
+deadline: it stops cleanly, reported as `paused`, so the reconcile, sync and
+duplicate report after it still run, and the next run carries on from the
+cursor. The run record and the cursor are saved after each file even past
+the deadline, so a written file is never done twice. A written file takes
+about 20 s, so with the function's 600 s timeout a night writes about 15 to
+20 files whatever `LIBRARY_BACKFILL_CHUNK_SIZE` says.
 
 **Dry run** writes nothing to any music file and **does not move the
 cursor**, so it can be run, reviewed, and the same chunk then written by

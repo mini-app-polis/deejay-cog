@@ -25,7 +25,11 @@ hold the position:
   past a file whose outcome is not recorded.
 
 Each run takes the next ``LIBRARY_BACKFILL_CHUNK_SIZE`` files (default 10)
-after the cursor. A redelivery of a run stopped by the deadline (the same
+after the cursor, and starts no file with less than
+``LIBRARY_BACKFILL_RESERVE_SECONDS`` (default 120) left before the run
+deadline, so the nightly steps after it still run; the next run carries on
+from the cursor. The record and cursor are saved after each file even past
+the deadline, so a file written is never done twice. A redelivery of a run stopped by the deadline (the same
 queue message id) finishes that run's chunk rather than start a new one.
 Once the cursor reaches the end, every run reports the library done and does
 nothing more. **To start over** (files added to the library since, or a new
@@ -80,7 +84,7 @@ from mini_app_polis.api.contract import (
     LibraryFile,
     LibraryFileRegister,
 )
-from mini_app_polis.deadline import without_run_deadline
+from mini_app_polis.deadline import remaining_seconds, without_run_deadline
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.lambda_worker import RunOutOfTime
@@ -137,6 +141,11 @@ DEFAULT_CHUNK_SIZE = 10
 #: report): the way past a file whose audio check fails.
 SKIP_IDS_VAR = "LIBRARY_BACKFILL_SKIP_FILE_IDS"
 
+#: Seconds of the run the backfill leaves for the nightly steps after it:
+#: it starts no file with less than this left before the run deadline.
+RESERVE_SECONDS_VAR = "LIBRARY_BACKFILL_RESERVE_SECONDS"
+DEFAULT_RESERVE_SECONDS = 120
+
 MANIFEST_NAME = f"{FLOW_NAME}-manifest.json"
 CURSOR_NAME = f"{FLOW_NAME}-cursor.json"
 
@@ -177,6 +186,7 @@ class BackfillSettings:
     state: str
     chunk_size: int
     skip_ids: frozenset[str]
+    reserve_seconds: int = DEFAULT_RESERVE_SECONDS
 
     @classmethod
     def from_env(cls) -> tuple[BackfillSettings | None, list[str]]:
@@ -208,9 +218,20 @@ class BackfillSettings:
             for part in os.getenv(SKIP_IDS_VAR, "").split(",")
             if part.strip()
         )
+        raw = os.getenv(RESERVE_SECONDS_VAR, "").strip()
+        reserve = DEFAULT_RESERVE_SECONDS
+        if raw:
+            try:
+                reserve = int(raw)
+            except ValueError:
+                reserve = -1
+            if reserve < 0:
+                problems.append(
+                    f"{RESERVE_SECONDS_VAR}={raw!r} is not a whole number of seconds"
+                )
         if problems:
             return None, problems
-        return cls(root, state, chunk_size, skip_ids), []
+        return cls(root, state, chunk_size, skip_ids, reserve), []
 
 
 def chunk_size_setting() -> int | str:
@@ -422,6 +443,9 @@ class BackfillSummary:
     restarted: bool = False
     done: bool = False
     aborted: str = ""
+    #: Why the run stopped before its chunk's end to leave time for the
+    #: steps after it; empty when it did not.
+    paused: str = ""
     registered: int = 0
     registry_failed: list[str] = field(default_factory=list)
     #: File ids whose registration failed this run, to try again.
@@ -642,6 +666,7 @@ class Backfill:
                 tagged=tagged,
                 identified_by="catalog",
                 folder=str(item["folder_id"]),
+                head_revision=meta.get("headRevisionId"),
             )
         except AudioChanged:
             raise
@@ -705,11 +730,20 @@ def _process_chunk(
     summary = work.summary
     files = work.manifest["files"]
     writes = work.mode.writes
+    reserve = work.settings.reserve_seconds
     index = summary.start
     while index < end:
         item = files[index]
         if shared_deadline_passed():
             raise RunOutOfTime(f"run deadline reached before {item['name']}")
+        left = remaining_seconds()
+        if left is not None and left < reserve:
+            summary.paused = (
+                f"stopped before {item['name']} with {left:.0f}s left, to leave "
+                f"{reserve}s ({RESERVE_SECONDS_VAR}) for the rest of the run; "
+                "the next run carries on from here"
+            )
+            return
         summary.scanned += 1
         entries_before = len(work.record.entries)
         try:
@@ -733,21 +767,36 @@ def _process_chunk(
         index += 1
         if writes:
             # The record first: the cursor never passes an unrecorded file.
-            work.record.checkpoint()
-            cursor["position"] = index
-            cursor["counts"][outcome] = cursor["counts"].get(outcome, 0) + 1
-            if outcome == "failed":
-                cursor["failed"].append(
-                    {
-                        "file_id": str(item["id"]),
-                        "name": str(item["name"]),
-                        "run_id": work.record.run_id,
-                    }
-                )
-            cursor["registry_retry"] = sorted(summary.registry_retry)
-            cursor["updated_at"] = _now()
-            cursor_store.save(cursor)
+            # Both are saved even past the run deadline: the file's outcome
+            # is final, and the next run must not do it again.
+            with without_run_deadline():
+                _save_progress(work, item, outcome, cursor, cursor_store, index)
             summary.position = index
+
+
+def _save_progress(
+    work: Backfill,
+    item: dict[str, Any],
+    outcome: str,
+    cursor: dict[str, Any],
+    cursor_store: StateFile,
+    index: int,
+) -> None:
+    """Checkpoint the run record, then move the cursor past ``item``."""
+    work.record.checkpoint()
+    cursor["position"] = index
+    cursor["counts"][outcome] = cursor["counts"].get(outcome, 0) + 1
+    if outcome == "failed":
+        cursor["failed"].append(
+            {
+                "file_id": str(item["id"]),
+                "name": str(item["name"]),
+                "run_id": work.record.run_id,
+            }
+        )
+    cursor["registry_retry"] = sorted(work.summary.registry_retry)
+    cursor["updated_at"] = _now()
+    cursor_store.save(cursor)
 
 
 def _record_failure(
@@ -967,6 +1016,8 @@ def _record(report: Any, summary: BackfillSummary, duration_sec: float) -> None:
             f"{MANIFEST_NAME}: {summary.listed} files listed this run, "
             f"{summary.listing_pending_folders} folders still to list",
         )
+    if summary.paused:
+        report.notice("paused", summary.paused)
     if summary.restarted:
         report.notice(
             "manifest_rebuilt", "a new manifest: starting from its first file"
