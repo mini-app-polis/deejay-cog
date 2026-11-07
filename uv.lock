@@ -645,7 +645,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "miniapppolis-common-utils", extras = ["google", "mp3", "spotify"], specifier = ">=8.0.0,<9" },
+    { name = "miniapppolis-common-utils", extras = ["google", "mp3", "spotify"], specifier = ">=8.9.0,<9" },
     { name = "music-tag", specifier = ">=0.4.3" },
     { name = "musicbrainzngs", specifier = ">=0.7.1" },
     { name = "mutagen", specifier = ">=1.47" },

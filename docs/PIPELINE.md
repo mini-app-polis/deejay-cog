@@ -481,8 +481,16 @@ catalog's); a write run's is `library-reconcile-<run id>.differences.json`.
 The report counts each kind, shows a few examples of each, and names every
 `other` file.
 
-**Approvals** are given in working sessions over the dry runs and kept in
-`library-reconcile-approvals.json` in the state folder:
+**Review:** every run, dry or write, sends the API the files it compared
+and the differences still open on them (`POST
+/v1/catalog/library/reconcile/differences`): all of them in a dry run, and
+in a write run those it did not write or fill up. For those files they
+replace what the API held, so the owner's review page on the WCS site shows
+each file's latest. A run that cannot send them reports `review_not_sent`
+and carries on; the next pass sends them again.
+
+**Approvals** are the owner's, set on the review page; each write run reads
+them from the API (`GET /v1/catalog/library/reconcile/approvals`):
 
 ```json
 {"kinds": ["case_punctuation", "genre_remapped", "fill_up"],
@@ -491,8 +499,11 @@ The report counts each kind, shows a few examples of each, and names every
 
 `kinds` approves whole kinds (any but `other`); `files` approves `other`
 differences one file and field at a time (`title`, `artist`, `year`,
-`genre`, `bpm`, `label`, `catalog_id`). A file that does not parse stops
-the run, naming the problem; with none, a write run writes nothing.
+`genre`, `bpm`, `label`, `catalog_id`). Approvals that cannot be read stop
+the run before it compares anything; until any are set, a write run writes
+nothing. The approvals given before the API held them were kept in
+`library-reconcile-approvals.json` in the state folder; `reconcile_admin
+seed` carries that file over once, and nothing reads it after.
 
 **A write run** writes each approved difference with the catalog's value
 over the same file, in place, with the backfill's safety rules: never
@@ -508,7 +519,7 @@ shows no approved difference left.
 
 **Approval rules:** what is approved, and why some kinds are held, is in
 [ADR-0008, decided 2026-11-07](decisions/ADR-0008-catalog-source-of-truth.md#decided-with-the-owner-2026-11-07-the-first-reconcile-review).
-The approvals file holds the current choices.
+The API's approvals hold the current choices.
 
 ### Working the reconcile from a session
 
@@ -520,10 +531,11 @@ The approvals file holds the current choices.
   file and field, and prints them grouped by kind, each kind (and each
   `other` file) marked approved or held by the current approvals. Reads
   only.
-- `approvals` prints the approvals file; `approve` adds kinds (`--kind`),
-  takes them back (`--revoke-kind`) and approves `other` differences one
-  file at a time (`--file <drive file id>:<field>,<field>`). The result is
-  checked as a write run reads it, and saved only with `--apply`.
+- `approvals` prints the approvals the write runs apply, as the API holds
+  them. They are changed only on the review page.
+- `seed [--apply]` carries `library-reconcile-approvals.json` over to the
+  API, checked as a write run read it; sent only with `--apply`, and refused
+  by the API once any approvals are set.
 - `cursor` prints the cursor; `cursor --position <n> --apply` moves it
   (0 starts the next run from the first identified file).
 - `run [--mode dry-run|write] [--chunk <n>]` runs the reconcile once,

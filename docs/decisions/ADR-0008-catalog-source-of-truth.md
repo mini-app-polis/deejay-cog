@@ -121,8 +121,10 @@ catalog (stats, summaries, the collection) uses the same rules.
    genre mapping, a different year, BPM precision, and so on), plus the
    values that would go up to the catalog. The owner approves kinds of
    change, not files, by going through each dry run in a working session;
-   the approved kinds are saved where the write run reads them (an
-   approvals file in the music-tagging state folder), and the write run
+   the approved kinds are saved where the write run reads them (at first
+   an approvals file in the music-tagging state folder; since 2026-11-07
+   the API, set on the owner's review page on the WCS site, which every run
+   sends its differences to), and the write run
    applies only those, with the catalog winning. A dry run keeps its own position, so repeated dry runs step
    through the whole library.
 4. **Steady state.** From then on the four flows run.

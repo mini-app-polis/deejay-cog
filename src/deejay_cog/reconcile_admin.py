@@ -1,11 +1,11 @@
 """Work the library reconcile from a working session (ADR-0008, step 3):
-review its differences, record the owner's approvals, move its cursor and
-run it by hand. Run locally against production:
+review its differences, read the owner's approvals, carry the old approvals
+file over to the API, move its cursor and run it by hand. Run locally
+against production:
 
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin review
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin approvals
-    doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin approve \\
-        --kind bpm_rounding --file <drive file id>:artist,title [--apply]
+    doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin seed [--apply]
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin cursor \\
         [--position 0 --apply]
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin run \\
@@ -16,12 +16,15 @@ run it by hand. Run locally against production:
 all of them without it), keeps the latest difference for each file and
 field, and prints them grouped by kind, each marked approved or held by the
 current approvals. ``--out PATH`` also writes it to a file. It reads only.
+The owner's review page on the WCS site shows the same differences, as
+each run reports them to the API.
 
-**approvals** prints the approvals file. **approve** adds kinds
-(``--kind``), takes kinds back (``--revoke-kind``) and approves ``other``
-differences one file at a time (``--file <id>:<field>,<field>``; the field
-names are the record's, ``catalog_id`` included). The result is checked
-the way a write run reads it; without ``--apply`` it is only printed.
+**approvals** prints the approvals the write runs apply, as the API holds
+them. They are the owner's and are set on the review page: this command
+cannot change them. **seed** carries ``library-reconcile-approvals.json``
+(the approvals given before the API held them) over to the API, checked the
+way a write run read it; without ``--apply`` it is only printed, and the API
+refuses it once any approvals are set.
 
 **cursor** prints the reconcile's cursor; ``--position N --apply`` moves it
 (0 starts the next run from the first identified file).
@@ -34,8 +37,8 @@ here writes exactly as the scheduled one does; run it while the scheduled
 reconcile is off (``LIBRARY_RECONCILE_MODE=off``), so the two do not move
 the cursor at once.
 
-Every command but **review** and **run** changes only the one state file
-it names.
+**cursor** changes only the cursor file, and **seed** only the API's
+approvals, once; **review** and **approvals** read only.
 """
 
 from __future__ import annotations
@@ -49,18 +52,21 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from mini_app_polis.api.contract import ReconcileApprovalsSet
+from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 
+from deejay_cog.api_client import api_client
 from deejay_cog.library_backfill import StateFile, StateProblem
 from deejay_cog.library_reconcile import (
     APPROVALS_NAME,
     CHUNK_SIZE_VAR,
     CURSOR_NAME,
-    FIELDS,
     FLOW_NAME,
     KINDS,
     MODE_VAR,
     Approvals,
+    from_api,
     library_reconcile,
     parse_approvals,
 )
@@ -181,52 +187,20 @@ def read_records(drive: Any, state: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def load_approvals(drive: Any, state: str) -> tuple[StateFile, dict[str, Any]]:
-    """The approvals state file and what it holds (empty when there is none)."""
-    store = StateFile(drive, state, APPROVALS_NAME)
-    data = store.load() or {"kinds": [], "files": {}}
-    return store, data
-
-
-def parse_file_arg(text: str) -> tuple[str, list[str]]:
-    """``<drive file id>:<field>,<field>`` as the id and its fields."""
-    file_id, sep, names = text.partition(":")
-    fields = [n.strip() for n in names.split(",") if n.strip()]
-    if not sep or not file_id.strip() or not fields:
-        raise AdminError(f"--file {text!r}: write it as <drive file id>:<field>,...")
-    allowed = set(FIELDS) | {"catalog_id"}
-    unknown = [n for n in fields if n not in allowed]
-    if unknown:
-        raise AdminError(
-            f"--file {text!r}: unknown field {unknown[0]!r} (one of {sorted(allowed)})"
-        )
-    return file_id.strip(), fields
-
-
-def changed_approvals(
-    data: dict[str, Any],
-    *,
-    kinds: Sequence[str] = (),
-    revoke: Sequence[str] = (),
-    files: Sequence[str] = (),
-) -> dict[str, Any]:
-    """``data`` with the kinds added and taken back and the files approved,
-    checked the way a write run reads it. Raises :class:`AdminError`."""
-    out_kinds = [str(k) for k in data.get("kinds") or []]
-    for kind in kinds:
-        if kind not in out_kinds:
-            out_kinds.append(kind)
-    out_kinds = [k for k in out_kinds if k not in set(revoke)]
-    out_files = {str(k): list(v) for k, v in (data.get("files") or {}).items()}
-    for text in files:
-        file_id, fields = parse_file_arg(text)
-        have = out_files.setdefault(file_id, [])
-        have.extend(f for f in fields if f not in have)
-    out = {"kinds": out_kinds, "files": out_files}
-    _, problems = parse_approvals(out)
+def old_approvals(drive: Any, state: str) -> dict[str, Any] | None:
+    """What ``library-reconcile-approvals.json`` holds, checked the way a
+    write run read it; None when there is no such file. Raises
+    :class:`AdminError` when it does not parse."""
+    data = StateFile(drive, state, APPROVALS_NAME).load()
+    if data is None:
+        return None
+    _, problems = parse_approvals(data)
     if problems:
         raise AdminError("; ".join(problems))
-    return out
+    return {
+        "kinds": list(data.get("kinds") or []),
+        "files": dict(data.get("files") or {}),
+    }
 
 
 def moved_cursor(cursor: dict[str, Any] | None, position: int) -> dict[str, Any]:
@@ -257,18 +231,10 @@ def _parser() -> argparse.ArgumentParser:
     review.add_argument("--since", default="", help="only records saved since (ISO)")
     review.add_argument("--out", help="also write the review to this file")
 
-    sub.add_parser("approvals", help="print the approvals file")
+    sub.add_parser("approvals", help="print the approvals the write runs apply")
 
-    approve = sub.add_parser("approve", help="add or take back approvals")
-    approve.add_argument("--kind", action="append", default=[], choices=KINDS)
-    approve.add_argument("--revoke-kind", action="append", default=[], choices=KINDS)
-    approve.add_argument(
-        "--file",
-        action="append",
-        default=[],
-        help="approve an 'other' file's fields: <drive file id>:<field>,...",
-    )
-    approve.add_argument("--apply", action="store_true", help="save the result")
+    seed = sub.add_parser("seed", help="carry the old approvals file over to the API")
+    seed.add_argument("--apply", action="store_true", help="send it")
 
     cursor = sub.add_parser("cursor", help="print or move the cursor")
     cursor.add_argument("--position", type=int, help="move it here (with --apply)")
@@ -287,23 +253,35 @@ def _state_folder() -> str:
     return state
 
 
-def _approvals_cmd(args: argparse.Namespace, drive: Any, state: str) -> int:
-    store, data = load_approvals(drive, state)
-    if args.command == "approvals":
-        print(json.dumps(data, indent=1))
-        return 0
-    if not (args.kind or args.revoke_kind or args.file):
-        raise AdminError("approve: give --kind, --revoke-kind or --file")
-    out = changed_approvals(
-        data, kinds=args.kind, revoke=args.revoke_kind, files=args.file
-    )
-    print(json.dumps(out, indent=1))
+def _api() -> Any:
+    return api_client(base_url=api_base_url().strip() or None)
+
+
+def _approvals_cmd(api: Any) -> int:
+    approvals = api.read_reconcile_approvals()
+    print(json.dumps(approvals.model_dump(mode="json"), indent=1))
+    if approvals.updated_at is None:
+        print("No approvals are set yet: a write run writes nothing.")
+    return 0
+
+
+def _seed_cmd(args: argparse.Namespace, api: Any, drive: Any, state: str) -> int:
+    data = old_approvals(drive, state)
+    if data is None:
+        raise AdminError(f"no {APPROVALS_NAME} in the state folder: nothing to seed")
+    print(json.dumps(data, indent=1))
     if not args.apply:
-        print("Nothing was saved. Run again with --apply to save it.")
+        print("Nothing was sent. Run again with --apply to send it.")
         return 0
-    store.save(out)
+    try:
+        seeded = api.seed_reconcile_approvals(
+            ReconcileApprovalsSet.model_validate(data)
+        )
+    except Exception as exc:  # noqa: BLE001 — the API says why (409: already set)
+        raise AdminError(f"the API refused the seed: {exc}") from exc
     print(
-        f"Saved {APPROVALS_NAME}: {len(out['kinds'])} kinds, {len(out['files'])} files."
+        f"Seeded the API's approvals: {len(seeded.kinds)} kinds, "
+        f"{len(seeded.files)} files."
     )
     return 0
 
@@ -350,11 +328,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "run":
             return _run_cmd(args)
+        if args.command == "approvals":
+            return _approvals_cmd(_api())
         state = _state_folder()
         drive = GoogleAPI.from_env().drive
+        if args.command == "seed":
+            return _seed_cmd(args, _api(), drive, state)
         if args.command == "review":
-            _, data = load_approvals(drive, state)
-            approvals, _ = parse_approvals(data)
+            approvals = from_api(_api().read_reconcile_approvals()) or Approvals()
             text = review_text(
                 latest_items(read_records(drive, state), args.since),
                 approvals,
@@ -365,8 +346,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 with open(args.out, "w", encoding="utf-8") as handle:
                     handle.write(text + "\n")
             return 0
-        if args.command in ("approvals", "approve"):
-            return _approvals_cmd(args, drive, state)
         return _cursor_cmd(args, drive, state)
     except (AdminError, StateProblem) as exc:
         print(f"{PROG}: {exc}; nothing changed.", file=sys.stderr)

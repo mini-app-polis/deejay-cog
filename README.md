@@ -138,7 +138,7 @@ doppler run -- uv run python -m deejay_cog.music_rollback <run_id> --apply
 
 ```bash
 doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin review
-doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin approve --kind bpm_rounding --apply
+doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin approvals
 doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin cursor --position 0 --apply
 doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin run --mode dry-run --chunk 260
 ```

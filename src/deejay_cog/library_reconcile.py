@@ -5,7 +5,8 @@ decision 15).
 
 **A dry run reads only.** Nothing is written to any music file, and
 nothing in the catalog or the registry changes: the run writes only its
-cursor and its record in ``MUSIC_TAGGING_STATE_FOLDER_ID``. A **write** run
+cursor and its record in ``MUSIC_TAGGING_STATE_FOLDER_ID``, and sends its
+differences to the owner's review (below). A **write** run
 compares the same way, then applies only what the owner approved (below),
 with the catalog winning.
 
@@ -60,22 +61,33 @@ difference under it (file, field, the file's value, the catalog's). The run
 report gives each kind's count and a few examples, and names every
 ``other`` file.
 
-**Approvals** are the owner's, given in working sessions over the dry runs,
-and kept in ``library-reconcile-approvals.json`` in the state folder::
+**Review.** Every run (dry or write) sends the API the files it compared
+and the differences still open on them (``POST
+/v1/catalog/library/reconcile/differences``): all of them in a dry run, and
+in a write run those it did not write or fill up. For those files they
+replace what the API held, so the owner's review page on the WCS site always
+shows each file's latest. A run that cannot send them says so in its report
+and carries on; the next pass sends them again.
+
+**Approvals** are the owner's, set on the review page and read from the API
+by each write run (``GET /v1/catalog/library/reconcile/approvals``)::
 
     {"kinds": ["case_punctuation", "genre_remapped", "fill_up"],
      "files": {"<drive file id>": ["title"]}}
 
 ``kinds`` names the approved kinds (any but ``other``); ``files`` approves
-``other`` differences one file and field at a time. A write run writes each
+``other`` differences one file and field at a time. Approvals given before
+the API held them were kept in ``library-reconcile-approvals.json`` in the
+state folder; ``python -m deejay_cog.reconcile_admin seed`` carries that file
+over once, and nothing reads it after. A write run writes each
 approved difference with the catalog's value over the same file, in place,
 through ``write_in_place`` (head revision kept, audio checked before and
 after, every write in ``library-reconcile-<run id>.json``, which
 ``python -m deejay_cog.music_rollback <run id>`` undoes), registers the file
 as synced, and sends approved ``fill_up`` values up to the catalog
 (``POST /v1/catalog/{id}/fill-up``) without writing the file. Anything not
-approved is left as it is and counted. With no approvals file a write run
-writes nothing. Genre is written; subgenre is not (no frame for it is
+approved is left as it is and counted. Until any approvals are set a write
+run writes nothing. Genre is written; subgenre is not (no frame for it is
 decided). An audio mismatch stops the run with an ERROR finding and leaves
 the cursor on that file.
 
@@ -103,6 +115,10 @@ from mini_app_polis.api.contract import (
     CatalogFillUpResult,
     LibraryFile,
     LibraryFileRegister,
+    ReconcileApprovals,
+    ReconcileDifference,
+    ReconcileReport,
+    ReconcileReportResult,
 )
 from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
@@ -201,6 +217,16 @@ class Catalog(Protocol):
         """Register a library file, or bring its row up to date."""
         ...
 
+    def read_reconcile_approvals(self) -> ReconcileApprovals:
+        """The owner's approvals for write runs."""
+        ...
+
+    def report_reconcile_differences(
+        self, payload: ReconcileReport
+    ) -> ReconcileReportResult:
+        """The files a run compared and their open differences."""
+        ...
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -243,6 +269,19 @@ class Difference:
             "file": self.file_value,
             "catalog": self.catalog_value,
         }
+
+    def for_review(self) -> ReconcileDifference:
+        """The difference as the API's review holds it."""
+        return ReconcileDifference.model_validate(
+            {
+                "drive_file_id": self.drive_file_id,
+                "path": self.path,
+                "field": self.field,
+                "kind": self.kind,
+                "file_value": self.file_value,
+                "catalog_value": self.catalog_value,
+            }
+        )
 
     def example(self) -> str:
         """One line naming the file, the field and both values, for reports."""
@@ -484,6 +523,25 @@ def parse_approvals(data: dict[str, Any]) -> tuple[Approvals, list[str]]:
     )
 
 
+def from_api(approvals: ReconcileApprovals) -> Approvals | None:
+    """The API's approvals, or None when none have been set yet."""
+    if approvals.updated_at is None:
+        return None
+    return Approvals(
+        frozenset(approvals.kinds),
+        {str(k): frozenset(v) for k, v in approvals.files.items()},
+    )
+
+
+#: The catalog field a fill-up sets, by the difference's field.
+_FILLED_FIELD = {
+    "year": "release_year",
+    "genre": "genre",
+    "bpm": "bpm",
+    "label": "label",
+}
+
+
 def _fill_up(diffs: list[Difference]) -> CatalogFillUp | None:
     values: dict[str, Any] = {}
     for diff in diffs:
@@ -527,6 +585,9 @@ class ReconcileSummary:
     filled: list[str] = field(default_factory=list)
     not_approved: int = 0
     aborted: str = ""
+    reviewed: list[str] = field(default_factory=list)
+    open: list[Difference] = field(default_factory=list)
+    review_problem: str = ""
 
     @property
     def files_with_differences(self) -> int:
@@ -620,23 +681,27 @@ def _apply_one(
     compared: tuple[str, bytes, list[Difference], dict[str, str]],
     approvals: Approvals,
     summary: ReconcileSummary,
-) -> None:
+) -> set[str]:
     """Write one file's approved differences, catalog winning; send its
-    approved fill-ups to the catalog. Raises :class:`AudioChanged`."""
+    approved fill-ups to the catalog. Return the fields it settled (written,
+    or filled up). Raises :class:`AudioChanged`."""
     name, data, diffs, wanted = compared
     approved = [d for d in diffs if approvals.approves(d)]
     summary.not_approved += len(diffs) - len(approved)
-    fill = _fill_up([d for d in approved if d.kind == "fill_up"])
+    settled: set[str] = set()
+    fills = [d for d in approved if d.kind == "fill_up"]
+    fill = _fill_up(fills)
     to_write = {d.field: wanted[d.field] for d in approved if d.kind != "fill_up"}
     if fill is not None and record.mode.writes and row.catalog_id:
         filled = api.fill_up_catalog_entry(row.catalog_id, fill).filled
         if filled:
             summary.filled.append(f"{row.path} ({', '.join(filled)})")
+        settled |= {d.field for d in fills if _FILLED_FIELD.get(d.field) in filled}
     if not to_write:
-        return
+        return settled
     tagged = write_owned_fields(data, to_write)
     if tagged is None:
-        return
+        return settled
     entry = write_in_place(
         drive,
         record,
@@ -649,8 +714,9 @@ def _apply_one(
     label = f"{row.path} ({', '.join(sorted(to_write))})"
     if entry.state != "done":
         summary.would_write.append(label)
-        return
+        return settled
     summary.written.append(label)
+    settled |= set(to_write)
     api.register_library_file(
         LibraryFileRegister(
             drive_file_id=row.drive_file_id,
@@ -664,6 +730,25 @@ def _apply_one(
             synced_at=datetime.now(UTC),
         )
     )
+    return settled
+
+
+def _send_review(api: Catalog, run_id: str, summary: ReconcileSummary) -> None:
+    """Send the files compared and their open differences to the review;
+    a failure is reported, never raised."""
+    if not summary.reviewed:
+        return
+    try:
+        api.report_reconcile_differences(
+            ReconcileReport(
+                run_id=run_id,
+                compared=list(dict.fromkeys(summary.reviewed)),
+                differences=[d.for_review() for d in summary.open],
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — the review is not the run
+        log.exception("library-reconcile: could not send the review")
+        summary.review_problem = f"{type(exc).__name__}: {exc}"
 
 
 def _reconcile(
@@ -694,17 +779,16 @@ def _reconcile(
     record: RunRecord | None = None
     if summary.mode.writes:
         try:
-            raw = StateFile(drive, settings.state, APPROVALS_NAME).load()
-        except StateProblem as exc:
-            summary.problems.append(str(exc))
+            given = from_api(api.read_reconcile_approvals())
+        except Exception as exc:  # noqa: BLE001 — no approvals, no writes
+            summary.problems.append(
+                f"could not read the approvals from the API: {type(exc).__name__}: {exc}"
+            )
             return
-        if raw is None:
+        if given is None:
             summary.approvals_missing = True
         else:
-            approvals, problems = parse_approvals(raw)
-            if problems:
-                summary.problems.extend(problems)
-                return
+            approvals = given
         record = RunRecord(
             FLOW_NAME,
             run_id,
@@ -724,9 +808,15 @@ def _reconcile(
             try:
                 display = displays.get(row.catalog_id) if row.catalog_id else None
                 compared = _compare_one(drive, row, display, summary)
+                settled: set[str] = set()
                 if compared is not None and record is not None:
-                    _apply_one(
+                    settled = _apply_one(
                         drive, api, record, settings, row, compared, approvals, summary
+                    )
+                if compared is not None:
+                    summary.reviewed.append(row.drive_file_id)
+                    summary.open.extend(
+                        d for d in compared[2] if d.field not in settled
                     )
             except AudioChanged as exc:
                 # The cursor stays on this file: the run stops here.
@@ -747,6 +837,7 @@ def _reconcile(
             if record is not None and record.entries:
                 record.finish(status)
             _save_state(cursor_store, cursor, drive, settings, run_id, summary)
+            _send_review(api, run_id, summary)
     if summary.aborted:
         _report_abort(run_id, summary)
 
@@ -867,7 +958,7 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
         if summary.approvals_missing:
             report.notice(
                 "no_approvals",
-                f"no {APPROVALS_NAME} in the state folder: nothing was written",
+                "no approvals are set in the API yet: nothing was written",
             )
     else:
         report.notice(
@@ -881,6 +972,12 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
         )
     if summary.stopped:
         report.notice("stopped", summary.stopped)
+    if summary.review_problem:
+        report.issue(
+            "review_not_sent",
+            "the differences did not reach the review page "
+            f"({summary.review_problem}); the next pass sends them again",
+        )
     report.count("compared", summary.compared)
     report.count("matching", summary.matching)
     report.count("with_differences", summary.files_with_differences)
