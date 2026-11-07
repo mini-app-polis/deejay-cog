@@ -474,35 +474,3 @@ def test_a_compared_listing_is_listed_afresh_the_next_night(
     assert _listing(drive)["generation"] != generation
     assert [p.drive_file_id for p in registry.registrations] == [new]
     assert summary.added == ["b.mp3"]
-
-
-# ---------------------------------------------------------------------------
-# The nightly job
-# ---------------------------------------------------------------------------
-
-
-def test_the_nightly_job_scans_then_runs_the_backfill(monkeypatch) -> None:
-    order: list[str] = []
-    monkeypatch.setattr(scan, "library_scan", lambda **_: order.append("scan"))
-    monkeypatch.setattr(scan, "library_backfill", lambda **_: order.append("backfill"))
-
-    scan.nightly_library_run(run_id="m-1")
-
-    assert order == ["scan", "backfill"]
-
-
-def test_a_failed_scan_is_reported_and_the_backfill_still_runs(monkeypatch) -> None:
-    def broken(**_):
-        raise RuntimeError("registry down")
-
-    ran = MagicMock()
-    finding = MagicMock()
-    monkeypatch.setattr(scan, "library_scan", broken)
-    monkeypatch.setattr(scan, "library_backfill", ran)
-    monkeypatch.setattr(scan, "post_run_finding", finding)
-
-    scan.nightly_library_run(run_id="m-1")
-
-    ran.assert_called_once_with(run_id="m-1")
-    assert finding.call_args.args[1] == "ERROR"
-    assert "registry down" in finding.call_args.args[2]

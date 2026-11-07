@@ -383,6 +383,41 @@ names each would-be change (`would_add`, `would_mark_back`, `would_move`,
 **Report:** counts for `listed`, `added`, `back`, `moved`, `removed`,
 `left_for_backfill`, `unchanged` and `failed`, with every file by its path.
 
+## library-reconcile
+
+The last step of the nightly `library-backfill` job
+([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), step 3 and
+decision 15): each linked file's owned fields are compared with what its
+catalog entry says they should be, and every difference is filed under a
+kind for the owner to approve. **It reads only**: no music file, catalog
+entry or registry row changes, only its cursor and record in the state
+folder. Off unless `LIBRARY_RECONCILE_MODE` is `dry-run` (see
+[CONFIGURATION.md](CONFIGURATION.md#library-reconcile)); `write` runs as a
+dry run.
+
+**Which files:** present, identified registry rows under the library root,
+in the registry's order, the next `LIBRARY_RECONCILE_CHUNK_SIZE` after
+`library-reconcile-cursor.json` (its own, apart from the backfill's). A dry
+run moves this cursor, so repeated runs step through the library; after the
+last file the next run starts a new pass.
+
+**What is compared:** title (with its version), artist, year, genre, BPM and
+label in the file's ID3 tags, against `POST /v1/catalog/display`. The
+expected title is the entry's title followed by the file's own edit label
+from the registry (`Song (No Intro Edit)`). The comment and every
+VirtualDJ-owned frame are left out. A `TXXX:CATALOG_ID` naming another
+entry than the registry's link is listed under `other`.
+
+**Kinds:** `case_punctuation`, `featured_moved`, `artist_joiner`,
+`version_brackets`, `genre_remapped`, `genre_filled`, `year_differs`,
+`bpm_rounding` (0.5 BPM or less), `bpm_differs`, `label_differs`, `fill_up`
+(a file value for a field the catalog leaves empty) and `other`.
+
+**Record:** `library-reconcile-<run id>.dry-run.json` in the state folder,
+every difference under its kind (path, field, the file's value, the
+catalog's). The report counts each kind, shows a few examples of each, and
+names every `other` file.
+
 ### Run records
 
 Every run of a music-writing flow that touches a file leaves a JSON record in

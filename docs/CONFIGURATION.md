@@ -131,6 +131,20 @@ library registry in step with what is in the library. It reads
 A problem with a setting is a WARN in the scan's report; the backfill runs
 regardless. See [PIPELINE.md](PIPELINE.md#library-scan).
 
+## Library reconcile
+
+After the backfill's chunk the same nightly job runs the
+**library-reconcile** step, which compares linked library files with the
+catalog and reads only. It reads `LIBRARY_ROOT_FOLDER_ID` and
+`MUSIC_TAGGING_STATE_FOLDER_ID` as the backfill does, and:
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `LIBRARY_RECONCILE_MODE` | `off` | `off` \| `dry-run`; `write` runs as a dry run and says so (the write is not built yet); unset or unknown is `off`. Off, the step reads nothing and sends no report. |
+| `LIBRARY_RECONCILE_CHUNK_SIZE` | `50` | Linked files compared per run; a whole number of at least 1. Each is downloaded to read its tags. |
+
+See [PIPELINE.md](PIPELINE.md#library-reconcile).
+
 ---
 
 ## The fingerprint function

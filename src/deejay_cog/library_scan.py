@@ -52,13 +52,12 @@ from mini_app_polis.api.contract import (
     LibraryFilesAbsentRequest,
     LibraryFilesAbsentResult,
 )
-from mini_app_polis.deadline import RunDeadlineReached
+from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
-from mini_app_polis.lambda_worker import RunOutOfTime
 from mini_app_polis.pipeline_status import run_report
 
-from deejay_cog._pipeline_eval import REPO, post_run_finding
+from deejay_cog._pipeline_eval import REPO
 from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
@@ -67,11 +66,9 @@ from deejay_cog.library_backfill import (
     MANIFEST_NAME,
     ROOT_FOLDER_VAR,
     BackfillSettings,
-    BackfillSummary,
     StateFile,
     StateProblem,
     is_mp3_listing,
-    library_backfill,
     list_one_folder,
     new_manifest,
 )
@@ -206,7 +203,8 @@ def _list(
     listed = 0
     while listing["pending_folders"]:
         if shared_deadline_passed() or monotonic() - started >= budget:
-            store.save(listing)
+            with without_run_deadline():
+                store.save(listing)
             return False
         list_one_folder(drive, listing, exclude=exclude)
         listed += 1
@@ -420,29 +418,6 @@ def run_scan(
 def library_scan(*, run_id: str | None = None) -> ScanSummary:
     """Scan the library for added and removed files and report the run."""
     return run_scan(run_id=run_id, mode=flow_mode(MODE_VAR))
-
-
-def nightly_library_run(*, run_id: str | None = None) -> BackfillSummary:
-    """The nightly ``library-backfill`` job: the scan, then the backfill's
-    chunk. A scan that fails is reported and the backfill runs anyway; only
-    the run's deadline stops both."""
-    try:
-        library_scan(run_id=run_id)
-    except (RunOutOfTime, RunDeadlineReached):
-        raise
-    except Exception as exc:  # noqa: BLE001 — the backfill still runs
-        log.exception("library-scan: failed; running the backfill anyway")
-        try:
-            post_run_finding(
-                FLOW_NAME,
-                "ERROR",
-                f"library-scan failed ({type(exc).__name__}: {exc}); "
-                "the registry was not brought up to date tonight",
-                run_id=run_id,
-            )
-        except Exception:  # noqa: BLE001 — the notification is not the job
-            log.exception("library-scan: could not report the failure")
-    return library_backfill(run_id=run_id)
 
 
 def _record(report: Any, summary: ScanSummary, duration_sec: float) -> None:
