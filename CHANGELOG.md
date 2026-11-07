@@ -1,3 +1,16 @@
+## [2.25.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.25.1...v2.25.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* **dep:** common 8.6.1 ([48c23f8](https://github.com/mini-app-polis/deejay-cog/commit/48c23f83d828c4b9dc06835e3e568b67815791b3))
+* **library-backfill:** save progress past the deadline, and leave time for the steps after it ([2bc7fe7](https://github.com/mini-app-polis/deejay-cog/commit/2bc7fe7dd1c72cb2194f93ea072dd05d2e4137a4))
+
+
+### Performance Improvements
+
+* **library:** fewer Drive requests per written file, save progress past the deadline, and leave time for the steps after the backfill ([126f4f8](https://github.com/mini-app-polis/deejay-cog/commit/126f4f8af66dd30d5523e55e48487cdec28286c6))
+
 ## [2.25.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.25.0...v2.25.1) (2026-11-07)
 
 
