@@ -1,3 +1,15 @@
+# [2.24.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.23.0...v2.24.0) (2026-11-07)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 8.5.0 ([431bc95](https://github.com/mini-app-polis/deejay-cog/commit/431bc95355de5e7c4dabcadc36bd46217e069750))
+
+
+### Features
+
+* **library:** the nightly run reports duplicate files and trashes the copies the owner resolved ([ad99eda](https://github.com/mini-app-polis/deejay-cog/commit/ad99eda69577b90365eca625fe6006343bc06cdc))
+
 # [2.23.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.22.0...v2.23.0) (2026-11-07)
 
 
