@@ -1,4 +1,4 @@
-"""The nightly ``library-backfill`` job: four steps over the music library,
+"""The nightly ``library-backfill`` job: five steps over the music library,
 each with its own mode, settings and report.
 
 1. **library-scan** (:mod:`deejay_cog.library_scan`) — files added to and
@@ -11,6 +11,8 @@ each with its own mode, settings and report.
 4. **library-reconcile** (:mod:`deejay_cog.library_reconcile`) — the next
    chunk of linked files is compared with the catalog, by kind of
    difference.
+5. **library-sync** (:mod:`deejay_cog.library_sync`) — catalog edits and
+   display-rule changes are written to the files they affect.
 
 A step other than the backfill that fails is reported as an ERROR finding and the next step runs
 anyway; only the run's deadline stops them all.
@@ -33,6 +35,8 @@ from deejay_cog.library_reconcile import FLOW_NAME as RECONCILE_FLOW_NAME
 from deejay_cog.library_reconcile import library_reconcile
 from deejay_cog.library_scan import FLOW_NAME as SCAN_FLOW_NAME
 from deejay_cog.library_scan import library_scan
+from deejay_cog.library_sync import FLOW_NAME as SYNC_FLOW_NAME
+from deejay_cog.library_sync import library_sync
 
 log = logger_mod.get_logger()
 
@@ -58,8 +62,8 @@ def _step(flow_name: str, step: Callable[..., Any], run_id: str | None) -> None:
 
 
 def nightly_library_run(*, run_id: str | None = None) -> BackfillSummary:
-    """The scan, the identify step, the backfill's chunk, then the
-    reconcile's chunk.
+    """The scan, the identify step, the backfill's chunk, the reconcile's
+    chunk, then the sync.
 
     ``run_id`` is the queue message id when the Lambda worker runs this.
     The backfill raises as it always has (its own failures are its run's
@@ -69,4 +73,5 @@ def nightly_library_run(*, run_id: str | None = None) -> BackfillSummary:
     _step(IDENTIFY_FLOW_NAME, library_identify, run_id)
     summary = library_backfill(run_id=run_id)
     _step(RECONCILE_FLOW_NAME, library_reconcile, run_id)
+    _step(SYNC_FLOW_NAME, library_sync, run_id)
     return summary

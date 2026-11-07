@@ -19,6 +19,7 @@ def order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         "library_identify",
         "library_backfill",
         "library_reconcile",
+        "library_sync",
     ):
         monkeypatch.setattr(nightly, name, lambda _n=name, **_: seen.append(_n))
     return seen
@@ -39,12 +40,14 @@ def test_the_job_scans_identifies_backfills_then_reconciles(order, finding) -> N
         "library_identify",
         "library_backfill",
         "library_reconcile",
+        "library_sync",
     ]
     finding.assert_not_called()
 
 
 @pytest.mark.parametrize(
-    "broken", ["library_scan", "library_identify", "library_reconcile"]
+    "broken",
+    ["library_scan", "library_identify", "library_reconcile", "library_sync"],
 )
 def test_a_failed_step_is_reported_and_the_rest_runs(
     order, finding, monkeypatch: pytest.MonkeyPatch, broken: str
