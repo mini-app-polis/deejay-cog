@@ -131,6 +131,56 @@ def test_a_record_is_created_once_then_updated(drive: FakeDrive) -> None:
     ]
 
 
+def test_a_redelivered_run_keeps_one_record_with_every_write(
+    drive: FakeDrive,
+) -> None:
+    first = safety.RunRecord("flow", "r-1", FlowMode.WRITE).attach(drive, "state")
+    first.add(safety.RecordEntry("f1", "a.mp3", "in_place", state="done"))
+    first.checkpoint()
+
+    again = safety.RunRecord("flow", "r-1", FlowMode.WRITE).attach(drive, "state")
+    again.add(safety.RecordEntry("f2", "b.mp3", "in_place"))
+    again.checkpoint()
+    again.finish("complete")
+
+    (item,) = drive.in_folder("state")
+    saved = json.loads(item.data)
+    assert [e["file_id"] for e in saved["entries"]] == ["f1", "f2"]
+    assert saved["entries"][0]["state"] == "done"
+    assert saved["status"] == "complete"
+
+
+def test_records_already_saved_twice_are_merged_into_one(drive: FakeDrive) -> None:
+    for file_id in ("f1", "f2"):
+        old = safety.RunRecord("flow", "r-1", FlowMode.WRITE)
+        old.add(safety.RecordEntry(file_id, f"{file_id}.mp3", "in_place"))
+        drive.add("flow-r-1.json", "state", json.dumps(old.to_json()).encode())
+
+    again = safety.RunRecord("flow", "r-1", FlowMode.WRITE).attach(drive, "state")
+    again.add(safety.RecordEntry("f3", "c.mp3", "in_place"))
+    again.checkpoint()
+
+    first = drive.in_folder("state")[0]
+    assert [e["file_id"] for e in json.loads(first.data)["entries"]] == [
+        "f1",
+        "f2",
+        "f3",
+    ]
+    assert "upload_bytes" not in [m for m, _ in drive.calls]
+
+
+def test_a_repeated_dry_run_writes_over_its_record(drive: FakeDrive) -> None:
+    for name in ("a.mp3", "b.mp3"):
+        record = safety.RunRecord("flow", "r-1", FlowMode.DRY_RUN).attach(
+            drive, "state"
+        )
+        record.add(safety.RecordEntry("f", name, "in_place", state="planned"))
+        record.finish("complete")
+
+    (item,) = drive.in_folder("state")
+    assert [e["original_name"] for e in json.loads(item.data)["entries"]] == ["b.mp3"]
+
+
 def test_a_save_with_nothing_new_is_skipped(drive: FakeDrive) -> None:
     record = safety.RunRecord("flow", "r-1", FlowMode.WRITE).attach(drive, "state")
     record.add(safety.RecordEntry("f", "a.mp3", "deliver"))

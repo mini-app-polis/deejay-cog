@@ -311,6 +311,12 @@ class RunRecord:
     the last is skipped) and once at the end of a dry run, under ``<flow>-<run id>.json`` (a dry
     run's name ends ``.dry-run.json``). A save that fails in a writing run
     raises, so no write happens that its record does not show.
+
+    One run id has one record. A queued run that is delivered again (after
+    a failure) runs under the same id, so its first save adopts the record
+    the earlier delivery left: a writing run keeps the earlier entries ahead
+    of its own, so a rollback still sees every write; a dry run writes over
+    it.
     """
 
     flow: str
@@ -359,6 +365,35 @@ class RunRecord:
         self.entries.append(entry)
         return entry
 
+    def _adopt_existing(self) -> None:
+        """Take over the record an earlier delivery of this run saved, if
+        any: its file, and in a writing run its entries."""
+        files = self._drive.list_files(
+            parent_id=self._state_folder,
+            name_contains=self.file_name,
+            include_folders=False,
+        )
+        matches = [f for f in files if str(f.name) == self.file_name]
+        if not matches:
+            return
+        self._file_id = str(matches[0].id)
+        if not self.mode.writes:
+            return
+        earlier: list[RecordEntry] = []
+        for found in matches:
+            raw = self._drive.download_file_bytes(str(found.id)).data
+            try:
+                data = json.loads(bytes(raw).decode("utf-8"))
+            except ValueError:
+                log.warning("%s: an earlier record is not JSON", self.file_name)
+                continue
+            for item in data.get("entries") or []:
+                earlier.append(RecordEntry(**item))
+            self.started_at = min(
+                self.started_at, str(data.get("started_at") or self.started_at)
+            )
+        self.entries[:0] = earlier
+
     def save(self) -> None:
         """Write the record to the state folder (create, then update).
 
@@ -367,6 +402,8 @@ class RunRecord:
         """
         if self._drive is None or self.mode is FlowMode.OFF:
             return
+        if self._file_id is None and self._saved is None:
+            self._adopt_existing()
         unchanged = {**self.to_json(), "updated_at": None}
         if self._file_id is not None and unchanged == self._saved:
             return  # nothing new since the last save
