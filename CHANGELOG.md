@@ -1,3 +1,10 @@
+## [2.25.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.25.0...v2.25.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **tags:** read garbled UTF-8 as UTF-8 whatever the frame's encoding ([4af4abf](https://github.com/mini-app-polis/deejay-cog/commit/4af4abf106b60eea0078642d26fc5d501bf0ef91))
+
 # [2.25.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.24.0...v2.25.0) (2026-11-07)
 
 
