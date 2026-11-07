@@ -1,3 +1,10 @@
+# [2.20.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.19.0...v2.20.0) (2026-11-07)
+
+
+### Features
+
+* **library-reconcile:** the nightly run compares linked files with the catalog, grouped into the twelve kinds ([74e5a4d](https://github.com/mini-app-polis/deejay-cog/commit/74e5a4d05e92931203734757303568690ca9bd70))
+
 # [2.19.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.18.0...v2.19.0) (2026-11-07)
 
 
