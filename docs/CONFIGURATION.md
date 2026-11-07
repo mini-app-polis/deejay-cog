@@ -116,6 +116,21 @@ To start the backfill over, move `library-backfill-manifest.json` in the
 state folder to the Drive trash; see
 [PIPELINE.md](PIPELINE.md#library-backfill).
 
+## Library scan
+
+The same nightly job first runs the **library-scan** step, which keeps the
+library registry in step with what is in the library. It reads
+`LIBRARY_ROOT_FOLDER_ID`, `MUSIC_TAGGING_STATE_FOLDER_ID` and
+`LIBRARY_BACKFILL_CHUNK_SIZE` as the backfill does, and:
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `LIBRARY_SCAN_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Off, the step reads nothing and sends no report. |
+| `LIBRARY_SCAN_LISTING_SECONDS` | `90` | The most seconds one run spends listing the library, so the backfill's chunk still fits in the run; a whole number of at least 1. |
+
+A problem with a setting is a WARN in the scan's report; the backfill runs
+regardless. See [PIPELINE.md](PIPELINE.md#library-scan).
+
 ---
 
 ## The fingerprint function

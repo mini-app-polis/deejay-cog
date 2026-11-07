@@ -341,6 +341,48 @@ only that the flow is off; a missing setting is a WARN naming it.
 back the revision each written file had before the run. It does not move
 the cursor; to retag those files again, start over as above.
 
+## library-scan
+
+The first step of the nightly `library-backfill` job
+([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decisions 5 and
+16): files added to and removed from the library reach the API's library
+registry. It reads metadata only and **never renames, moves, deletes or
+downloads a file**. Off unless `LIBRARY_SCAN_MODE` is `dry-run` or `write`
+(see [CONFIGURATION.md](CONFIGURATION.md#library-scan)). A scan that fails is
+reported as an ERROR finding and the backfill's chunk runs anyway.
+
+**The listing** is the backfill's kind of listing (breadth first, the state
+folder and shortcuts left out), kept in `library-scan-listing.json` in the
+state folder. A run lists for at most `LIBRARY_SCAN_LISTING_SECONDS`; an
+unfinished listing is saved and the next night carries on. Only a complete
+listing is compared, and the night after a comparison lists afresh.
+
+**The comparison**, against every registry row under the library root:
+
+- **added** — an MP3 the registry has never seen is registered
+  `unidentified`, with its path. A file the backfill's manifest lists but
+  has not reached yet is left to the backfill (`left_for_backfill`), which
+  registers it with its link; while the backfill's manifest is still being
+  listed, nothing is added (`added_held`).
+- **back** — a row marked not present whose file is listed again is
+  registered again, its link and status unchanged.
+- **moved** — a present row listed under another path keeps its link and
+  gets the new path.
+- **removed** — a present row whose file is not listed (gone, or in the
+  trash) is marked not present. Its row and link stay; the API archives a
+  catalog entry left with no plays and no present file, and un-archives it
+  when a file links to it again.
+
+**Safety:** a listing with no MP3s while the registry has present files, or
+one that would mark more than half of the present files not present,
+changes nothing and is a WARN (`refused`): a wrong root or a Drive problem
+is far likelier than the library emptying overnight. A dry run compares and
+names each would-be change (`would_add`, `would_mark_back`, `would_move`,
+`would_remove`) and changes nothing.
+
+**Report:** counts for `listed`, `added`, `back`, `moved`, `removed`,
+`left_for_backfill`, `unchanged` and `failed`, with every file by its path.
+
 ### Run records
 
 Every run of a music-writing flow that touches a file leaves a JSON record in

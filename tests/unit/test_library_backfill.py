@@ -22,6 +22,7 @@ from music_fakes import AUDIO, DriveItem, FakeDrive, mp3
 from mutagen.id3 import TALB, TIT2, TPE1
 
 from deejay_cog import library_backfill as flow
+from deejay_cog import library_scan as scan
 from deejay_cog import music_rollback as rb
 from deejay_cog.music_safety import tag_snapshot
 
@@ -173,7 +174,8 @@ def _text(posted: MagicMock) -> str:
 def test_the_worker_runs_this_mode() -> None:
     from deejay_cog import worker
 
-    assert worker.MODES["library-backfill"] is flow.library_backfill
+    # The nightly job: the library scan, then the backfill's chunk.
+    assert worker.MODES["library-backfill"] is scan.nightly_library_run
     assert worker.FLOW_NAMES["library-backfill"] == "library-backfill"
 
 
