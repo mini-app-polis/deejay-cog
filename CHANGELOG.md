@@ -1,3 +1,10 @@
+## [2.29.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.29.0...v2.29.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **reconcile:** seed checks the API's approvals first and sends nothing once they are set ([3577761](https://github.com/mini-app-polis/deejay-cog/commit/357776191512413799d28c2f78f9f79955465fbb))
+
 # [2.29.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.28.1...v2.29.0) (2026-11-07)
 
 
