@@ -84,3 +84,26 @@ def test_the_deadline_stops_the_job(order, monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(RunOutOfTime):
         nightly.nightly_library_run(run_id="m-1")
     assert order == []
+
+
+def test_steps_due_past_the_deadline_are_skipped_not_failed(
+    order, finding, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    passed = {"now": False}
+    monkeypatch.setattr(nightly, "shared_deadline_passed", lambda: passed["now"])
+
+    def backfill_then_late(**_):
+        order.append("library_backfill")
+        passed["now"] = True
+
+    monkeypatch.setattr(nightly, "library_backfill", backfill_then_late)
+
+    nightly.nightly_library_run(run_id="m-1")
+
+    assert order == [
+        "library_scan",
+        "library_trash",
+        "library_identify",
+        "library_backfill",
+    ]
+    finding.assert_not_called()
