@@ -618,8 +618,10 @@ Every run of a music-writing flow that touches a file leaves a JSON record in
 `MUSIC_TAGGING_STATE_FOLDER_ID`, named `<flow>-<run id>.json`; the run id is
 the queue message id (a local run makes one up, `local-<time>-<hex>`). A
 writing run saves it before and after each step, so a run stopped by the
-deadline still leaves it (a redelivery of the same run carries on the same
-record). Per file it holds the file id, original name, folder, old and new
+deadline still leaves it. A redelivery of the same run carries on the same
+record: its first save takes over the file the earlier delivery saved and
+keeps that delivery's entries ahead of its own, so a run has one record and
+a rollback sees every write. Per file it holds the file id, original name, folder, old and new
 tags, the action (`deliver`, `review`, `in_place`, `fingerprint`, `skip`),
 its state (`planned`, `pending`, `done`, `skipped`, `failed`, `restored`),
 the reason for a skip or failure, the Drive revision kept and the MD5 of the

@@ -95,6 +95,7 @@ class Item:
 
     @property
     def name(self) -> str:
+        """The file's name, without the folders it is in."""
         return self.path.rsplit("/", 1)[-1]
 
 
