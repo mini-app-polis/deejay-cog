@@ -1,3 +1,15 @@
+# [2.19.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.18.0...v2.19.0) (2026-11-07)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 8.3.0 ([d2c9750](https://github.com/mini-app-polis/deejay-cog/commit/d2c9750b3813a32784463c244b7eb8681a876761))
+
+
+### Features
+
+* **library-scan:** the nightly run registers new library files and marks removed ones, before the backfill's chunk ([a42ddad](https://github.com/mini-app-polis/deejay-cog/commit/a42ddad31f9f035ff73f7e89055e031e912abf05))
+
 # [2.18.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.17.0...v2.18.0) (2026-11-06)
 
 
