@@ -1,3 +1,10 @@
+# [2.25.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.24.0...v2.25.0) (2026-11-07)
+
+
+### Features
+
+* **library:** record each unidentified file's tags and why, with the fingerprint's best guess ([a47762a](https://github.com/mini-app-polis/deejay-cog/commit/a47762aedc3801f939a599dc5ca5adad092354b7))
+
 # [2.24.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.23.0...v2.24.0) (2026-11-07)
 
 
