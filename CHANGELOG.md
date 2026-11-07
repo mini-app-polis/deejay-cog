@@ -1,3 +1,10 @@
+# [2.28.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.27.1...v2.28.0) (2026-11-07)
+
+
+### Features
+
+* **library:** library-reconcile is its own worker mode, out of the nightly job ([3ad673f](https://github.com/mini-app-polis/deejay-cog/commit/3ad673fbe3ea094f7dab2c7e3acf10f49efade33))
+
 ## [2.27.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.27.0...v2.27.1) (2026-11-07)
 
 
