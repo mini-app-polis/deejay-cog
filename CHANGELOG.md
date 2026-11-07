@@ -1,3 +1,10 @@
+## [2.30.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.30.0...v2.30.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **new-music:** a file keeps its own release label (Clean, Explicit) in its title and name ([ef2d144](https://github.com/mini-app-polis/deejay-cog/commit/ef2d1446195eb77e2c2fa1de37e2b490bf30d625))
+
 # [2.30.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.29.1...v2.30.0) (2026-11-07)
 
 
