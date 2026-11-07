@@ -19,7 +19,9 @@ each with its own mode, settings and report.
    that look like copies of one song are grouped for the duplicates page.
 
 A step other than the backfill that fails is reported as an ERROR finding and the next step runs
-anyway; only the run's deadline stops them all.
+anyway; only the run's deadline stops them all. A step due once the shared
+run deadline has passed is skipped, not started: it would only fail on its
+first request, and the next run does it.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from mini_app_polis.deadline import RunDeadlineReached
 from mini_app_polis.lambda_worker import RunOutOfTime
 
 from deejay_cog._pipeline_eval import post_run_finding
+from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog.library_backfill import BackfillSummary, library_backfill
 from deejay_cog.library_duplicates import FLOW_NAME as DUPLICATES_FLOW_NAME
 from deejay_cog.library_duplicates import library_duplicates
@@ -50,7 +53,11 @@ log = logger_mod.get_logger()
 
 
 def _step(flow_name: str, step: Callable[..., Any], run_id: str | None) -> None:
-    """Run one step; a failure is reported and does not stop the job."""
+    """Run one step; a failure is reported and does not stop the job. Past
+    the shared run deadline the step is skipped: the next run does it."""
+    if shared_deadline_passed():
+        log.warning("%s: skipped, the run's deadline has passed", flow_name)
+        return
     try:
         step(run_id=run_id)
     except (RunOutOfTime, RunDeadlineReached):
