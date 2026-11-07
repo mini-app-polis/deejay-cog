@@ -5,6 +5,7 @@ only, stepping through the library from its own cursor."""
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -16,7 +17,10 @@ from mini_app_polis import pipeline_status
 from mini_app_polis.api.contract import (
     CatalogDisplay,
     CatalogDisplayRequest,
+    CatalogFillUp,
+    CatalogFillUpResult,
     LibraryFile,
+    LibraryFileRegister,
 )
 from music_fakes import DriveItem, FakeDrive, mp3
 from mutagen.id3 import COMM, TBPM, TCON, TDRC, TIT2, TPE1, TPUB, TXXX
@@ -213,6 +217,24 @@ class FakeCatalog:
     def read_catalog_display(self, payload: CatalogDisplayRequest):
         return [self.displays.get(i) for i in payload.ids]
 
+
+@dataclass
+class WritingCatalog(FakeCatalog):
+    """The catalog a write run may also fill up and register files with."""
+
+    fills: list[tuple[str, CatalogFillUp]] = field(default_factory=list)
+    registrations: list[LibraryFileRegister] = field(default_factory=list)
+
+    def fill_up_catalog_entry(self, catalog_id, payload: CatalogFillUp):
+        self.fills.append((str(catalog_id), payload))
+        entry = self.displays[uuid.UUID(str(catalog_id))]
+        filled = [k for k, v in payload.model_dump().items() if v is not None]
+        return CatalogFillUpResult(entry=entry, filled=filled)
+
+    def register_library_file(self, payload: LibraryFileRegister):
+        self.registrations.append(payload)
+        return payload
+
     def __getattr__(self, name: str):
         raise AssertionError(f"the reconcile must not call {name}")
 
@@ -356,20 +378,6 @@ def test_each_run_takes_the_next_chunk_and_wraps_at_the_end(
     assert _state(drive, backfill.CURSOR_NAME) is None
 
 
-def test_write_runs_as_a_dry_run_and_says_so(
-    settings, wired, drive, catalog, posted, monkeypatch
-) -> None:
-    monkeypatch.setenv(rec.MODE_VAR, "write")
-    _library(drive, catalog, [{"year": "1999"}])
-
-    summary = rec.library_reconcile(run_id="r-1")
-
-    assert summary.requested_write
-    assert summary.mode is FlowMode.DRY_RUN
-    assert drive.writes(except_folder=STATE) == []
-    assert "write_not_built" in _text(posted)
-
-
 def test_a_file_linked_to_another_entry_is_other(
     settings, wired, drive, catalog
 ) -> None:
@@ -415,3 +423,164 @@ def test_a_bad_chunk_size_does_nothing(
     assert summary.problems
     assert catalog.pages == []
     assert rec.CHUNK_SIZE_VAR in _text(posted)
+
+
+# ---------------------------------------------------------------------------
+# The write run: only what the owner approved, catalog winning
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def writing(monkeypatch: pytest.MonkeyPatch, drive: FakeDrive) -> WritingCatalog:
+    """A write run wired to a catalog that can fill up and register."""
+    api = WritingCatalog()
+    google = MagicMock()
+    google.from_env.return_value = SimpleNamespace(drive=drive)
+    monkeypatch.setattr(rec, "GoogleAPI", google)
+    monkeypatch.setattr(rec, "api_client", lambda **_: api)
+    monkeypatch.setattr(rec, "shared_deadline_passed", lambda: False)
+    monkeypatch.setenv(rec.MODE_VAR, "write")
+    return api
+
+
+def _approve(drive: FakeDrive, **approvals) -> None:
+    drive.add(
+        rec.APPROVALS_NAME,
+        STATE,
+        json.dumps(approvals).encode(),
+        mime_type="application/json",
+    )
+
+
+def _frames(data: bytes) -> dict[str, str]:
+    from mutagen.id3 import ID3
+
+    return {k: str(f.text[0]) for k, f in ID3(io.BytesIO(data)).items()}
+
+
+def test_a_write_applies_only_approved_kinds_with_the_catalogs_value(
+    settings, writing, drive, posted
+) -> None:
+    [drive_id] = _library(
+        drive, writing, [{"genre": "Neo Soul", "year": "2016", "label": "ATLANTIC"}]
+    )
+    _approve(drive, kinds=["genre_remapped", "case_punctuation"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TCON"] == "Pop"  # approved: genre_remapped
+    assert frames["TPUB"] == "Atlantic"  # approved: case_punctuation
+    assert frames["TDRC"] == "2016"  # year_differs was not approved
+    assert frames["COMM::eng"] == "VirtualDJ cue notes"  # never written
+    assert summary.not_approved == 1
+    assert summary.written == ["0.mp3 (genre, label)"]
+    assert drive.items[drive_id].kept  # the revision before the write is kept
+    record = _state(drive, "library-reconcile-r-1.json")
+    assert record["entries"][0]["action"] == "in_place"
+    [reg] = writing.registrations
+    assert reg.synced_at is not None and reg.catalog_id == writing.rows[0].catalog_id
+    # Nothing renamed or moved.
+    assert drive.items[drive_id].name == "0.mp3"
+    assert drive.items[drive_id].parents == [ROOT]
+
+
+def test_after_a_write_a_dry_run_shows_no_approved_difference_left(
+    settings, writing, drive, monkeypatch
+) -> None:
+    _library(drive, writing, [{"genre": "Neo Soul", "artist": "charlie puth"}])
+    _approve(drive, kinds=["genre_remapped", "case_punctuation"])
+    rec.library_reconcile(run_id="r-1")
+
+    monkeypatch.setenv(rec.MODE_VAR, "dry-run")
+    again = rec.run_reconcile(run_id="r-2", mode=FlowMode.DRY_RUN, api=writing)
+
+    # The cursor wrapped to the same file: compared again, nothing left.
+    assert again.compared == 1 and again.matching == 1
+
+
+def test_an_other_difference_is_written_only_when_its_file_is_approved(
+    settings, writing, drive
+) -> None:
+    ids = _library(
+        drive, writing, [{"title": "Something Else"}, {"title": "Something Else"}]
+    )
+    _approve(drive, kinds=[], files={ids[1]: ["title"]})
+
+    rec.library_reconcile(run_id="r-1")
+
+    assert _frames(drive.items[ids[0]].data)["TIT2"] == "Something Else"
+    assert _frames(drive.items[ids[1]].data)["TIT2"] == "Attention (Lash Remix)"
+
+
+def test_an_approved_fill_up_goes_to_the_catalog_and_the_file_is_unchanged(
+    settings, writing, drive
+) -> None:
+    [drive_id] = _library(drive, writing, [{}])
+    entry = writing.rows[0].catalog_id
+    writing.displays[entry] = _display(entry, label=None)
+    before = drive.items[drive_id].data
+    _approve(drive, kinds=["fill_up"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    [(catalog_id, fill)] = writing.fills
+    assert catalog_id == str(entry) and fill.label == "Atlantic"
+    assert summary.filled == ["0.mp3 (label)"]
+    assert drive.items[drive_id].data == before
+
+
+def test_without_approvals_a_write_run_writes_nothing(
+    settings, writing, drive, posted
+) -> None:
+    [drive_id] = _library(drive, writing, [{"genre": "Neo Soul"}])
+    before = drive.items[drive_id].data
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.approvals_missing
+    assert drive.items[drive_id].data == before
+    assert writing.fills == [] and writing.registrations == []
+    assert "no_approvals" in _text(posted)
+
+
+@pytest.mark.parametrize(
+    "approvals",
+    [{"kinds": ["other"]}, {"kinds": ["everything"]}, {"files": {"f1": ["comment"]}}],
+)
+def test_approvals_that_do_not_parse_stop_the_run(
+    settings, writing, drive, posted, approvals
+) -> None:
+    [drive_id] = _library(drive, writing, [{"genre": "Neo Soul"}])
+    before = drive.items[drive_id].data
+    _approve(drive, **approvals)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.problems
+    assert drive.items[drive_id].data == before
+    assert writing.fills == [] and writing.registrations == []
+    assert _state(drive, rec.CURSOR_NAME) is None  # the cursor did not move
+
+
+def test_audio_that_would_change_stops_the_write_and_keeps_the_cursor(
+    settings, writing, drive, monkeypatch
+) -> None:
+    from deejay_cog import music_safety
+
+    _library(drive, writing, [{"genre": "Neo Soul"}, {"genre": "Neo Soul"}])
+    _approve(drive, kinds=["genre_remapped"])
+    finding = MagicMock()
+    monkeypatch.setattr(rec, "post_run_finding", finding)
+
+    def refuse(original, candidate):
+        raise music_safety.AudioChanged("payload differs")
+
+    monkeypatch.setattr(music_safety, "check_audio_unchanged", refuse)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.aborted and summary.position == 0
+    assert _state(drive, rec.CURSOR_NAME)["position"] == 0
+    assert drive.writes(except_folder=STATE) == []
+    assert finding.call_args.args[1] == "ERROR"

@@ -438,11 +438,11 @@ The last step of the nightly `library-backfill` job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), step 3 and
 decision 15): each linked file's owned fields are compared with what its
 catalog entry says they should be, and every difference is filed under a
-kind for the owner to approve. **It reads only**: no music file, catalog
-entry or registry row changes, only its cursor and record in the state
-folder. Off unless `LIBRARY_RECONCILE_MODE` is `dry-run` (see
-[CONFIGURATION.md](CONFIGURATION.md#library-reconcile)); `write` runs as a
-dry run.
+kind for the owner to approve. **A dry run reads only**: no music file,
+catalog entry or registry row changes, only its cursor and record in the
+state folder. A **write** run applies what the owner approved (below). Off
+unless `LIBRARY_RECONCILE_MODE` is `dry-run` or `write` (see
+[CONFIGURATION.md](CONFIGURATION.md#library-reconcile)).
 
 **Which files:** present, identified registry rows under the library root,
 in the registry's order, the next `LIBRARY_RECONCILE_CHUNK_SIZE` after
@@ -464,8 +464,34 @@ entry than the registry's link is listed under `other`.
 
 **Record:** `library-reconcile-<run id>.dry-run.json` in the state folder,
 every difference under its kind (path, field, the file's value, the
-catalog's). The report counts each kind, shows a few examples of each, and
-names every `other` file.
+catalog's); a write run's is `library-reconcile-<run id>.differences.json`.
+The report counts each kind, shows a few examples of each, and names every
+`other` file.
+
+**Approvals** are given in working sessions over the dry runs and kept in
+`library-reconcile-approvals.json` in the state folder:
+
+```json
+{"kinds": ["case_punctuation", "genre_remapped", "fill_up"],
+ "files": {"<drive file id>": ["title"]}}
+```
+
+`kinds` approves whole kinds (any but `other`); `files` approves `other`
+differences one file and field at a time (`title`, `artist`, `year`,
+`genre`, `bpm`, `label`, `catalog_id`). A file that does not parse stops
+the run, naming the problem; with none, a write run writes nothing.
+
+**A write run** writes each approved difference with the catalog's value
+over the same file, in place, with the backfill's safety rules: never
+renamed, moved or deleted; head revision kept; audio checked before and
+after; every write in `library-reconcile-<run id>.json`, which
+`music_rollback` undoes. The file is then registered as synced. Approved
+`fill_up` values go up to the catalog (`POST /v1/catalog/{id}/fill-up`) and
+the file is not written. Differences not approved are left and counted
+(`not_approved`). Genre is written; subgenre is not, as no frame for it is
+decided. An audio mismatch stops the run with an ERROR finding and leaves
+the cursor on that file. After a write run, a dry run over the same files
+shows no approved difference left.
 
 ### Run records
 
