@@ -1,20 +1,20 @@
 """The ``new-music`` worker mode: take new music in, tagged and named.
 
 Files dropped in ``NEW_MUSIC_INPUT_FOLDER_ID`` are usually new releases,
-not yet in the play history or the catalog (ADR-0007, amended 2026-11-03).
-For each file, at most ``NEW_MUSIC_MAX_FILES_PER_RUN`` a run:
+not yet in the play history or the catalog (ADR-0007, amended 2026-11-03
+and 2026-11-07). For each file, at most ``NEW_MUSIC_MAX_FILES_PER_RUN`` a
+run:
 
 1. **By its tags, in the catalog**, exactly as retag-music looks a file up
    (:mod:`deejay_cog.music_tags`). A match is identified: its tags are the
    catalog's.
-2. **Otherwise, by its fingerprint.** The file goes to the fingerprint
-   function, one message per file marked as this flow's
-   (:mod:`deejay_cog.fingerprint_jobs`), which identifies it with AcoustID
-   and MusicBrainz and, only when the score reaches
-   ``RETAG_MIN_CONFIDENCE``, takes it the rest of the way with the same
-   :class:`Intake` steps; below the score it goes to needs-review. That
-   includes a file with a good title and artist the catalog does not know:
-   its own tags are not taken on trust.
+2. **Otherwise, by its own tags, standardized by the catalog.** The file's
+   tags are trusted: the API makes the song's catalog entry from them
+   (``POST /v1/catalog/library/entries``), with the catalog's own parsing,
+   genre vocabulary and display rules, and the file's tags become that
+   entry's. A dry run asks for a preview of the entry, which saves nothing.
+   A file with no usable title or artist goes to needs-review. No file is
+   fingerprinted (AcoustID is left for a later phase).
 
 An identified file is **copied**, never changed: its tagged bytes are
 uploaded as a new file named ``{title}_{artist}.<ext>`` into
@@ -43,10 +43,15 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Protocol
 
 from mini_app_polis import logger as logger_mod
-from mini_app_polis.api.contract import CatalogLookupRequest
+from mini_app_polis.api.contract import (
+    CatalogLookupRequest,
+    IngestTrack,
+    LibraryEntryCreate,
+    LibraryEntryCreated,
+)
 from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
@@ -57,7 +62,6 @@ from deejay_cog._pipeline_eval import REPO, post_run_finding
 from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
-from deejay_cog.fingerprint_jobs import FingerprintJobs, fingerprint_jobs_from_env
 from deejay_cog.music_safety import (
     MP3_MIME_TYPE,
     SOURCE_PROPERTY,
@@ -83,8 +87,6 @@ from deejay_cog.music_tags import (
 )
 
 log = logger_mod.get_logger()
-
-ModeText = Literal["off", "dry-run", "write"]
 
 FLOW_NAME = "new-music"
 
@@ -167,8 +169,7 @@ class IntakeSummary:
     record_name: str = ""
     scanned: int = 0
     identified: list[str] = field(default_factory=list)
-    sent_to_fingerprinting: list[str] = field(default_factory=list)
-    needs_fingerprinting: list[str] = field(default_factory=list)
+    new_entries: list[str] = field(default_factory=list)
     needs_review: list[str] = field(default_factory=list)
     collisions: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
@@ -241,6 +242,14 @@ class LibraryFiles(Protocol):
         offset: int | None = None,
     ) -> list[Any]:
         """One page of registered library files."""
+        ...
+
+
+class IntakeCatalog(CatalogLookup, Protocol):
+    """The part of the API client the intake calls to identify a file."""
+
+    def create_library_entry(self, payload: LibraryEntryCreate) -> LibraryEntryCreated:
+        """The song's catalog entry, made (or previewed) from its tags."""
         ...
 
 
@@ -485,23 +494,6 @@ class Intake:
         entry.state = "done"
         self.record.checkpoint()
 
-    def fingerprinting(self, file_id: str, name: str, reason: str) -> None:
-        """Note, in the record, a file handed to the fingerprint function."""
-        self.record.add(
-            RecordEntry(
-                file_id=file_id,
-                original_name=name,
-                action="fingerprint",
-                state="sent",
-                reason=reason,
-            )
-        )
-
-
-# ---------------------------------------------------------------------------
-# Stage 1: the worker mode
-# ---------------------------------------------------------------------------
-
 
 def list_audio_files(drive: Any, folder_id: str) -> list[Any]:
     """The audio files directly in a Drive folder, each once."""
@@ -524,13 +516,25 @@ def max_files_per_run() -> int:
     return int(raw) if raw else DEFAULT_MAX_FILES_PER_RUN
 
 
-def intake_one(
-    intake: Intake,
-    api: CatalogLookup,
-    file_id: str,
-    fingerprint_jobs: FingerprintJobs | None,
-) -> None:
-    """Identify one file by its tags and take it in, or hand it on."""
+def entry_request(track: IngestTrack, *, preview: bool) -> LibraryEntryCreate:
+    """The catalog entry the file's own tags describe; a value the entry
+    would refuse (a BPM of 0, a year outside four digits) is left out."""
+    bpm = track.bpm if track.bpm and track.bpm > 0 else None
+    year = track.release_year
+    return LibraryEntryCreate(
+        title=track.title,
+        artist=track.artist,
+        remix=track.remix,
+        label=track.label,
+        genre=track.genre,
+        bpm=bpm,
+        release_year=year if year and 1000 <= year <= 9999 else None,
+        preview=preview,
+    )
+
+
+def intake_one(intake: Intake, api: IntakeCatalog, file_id: str) -> None:
+    """Identify one file by its tags and take it in, or send it to review."""
     downloaded = intake.drive.download_file_bytes(file_id)
     name = str(getattr(downloaded, "name", "") or file_id)
     data: bytes = downloaded.data
@@ -549,25 +553,34 @@ def intake_one(
         intake.deliver(file_id, name, data, tagged, identified_by="catalog")
         return
 
-    reason = "not in the catalog" if track is not None else "no usable title or artist"
-    if fingerprint_jobs is None:
-        # No queue (a local run): left in the input folder for a later run.
-        intake.summary.needs_fingerprinting.append(f"{name} ({reason})")
+    if track is None:
+        intake.review(file_id, name, data, "no usable title or artist")
         return
-    fingerprint_jobs.send(
-        file_id, name, flow="new-music", mode=cast(ModeText, intake.mode.value)
+
+    # Trusted, but standardized: the catalog makes (or, in a dry run,
+    # previews) the song's entry from the file's own tags.
+    made = api.create_library_entry(
+        entry_request(track, preview=not intake.mode.writes)
     )
-    intake.fingerprinting(file_id, name, reason)
-    intake.summary.sent_to_fingerprinting.append(f"{name} ({reason})")
+    if made.created or made.previewed:
+        entry = made.entry
+        intake.summary.new_entries.append(
+            f"{name} -> {entry.artist} - {entry.title}"
+            + (f" ({entry.remix})" if entry.remix else "")
+        )
+        by = "own tags + new catalog entry"
+    else:
+        by = "own tags + catalog"
+    tagged = write_catalog_tags(data, made.entry) or data
+    intake.deliver(file_id, name, data, tagged, identified_by=by)
 
 
 def intake_files(
     intake: Intake,
-    api: CatalogLookup,
+    api: IntakeCatalog,
     files: list[Any],
     *,
     max_files: int,
-    fingerprint_jobs: FingerprintJobs | None,
 ) -> None:
     """Take in up to ``max_files`` of ``files`` (all when 0).
 
@@ -585,7 +598,7 @@ def intake_files(
             raise RunOutOfTime(f"run deadline reached before {name}")
         summary.scanned += 1
         try:
-            intake_one(intake, api, f.id, fingerprint_jobs)
+            intake_one(intake, api, f.id)
         except AudioChanged:
             summary.failed.append(name)
             raise
@@ -678,13 +691,7 @@ def new_music(*, run_id: str | None = None) -> IntakeSummary:
 
     def work(intake: Intake) -> None:
         files = list_audio_files(intake.drive, intake.folders.input)
-        intake_files(
-            intake,
-            api,
-            files,
-            max_files=max_files_per_run(),
-            fingerprint_jobs=fingerprint_jobs_from_env(),
-        )
+        intake_files(intake, api, files, max_files=max_files_per_run())
 
     return run_intake(stage="intake", run_id=run_id, mode=mode, work=work, library=api)
 
@@ -708,8 +715,7 @@ def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
     report.ok(0 if dry else len(summary.identified))
     report.count("scanned", summary.scanned)
     report.count("identified", len(summary.identified))
-    report.count("sent_to_fingerprinting", len(summary.sent_to_fingerprinting))
-    report.count("needs_fingerprinting", len(summary.needs_fingerprinting))
+    report.count("new_entries", len(summary.new_entries))
     report.count("needs_review", len(summary.needs_review))
     report.count("collisions", len(summary.collisions))
     report.count("failed", len(summary.failed))
@@ -726,10 +732,8 @@ def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
             report.notice("would_identify", name)
         else:
             report.created("tagged copy", name)
-    for name in summary.sent_to_fingerprinting:
-        report.notice("sent_to_fingerprinting", name)
-    for name in summary.needs_fingerprinting:
-        report.notice("needs_fingerprinting", name)
+    for name in summary.new_entries:
+        report.notice("would_create_entry" if dry else "created_entry", name)
     for name in summary.needs_review:
         report.notice("would_need_review" if dry else "needs_review", name)
     for name in summary.collisions:

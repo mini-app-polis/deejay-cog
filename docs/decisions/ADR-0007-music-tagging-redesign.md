@@ -5,7 +5,10 @@ Date: 2026-10-29
 ## Status
 
 Accepted. Amended 2026-11-03 (owner): two flows and the safety rules, in
-[the section at the end](#amended-2026-11-03-owner-two-flows-and-the-safety-rules).
+[its section](#amended-2026-11-03-owner-two-flows-and-the-safety-rules).
+Amended 2026-11-07 (owner): new music is identified by its own tags,
+standardized by the catalog, with no fingerprint, in
+[the section at the end](#amended-2026-11-07-owner-new-music-trusts-its-own-tags-standardized-by-the-catalog).
 
 Supersedes, once built, the retag-music parts of
 [ADR-0002](./ADR-0002-production-vs-local-flow-tiers.md) (retag-music as a
@@ -315,3 +318,44 @@ review before it acts and to undo after.
   needs-review, to be tagged by hand.
 - The new-music settings must reach the fingerprint function as well as the
   worker, and `new-music` must join the modes the API contract accepts.
+
+## Amended 2026-11-07 (owner): new music trusts its own tags, standardized by the catalog
+
+### Context
+
+The first new-music dry run (2026-11-07) identified 19 of 25 files from the
+catalog and sent the other 6 to the fingerprint function, which failed: no
+AcoustID application key had been set up. The owner decided AcoustID is not
+needed at this phase: the music coming in is trusted to be tagged with
+what it is. He also wants every file's tags standardized the same way,
+whichever way it was identified.
+
+### Decision
+
+- A new-music file the catalog does not know is identified by **its own
+  tags**. They are not written as they are: the API makes the song's
+  catalog entry from them (`POST /v1/catalog/library/entries`, an entry
+  with no plays), which runs the catalog's own parsing (main and featured
+  artists, the version in brackets), its genre vocabulary and the display
+  rules. The file is then tagged and named from that entry, exactly as a
+  catalog match is. Adding music to the library adds it to the catalog
+  (ADR-0008, decision 1).
+- A dry run asks the same endpoint for a **preview**: the entry it would
+  make, written out by the same rules, with nothing saved.
+- A file with **no usable title or artist** goes to needs-review.
+- **No new-music file is fingerprinted.** AcoustID is left for a later
+  phase; the fingerprint function keeps its new-music path, but nothing
+  sends to it, and library-identify still uses the function as before.
+
+### Consequences
+
+- A file whose tags are wrong becomes a wrong catalog entry. The report
+  names every new entry (`would_create_entry` in a dry run,
+  `created_entry` in write), so the dry run is where a bad tag is caught;
+  an entry is fixed afterwards in the catalog editor, and the sync writes
+  the fix to the file.
+- An entry is made before the file's name is checked, so a file that then
+  goes to needs-review (a name collision) still leaves its song in the
+  catalog. It has no plays and no present file, as any library entry can.
+- The 2026-11-03 amendment's "a new release AcoustID does not know yet
+  scores low and goes to needs-review" no longer applies to new music.
