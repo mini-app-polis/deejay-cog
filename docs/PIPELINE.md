@@ -505,6 +505,10 @@ decided. An audio mismatch stops the run with an ERROR finding and leaves
 the cursor on that file. After a write run, a dry run over the same files
 shows no approved difference left.
 
+**Approval rules:** what is approved, and why some kinds are held, is in
+[ADR-0008, decided 2026-11-07](decisions/ADR-0008-catalog-source-of-truth.md#decided-with-the-owner-2026-11-07-the-first-reconcile-review).
+The approvals file holds the current choices.
+
 ### Working the reconcile from a session
 
 `python -m deejay_cog.reconcile_admin`, run locally under
