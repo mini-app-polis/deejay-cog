@@ -152,12 +152,12 @@ The fingerprint function's confidence threshold is `RETAG_MIN_CONFIDENCE`
 
 After the backfill's chunk the same nightly job runs the
 **library-reconcile** step, which compares linked library files with the
-catalog and reads only. It reads `LIBRARY_ROOT_FOLDER_ID` and
+catalog; a dry run reads only, a write run applies what the owner approved. It reads `LIBRARY_ROOT_FOLDER_ID` and
 `MUSIC_TAGGING_STATE_FOLDER_ID` as the backfill does, and:
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_RECONCILE_MODE` | `off` | `off` \| `dry-run`; `write` runs as a dry run and says so (the write is not built yet); unset or unknown is `off`. Off, the step reads nothing and sends no report. |
+| `LIBRARY_RECONCILE_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Off, the step reads nothing and sends no report. `write` applies only what `library-reconcile-approvals.json` in the state folder approves, and writes nothing without it. |
 | `LIBRARY_RECONCILE_CHUNK_SIZE` | `50` | Linked files compared per run; a whole number of at least 1. Each is downloaded to read its tags. |
 
 See [PIPELINE.md](PIPELINE.md#library-reconcile).

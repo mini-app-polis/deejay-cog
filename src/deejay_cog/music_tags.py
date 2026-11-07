@@ -304,6 +304,40 @@ def write_display_tags(
     return _write_frames(data, tags, wanted)
 
 
+#: The frame each owned field is written to.
+OWNED_FRAMES = {
+    "title": TIT2,
+    "artist": TPE1,
+    "year": TDRC,
+    "genre": TCON,
+    "bpm": TBPM,
+    "label": TPUB,
+}
+
+
+def write_owned_fields(data: bytes, values: dict[str, str]) -> bytes | None:
+    """The file's bytes with only the owned fields in ``values`` written
+    (``catalog_id`` writes ``TXXX:CATALOG_ID``), or None when they already
+    hold those values. Every other frame, the comment included, is left as
+    it is."""
+    tags = _load(data)
+    wanted: list[tuple[str, Any]] = []
+    for name, value in values.items():
+        if name == "catalog_id":
+            wanted.append(
+                (
+                    f"TXXX:{CATALOG_ID_DESC}",
+                    TXXX(encoding=3, desc=CATALOG_ID_DESC, text=[value]),
+                )
+            )
+        elif value:
+            frame = OWNED_FRAMES[name]
+            wanted.append((frame.__name__, frame(encoding=3, text=[value])))
+    if not wanted:
+        return None
+    return _write_frames(data, tags, wanted)
+
+
 def write_recording_tags(
     data: bytes, *, title: str, artist: str, year: str | None = None
 ) -> bytes | None:
