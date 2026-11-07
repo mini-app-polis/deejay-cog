@@ -62,6 +62,11 @@ from deejay_cog.library_backfill import MODE_VAR as BACKFILL_MODE_VAR
 from deejay_cog.library_backfill import ROOT_FOLDER_VAR as BACKFILL_ROOT_FOLDER_VAR
 from deejay_cog.library_backfill import SKIP_IDS_VAR as BACKFILL_SKIP_IDS_VAR
 from deejay_cog.library_backfill import chunk_size_setting
+from deejay_cog.library_identify import CHUNK_SIZE_VAR as IDENTIFY_CHUNK_SIZE_VAR
+from deejay_cog.library_identify import MODE_VAR as IDENTIFY_MODE_VAR
+from deejay_cog.library_identify import (
+    chunk_size_setting as identify_chunk_size_setting,
+)
 from deejay_cog.library_nightly import nightly_library_run
 from deejay_cog.library_reconcile import CHUNK_SIZE_VAR as RECONCILE_CHUNK_SIZE_VAR
 from deejay_cog.library_reconcile import MODE_VAR as RECONCILE_MODE_VAR
@@ -141,6 +146,8 @@ def effective_settings() -> dict[str, Any]:
         BACKFILL_SKIP_IDS_VAR: os.getenv(BACKFILL_SKIP_IDS_VAR, "").strip(),
         SCAN_MODE_VAR: flow_mode(SCAN_MODE_VAR).value,
         SCAN_LISTING_SECONDS_VAR: listing_seconds_setting(),
+        IDENTIFY_MODE_VAR: flow_mode(IDENTIFY_MODE_VAR).value,
+        IDENTIFY_CHUNK_SIZE_VAR: identify_chunk_size_setting(),
         RECONCILE_MODE_VAR: flow_mode(RECONCILE_MODE_VAR).value,
         RECONCILE_CHUNK_SIZE_VAR: reconcile_chunk_size_setting(),
     }

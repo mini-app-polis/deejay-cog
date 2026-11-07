@@ -37,6 +37,16 @@ tagged copy under its new name in the destination folder and the original
 moved to processed-originals on a confident match, the original moved to
 needs-review otherwise. That run is reported under ``new-music`` and follows
 the stricter of the message's mode and ``NEW_MUSIC_MODE``.
+
+**Library files.** A message marked ``"flow": "library-identify"`` comes
+from the nightly library run (:mod:`deejay_cog.library_identify`). The file
+is identified the same way but **no MusicBrainz tags are written**: a
+confident match is looked up in the catalog, or made a library entry when
+the catalog has no song for it, and the file is then linked to that entry
+(fill-up, the catalog's values written in place, registered as identified).
+Below the score the file is left unchanged and stays unidentified. That run
+is reported under ``library-identify`` and follows the stricter of the
+message's mode and ``LIBRARY_IDENTIFY_MODE``.
 """
 
 from __future__ import annotations
@@ -57,7 +67,11 @@ import acoustid
 from googleapiclient.http import DEFAULT_HTTP_TIMEOUT_SEC
 from mini_app_polis import load_secrets, timing
 from mini_app_polis import logger as logger_mod
-from mini_app_polis.api.contract import CatalogLookupRequest, CatalogMatch
+from mini_app_polis.api.contract import (
+    CatalogLookupRequest,
+    CatalogMatch,
+    LibraryEntryCreate,
+)
 from mini_app_polis.deadline import RunDeadlineReached
 from mini_app_polis.environment import api_base_url, log_settings
 from mini_app_polis.google import GoogleAPI
@@ -81,14 +95,16 @@ from mini_app_polis.mp3.identify.providers.musicbrainz_provider import (
 from mini_app_polis.pipeline_status import run_report
 from mini_app_polis.sentry import init_sentry
 
-from deejay_cog import new_music
+from deejay_cog import library_identify, new_music
 from deejay_cog._pipeline_eval import REPO, post_run_finding
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
 from deejay_cog.fingerprint_jobs import FingerprintJobMessage
 from deejay_cog.music_safety import (
+    STATE_FOLDER_VAR,
     AudioChanged,
     FlowMode,
+    RunRecord,
     TagEmptied,
     check_audio_unchanged,
     file_meta,
@@ -602,6 +618,208 @@ def intake_by_fingerprint(
 
 
 # ---------------------------------------------------------------------------
+# Library files (the nightly library run's unidentified files)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LibraryIdentifyResult:
+    """One library file's outcome."""
+
+    path: str
+    outcome: str
+    score: float | None = None
+    catalog_id: str = ""
+    entry_created: bool = False
+    written: bool = False
+    would_write: bool = False
+    filled: tuple[str, ...] = ()
+
+
+def identify_library_file(
+    drive: Any,
+    api: Any,
+    identifier: Identifier,
+    record: RunRecord,
+    *,
+    file_id: str,
+    root: str,
+    path: str,
+    threshold: float,
+) -> LibraryIdentifyResult:
+    """Identify one library file by its fingerprint and, on a confident
+    match, link it to its catalog entry (made a library entry when the
+    catalog has no song for it). No MusicBrainz tags are written; below
+    ``threshold`` nothing changes."""
+    meta = file_meta(drive, file_id)
+    if meta.get("trashed"):
+        return LibraryIdentifyResult(path, "in_trash")
+    downloaded = drive.download_file_bytes(file_id)
+    name = str(meta.get("name") or getattr(downloaded, "name", "") or file_id)
+    data: bytes = downloaded.data
+    if not _is_mp3(downloaded, name):
+        return LibraryIdentifyResult(path, Outcome.NOT_MP3.value)
+
+    result = _identify(identifier, name, data)
+    chosen = result.chosen
+    score = float(chosen.confidence or 0.0) if chosen is not None else 0.0
+    if chosen is None or score < threshold:
+        return LibraryIdentifyResult(path, Outcome.BELOW_CONFIDENCE.value, score)
+    metadata = result.metadata or {}
+    title = str(metadata.get("title") or "").strip()
+    artist = str(metadata.get("artist") or "").strip()
+    year = _year(metadata.get("year"))
+    track = ingest_track({"title": title, "artist": artist, "year": year})
+    if track is None:
+        return LibraryIdentifyResult(path, Outcome.NO_RECORDING_TAGS.value, score)
+
+    match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+    created = False
+    if match is not None:
+        catalog_id = str(match.id)
+    elif record.mode.writes:
+        made = api.create_library_entry(
+            LibraryEntryCreate(
+                title=title,
+                artist=artist,
+                release_year=int(year) if year else None,
+            )
+        )
+        catalog_id, created = str(made.entry.id), made.created
+    else:
+        return LibraryIdentifyResult(path, "would_create_entry", score)
+
+    linked = library_identify.link_and_write(
+        drive,
+        api,
+        record,
+        file_id=file_id,
+        name=name,
+        root=root,
+        path=path,
+        data=data,
+        catalog_id=catalog_id,
+        identified_by=f"fingerprint ({score:.2f}) + catalog",
+    )
+    return LibraryIdentifyResult(
+        path,
+        "linked",
+        score,
+        catalog_id,
+        created,
+        linked.written,
+        linked.would_write,
+        tuple(linked.filled),
+    )
+
+
+def library_identify_by_fingerprint(
+    file_id: str,
+    name: str = "",
+    *,
+    root: str,
+    path: str,
+    run_id: str | None = None,
+    sender_mode: FlowMode = FlowMode.OFF,
+    drive: Any | None = None,
+    api: Any | None = None,
+    identifier: Identifier | None = None,
+) -> LibraryIdentifyResult | None:
+    """One library file's fingerprint run, reported under
+    ``library-identify``, in the stricter of the sender's mode and
+    ``LIBRARY_IDENTIFY_MODE`` here."""
+    mode = stricter(sender_mode, flow_mode(library_identify.MODE_VAR))
+    started_at = monotonic()
+    result: LibraryIdentifyResult | None = None
+    if mode is FlowMode.OFF:
+        log.info("deejay-fingerprint: library file %s skipped: off", path or file_id)
+        return None
+    with run_report(
+        library_identify.FLOW_NAME,
+        repo=REPO,
+        notable=True,
+        run_id=run_id,
+        version=__version__,
+    ) as report:
+        record: RunRecord | None = None
+        try:
+            state = os.getenv(STATE_FOLDER_VAR, "").strip()
+            if not state:
+                report.issue("setting", f"{STATE_FOLDER_VAR} is not set")
+                return None
+            if drive is None:
+                drive = GoogleAPI.from_env().drive
+            client = (
+                api
+                if api is not None
+                else api_client(base_url=api_base_url().strip() or None)
+            )
+            threshold = min_confidence()
+            record = RunRecord(
+                library_identify.FLOW_NAME,
+                run_id or file_id,
+                mode,
+                stage="fingerprint",
+                folders={"root": root, "state": state},
+            ).attach(drive, state)
+            result = identify_library_file(
+                drive,
+                client,
+                identifier
+                if identifier is not None
+                else build_identifier(threshold=threshold),
+                record,
+                file_id=file_id,
+                root=root,
+                path=path or name or file_id,
+                threshold=threshold,
+            )
+        except AudioChanged as exc:
+            report.issue("audio_changed", f"{path}: {exc}")
+            raise
+        finally:
+            if record is not None and record.entries:
+                record.finish("complete" if result else "failed")
+            _record_library(report, mode, result, monotonic() - started_at)
+    return result
+
+
+def _record_library(
+    report: Any,
+    mode: FlowMode,
+    result: LibraryIdentifyResult | None,
+    duration_sec: float,
+) -> None:
+    report.duration_sec = duration_sec
+    if mode is FlowMode.DRY_RUN:
+        report.notice(
+            "dry_run", "LIBRARY_IDENTIFY_MODE is dry-run: nothing was changed"
+        )
+    if result is None:
+        return
+    item = result.path
+    if result.score is not None:
+        item = f"{item} (score {result.score:.2f})"
+    report.count("scanned", 1)
+    report.count("linked", 1 if result.outcome == "linked" else 0)
+    if result.outcome != "linked":
+        report.notice(result.outcome, item)
+        return
+    report.ok(1)
+    report.updated("library file linked", item)
+    if result.entry_created:
+        report.created("library entry", item)
+    if result.written:
+        report.created("tags written", result.path)
+    if result.would_write:
+        report.notice("would_write", result.path)
+    if result.filled:
+        report.updated(
+            "catalog filled up", f"{result.path} ({', '.join(result.filled)})"
+        )
+
+
+# ---------------------------------------------------------------------------
 # The Lambda entrypoint
 # ---------------------------------------------------------------------------
 
@@ -612,6 +830,7 @@ def effective_settings() -> dict[str, Any]:
         "RETAG_MIN_CONFIDENCE": min_confidence(),
         "ACOUSTID_API_KEY": os.getenv("ACOUSTID_API_KEY", "").strip(),
         new_music.MODE_VAR: flow_mode(new_music.MODE_VAR).value,
+        library_identify.MODE_VAR: flow_mode(library_identify.MODE_VAR).value,
         **{var: os.getenv(var, "").strip() for var in new_music.FOLDER_VARS.values()},
     }
 
@@ -637,6 +856,20 @@ def process_message(body: str, *, run_id: str) -> None:
         intake_by_fingerprint(
             payload.drive_file_id,
             payload.name,
+            run_id=run_id,
+            sender_mode=parse_mode(payload.mode, setting="message mode"),
+        )
+        return
+    if payload.flow == "library-identify":
+        if not payload.library_root_id or not payload.path:
+            raise UnprocessableMessage(
+                "a library-identify message names its library_root_id and path"
+            )
+        library_identify_by_fingerprint(
+            payload.drive_file_id,
+            payload.name,
+            root=payload.library_root_id,
+            path=payload.path,
             run_id=run_id,
             sender_mode=parse_mode(payload.mode, setting="message mode"),
         )

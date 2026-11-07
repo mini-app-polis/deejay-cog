@@ -13,8 +13,11 @@ contract:
 ``flow`` says which flow sent the file and so what the function does with
 it: ``retag-music`` (the default, so a message without it is read as
 before) tags the file in place; ``new-music`` takes it in as the new-music
-mode would (:mod:`deejay_cog.new_music`). For ``new-music``, ``mode`` is the
-sender's ``NEW_MUSIC_MODE``; the function uses the stricter of it and its
+mode would (:mod:`deejay_cog.new_music`); ``library-identify`` identifies a
+library file and links it to the catalog
+(:mod:`deejay_cog.library_identify`), and also carries the file's
+``library_root_id`` and ``path``. For ``new-music`` and ``library-identify``,
+``mode`` is the sender's mode; the function uses the stricter of it and its
 own, and reads a missing one as ``off``.
 
 The deejay worker gets the queue's URL as ``DEEJAY_FINGERPRINT_QUEUE_URL``.
@@ -44,11 +47,18 @@ class FingerprintJobPayload(BaseModel):
 
     drive_file_id: str = Field(..., min_length=1, description="The file.")
     name: str = Field(default="", description="Its name, for the run report.")
-    flow: Literal["retag-music", "new-music"] = Field(
+    flow: Literal["retag-music", "new-music", "library-identify"] = Field(
         default="retag-music", description="The flow that sent the file."
     )
     mode: Literal["off", "dry-run", "write"] | None = Field(
-        default=None, description="The new-music sender's mode."
+        default=None, description="The new-music or library-identify sender's mode."
+    )
+    library_root_id: str | None = Field(
+        default=None, description="A library file's library root (library-identify)."
+    )
+    path: str | None = Field(
+        default=None,
+        description="A library file's path under its root (library-identify).",
     )
 
 
@@ -73,15 +83,22 @@ class FingerprintJobs:
         file_id: str,
         name: str,
         *,
-        flow: Literal["retag-music", "new-music"] = "retag-music",
+        flow: Literal["retag-music", "new-music", "library-identify"] = "retag-music",
         mode: Literal["off", "dry-run", "write"] | None = None,
+        library_root_id: str | None = None,
+        path: str | None = None,
     ) -> None:
         """Queue one file. The file id (prefixed with the flow for
         new-music) is the deduplication id, so a run that is redelivered
         does not queue the same file twice within SQS's five-minute window."""
         message = FingerprintJobMessage(
             payload=FingerprintJobPayload(
-                drive_file_id=file_id, name=name, flow=flow, mode=mode
+                drive_file_id=file_id,
+                name=name,
+                flow=flow,
+                mode=mode,
+                library_root_id=library_root_id,
+                path=path,
             )
         )
         self._client.send_message(

@@ -383,6 +383,55 @@ names each would-be change (`would_add`, `would_mark_back`, `would_move`,
 **Report:** counts for `listed`, `added`, `back`, `moved`, `removed`,
 `left_for_backfill`, `unchanged` and `failed`, with every file by its path.
 
+## library-identify
+
+The second step of the nightly `library-backfill` job
+([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decisions 2 and
+5): the library files the registry holds as `unidentified` (new to the
+library, or ones the backfill could not match) are identified, linked to
+their catalog entry and written with its values. Off unless
+`LIBRARY_IDENTIFY_MODE` is `dry-run` or `write` (see
+[CONFIGURATION.md](CONFIGURATION.md#library-identify)).
+
+**Each run** takes the next `LIBRARY_IDENTIFY_CHUNK_SIZE` present,
+unidentified files it has not tried before. Every file tried, and its
+outcome, is kept in `library-identify-tried.json` in the state folder, so a
+file is not fingerprinted again every night; remove an id from it (or trash
+it) to try again.
+
+**Per file:**
+
+1. In the trash → left to the scan, named.
+2. Its tags (a UTF-8 tag marked Latin-1 is read as UTF-8) are looked up in
+   the catalog with the set import's matching. A match → **linked** (below).
+3. No usable title or artist, or tags the catalog does not know → sent to
+   the fingerprint function (flow `library-identify`). There a confident
+   AcoustID match (`RETAG_MIN_CONFIDENCE`) is looked up in the catalog, or
+   made a library entry when the catalog has no song for it, and linked.
+   No MusicBrainz tags are written. Below the score the file is unchanged
+   and stays unidentified for the owner's page. Tags alone never make an
+   entry: the fingerprint confirms them first.
+
+**Linking** fills the entry's empty fields from the file
+(`POST /v1/catalog/{id}/fill-up`), writes the catalog's owned fields as the
+display rules render them (title with the file's own release label, artist,
+year, genre, BPM with one decimal, label, and `TXXX:CATALOG_ID`) over the
+same file, and registers it as identified with when it was synced. The
+write follows the backfill's safety rules: never renamed, moved or deleted;
+head revision kept; audio checked before and after; every write in
+`library-identify-<run id>.json`, which `music_rollback` undoes. The comment
+and every other frame are left as they are. An audio mismatch stops the run
+with an ERROR finding; that file is marked tried and not retried.
+
+**Dry run** looks up and plans, but writes no music, changes nothing in the
+catalog or registry, sends nothing to the fingerprint queue and records no
+file as tried. Its record is `library-identify-<run id>.dry-run.json`.
+
+**Report:** counts for `waiting`, `tried`, `linked`, `written`,
+`would_write`, `filled_up`, `to_fingerprint` and `failed`, with every file
+by its path. The fingerprint function's run for a library file is reported
+under `library-identify` too.
+
 ## library-reconcile
 
 The last step of the nightly `library-backfill` job
