@@ -1,3 +1,10 @@
+# [2.30.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.29.1...v2.30.0) (2026-11-07)
+
+
+### Features
+
+* **new-music:** identify a file the catalog does not know by its own tags, standardized as a new catalog entry, with no fingerprint ([16147cc](https://github.com/mini-app-polis/deejay-cog/commit/16147cc8634527142033c3175d7c8fd4afa9381e))
+
 ## [2.29.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.29.0...v2.29.1) (2026-11-07)
 
 
