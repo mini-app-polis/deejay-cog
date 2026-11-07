@@ -1,3 +1,15 @@
+# [2.29.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.28.1...v2.29.0) (2026-11-07)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 8.9.0 ([25f0abe](https://github.com/mini-app-polis/deejay-cog/commit/25f0abe42afb1b1d4653dbe237ceac2a6e8b6d03))
+
+
+### Features
+
+* **reconcile:** send differences to the API review and read approvals from it ([a61290e](https://github.com/mini-app-polis/deejay-cog/commit/a61290ec5492c6ffac82fe8b694214d8b894f46e))
+
 ## [2.28.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.28.0...v2.28.1) (2026-11-07)
 
 
