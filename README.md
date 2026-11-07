@@ -66,6 +66,7 @@ The **fingerprint function** (`fingerprint.py`) is a second Lambda behind its ow
 | **library_backfill.py** | Production library backfill (the `library-backfill` mode). |
 | **music_safety.py** | The safety layer every music-writing flow uses: modes, the audio check, run records. |
 | **music_rollback.py** | Local CLI: undo a music-tagging run from its run record (dry run unless `--apply`). |
+| **reconcile_admin.py** | Local CLI: review the library reconcile's differences by kind, record approvals, move its cursor and run it by hand. |
 | **deduplicate_summary.py** | CLI / helper to deduplicate summary spreadsheets. |
 | **spotify_sync.py** | Spotify helpers used from `process_new_files.py`. |
 
@@ -129,6 +130,16 @@ does it only with `--apply` — see [PIPELINE.md](docs/PIPELINE.md#rolling-a-mus
 ```bash
 doppler run -- uv run python -m deejay_cog.music_rollback <run_id>
 doppler run -- uv run python -m deejay_cog.music_rollback <run_id> --apply
+```
+
+**reconcile_admin** (working sessions over the library reconcile — see
+[PIPELINE.md](docs/PIPELINE.md#working-the-reconcile-from-a-session)):
+
+```bash
+doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin review
+doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin approve --kind bpm_rounding --apply
+doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin cursor --position 0 --apply
+doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin run --mode dry-run --chunk 260
 ```
 
 **deduplicate_summary** (spreadsheet IDs as arguments):

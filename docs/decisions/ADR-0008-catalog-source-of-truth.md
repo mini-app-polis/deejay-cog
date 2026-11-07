@@ -7,7 +7,9 @@ Date: 2026-11-05
 Accepted (owner, 2026-11-05). Builds on
 [ADR-0007](./ADR-0007-music-tagging-redesign.md): its safety rules hold for
 every write described here. The standards the catalog is cleaned to are
-[decided with the owner](#decided-with-the-owner-2026-11-05).
+[decided with the owner](#decided-with-the-owner-2026-11-05); the rules
+for approving the reconcile's differences were
+[decided in its first review](#decided-with-the-owner-2026-11-07-the-first-reconcile-review).
 
 ## Context
 
@@ -199,15 +201,52 @@ catalog (stats, summaries, the collection) uses the same rules.
 14. **Matching keeps every past spelling.** Each entry remembers every title
     and artist it has been matched under, so set imports match the current
     display or any earlier spelling, and nothing that matched stops matching.
-15. **Reconcile groups differences into twelve kinds:** case or punctuation
+15. **Reconcile groups differences into kinds:** case or punctuation
     only; featured artist moved; artist joiner; version brackets; genre
-    remapped; genre filled where the file is empty; year differs; BPM
-    rounding only (0.5 or less apart); BPM differs; label differs; a file
-    value going up to an empty catalog field; anything else, reviewed file by
-    file. Once a kind is approved, the catalog wins, for year and BPM too.
+    remapped; genre filled where the file is empty; year (split by which
+    year is older, from 2026-11-07); BPM rounding only (0.5 or less apart);
+    BPM differs; label differs; a file value going up to an empty catalog
+    field; anything else, reviewed file by file. Once a kind is approved,
+    the catalog wins (for year, see 2026-11-07, decision 3).
 16. **Adds and removes are noticed nightly,** in the same nightly run as the
     sync, by listing the library's metadata (no downloads) and comparing it
     with the registry.
+
+## Decided with the owner, 2026-11-07 (the first reconcile review)
+
+1. **A kind is approved only when the catalog is right for every difference
+   reviewed under it.** An approved kind covers the whole library, files not
+   yet reviewed included. Where the catalog is wrong, the entry is fixed in
+   the catalog editor and the kind waits; a fix made later reaches the files
+   through the sync.
+2. **Genre is for consistency, not correctness.** The catalog's broad genre
+   wins even where a song's placement is arguable, so every file carries one
+   of the thirteen. Genre (and year) will later come from an outside source,
+   into the catalog and from there to the files.
+3. **The older year is kept.** A file with no year takes the catalog's; where
+   both have one, the older wins: the catalog's is written when it is older,
+   and the file keeps its own when that is older (the reconcile's
+   year_filled, year_earlier and year_later kinds; only the first two are
+   approved).
+4. **The catalog wins for BPM** for now, rounding and real differences
+   alike.
+5. **Nothing inconsistent goes up to the catalog.** A value filled up from a
+   file is taken only when it fits the catalog's standards: a genre the
+   vocabulary places, and a label longer than one character (the clean and
+   explicit markers some files carry are not labels).
+6. **Case is held until the catalog keeps the artist's styling** (decision 3
+   of 2026-11-05). The catalog's values from play history flatten all-caps
+   names and remixer names (`FRENSHIP`, `RAC Remix`) and hold a few typos;
+   those entries are fixed in the editor before case differences are
+   approved.
+7. **The artist joiner is held** until an act whose name contains "&" (Jack
+   & Jack) is stored as one artist, not two.
+8. **Anything else is approved file by file**, and a file is left out when
+   approving it would lose a version or a credit, or write a value the
+   catalog has wrong; its entry is fixed instead.
+9. **Reviews run through `python -m deejay_cog.reconcile_admin`**, which
+   groups the differences by kind and records the approvals in the state
+   folder.
 
 ## Consequences
 
