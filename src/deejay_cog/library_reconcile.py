@@ -30,7 +30,7 @@ label in parentheses, as the registry records it ("Song (No Intro Edit)").
 The comment frame and every frame VirtualDJ owns are never read for the
 comparison, and never written.
 
-**The twelve kinds** a difference is filed under:
+**The kinds** a difference is filed under:
 
 - ``case_punctuation`` — the same text but for case, spacing or punctuation
 - ``featured_moved`` — a featured artist carried in the title rather than
@@ -43,8 +43,13 @@ comparison, and never written.
   genres are the mapped vocabulary, so the file's is an older value or one
   placed differently)
 - ``genre_filled`` — the file has no genre and the catalog has one
-- ``year_differs``, ``bpm_rounding`` (0.5 BPM or less apart),
-  ``bpm_differs``, ``label_differs``
+- ``year_filled`` — the file has no year and the catalog has one
+- ``year_earlier`` — the catalog's year is older than the file's
+- ``year_later`` — the file's year is older than the catalog's (the older
+  year is kept: leave this kind unapproved and the file keeps its year)
+- ``year_differs`` — a year that is not a number, so neither is older
+- ``bpm_rounding`` (0.5 BPM or less apart), ``bpm_differs``,
+  ``label_differs``
 - ``fill_up`` — the file has a value for a field the catalog leaves empty,
   which would go up to the catalog
 - ``other`` — anything else, listed file by file
@@ -152,6 +157,9 @@ KINDS = (
     "version_brackets",
     "genre_remapped",
     "genre_filled",
+    "year_filled",
+    "year_earlier",
+    "year_later",
     "year_differs",
     "bpm_rounding",
     "bpm_differs",
@@ -294,6 +302,29 @@ def _number(text: str) -> float | None:
         return None
 
 
+_YEAR = re.compile(r"^\s*(\d{4})")
+
+
+def _year(text: str) -> int | None:
+    """The year a tag starts with ("2016" or "2016-05-12"), or None."""
+    match = _YEAR.match(text)
+    return int(match.group(1)) if match else None
+
+
+def _year_kind(have: str, want: str) -> str:
+    """Which year kind a differing year is: filled, earlier or later by the
+    catalog's year against the file's, or differs when either will not
+    read as a year."""
+    if not have:
+        return "year_filled"
+    have_y, want_y = _year(have), _year(want)
+    if have_y is None or want_y is None:
+        return "year_differs"
+    if want_y == have_y:
+        return "case_punctuation"
+    return "year_earlier" if want_y < have_y else "year_later"
+
+
 def _shown(value: Any) -> str:
     if value is None:
         return ""
@@ -395,7 +426,7 @@ def classify(
             else:
                 add(name, "genre_remapped")
         elif name == "year":
-            add(name, "year_differs")
+            add(name, _year_kind(have, want))
         elif _fold(have) == _fold(want):
             add(name, "case_punctuation")
         else:

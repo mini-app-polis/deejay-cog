@@ -114,9 +114,16 @@ def test_a_genre_filled_where_the_file_has_none() -> None:
     assert _kinds(_tags(genre=""), _tags()) == {"genre": "genre_filled"}
 
 
-def test_a_different_year() -> None:
-    assert _kinds(_tags(year="2016"), _tags()) == {"year": "year_differs"}
-    assert _kinds(_tags(year=""), _tags()) == {"year": "year_differs"}
+def test_a_year_is_filled_earlier_or_later_by_which_is_older() -> None:
+    assert _kinds(_tags(year=""), _tags()) == {"year": "year_filled"}
+    assert _kinds(_tags(year="2023"), _tags()) == {"year": "year_earlier"}
+    assert _kinds(_tags(year="2016"), _tags()) == {"year": "year_later"}
+    assert _kinds(_tags(year="2018-03-02"), _tags()) == {"year": "year_earlier"}
+
+
+def test_a_year_that_is_not_a_number_differs() -> None:
+    assert _kinds(_tags(year="soon"), _tags()) == {"year": "year_differs"}
+    assert _kinds(_tags(year="2017-01-01"), _tags()) == {"year": "case_punctuation"}
 
 
 def test_bpm_half_a_beat_apart_is_rounding_and_more_is_different() -> None:
@@ -471,7 +478,7 @@ def test_a_write_applies_only_approved_kinds_with_the_catalogs_value(
     frames = _frames(drive.items[drive_id].data)
     assert frames["TCON"] == "Pop"  # approved: genre_remapped
     assert frames["TPUB"] == "Atlantic"  # approved: case_punctuation
-    assert frames["TDRC"] == "2016"  # year_differs was not approved
+    assert frames["TDRC"] == "2016"  # year_later was not approved
     assert frames["COMM::eng"] == "VirtualDJ cue notes"  # never written
     assert summary.not_approved == 1
     assert summary.written == ["0.mp3 (genre, label)"]
