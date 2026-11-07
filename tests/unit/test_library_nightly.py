@@ -19,7 +19,6 @@ def order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         "library_trash",
         "library_identify",
         "library_backfill",
-        "library_reconcile",
         "library_sync",
         "library_duplicates",
     ):
@@ -42,7 +41,6 @@ def test_the_job_runs_its_steps_in_order(order, finding) -> None:
         "library_trash",
         "library_identify",
         "library_backfill",
-        "library_reconcile",
         "library_sync",
         "library_duplicates",
     ]
@@ -55,7 +53,6 @@ def test_the_job_runs_its_steps_in_order(order, finding) -> None:
         "library_scan",
         "library_trash",
         "library_identify",
-        "library_reconcile",
         "library_sync",
         "library_duplicates",
     ],

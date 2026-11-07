@@ -77,6 +77,7 @@ from deejay_cog.library_reconcile import MODE_VAR as RECONCILE_MODE_VAR
 from deejay_cog.library_reconcile import (
     chunk_size_setting as reconcile_chunk_size_setting,
 )
+from deejay_cog.library_reconcile import library_reconcile
 from deejay_cog.library_scan import LISTING_SECONDS_VAR as SCAN_LISTING_SECONDS_VAR
 from deejay_cog.library_scan import MODE_VAR as SCAN_MODE_VAR
 from deejay_cog.library_scan import listing_seconds_setting
@@ -116,6 +117,7 @@ MODES: dict[str, Callable[..., Any]] = {
     "retag-music": retag_music,
     "new-music": new_music,
     "library-backfill": nightly_library_run,
+    "library-reconcile": library_reconcile,
 }
 
 #: The flow name a failure is reported under, per mode — the same names the
@@ -127,6 +129,7 @@ FLOW_NAMES = {
     "retag-music": "retag-music",
     "new-music": "new-music",
     "library-backfill": "library-backfill",
+    "library-reconcile": "library-reconcile",
 }
 
 # At import, not per invocation. A Lambda container is reused across
