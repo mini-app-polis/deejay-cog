@@ -505,6 +505,27 @@ decided. An audio mismatch stops the run with an ERROR finding and leaves
 the cursor on that file. After a write run, a dry run over the same files
 shows no approved difference left.
 
+### Working the reconcile from a session
+
+`python -m deejay_cog.reconcile_admin`, run locally under
+`doppler run --config prd`:
+
+- `review [--since <ISO time>] [--out <path>]` reads every reconcile record
+  of differences in the state folder, keeps the latest difference for each
+  file and field, and prints them grouped by kind, each kind (and each
+  `other` file) marked approved or held by the current approvals. Reads
+  only.
+- `approvals` prints the approvals file; `approve` adds kinds (`--kind`),
+  takes them back (`--revoke-kind`) and approves `other` differences one
+  file at a time (`--file <drive file id>:<field>,<field>`). The result is
+  checked as a write run reads it, and saved only with `--apply`.
+- `cursor` prints the cursor; `cursor --position <n> --apply` moves it
+  (0 starts the next run from the first identified file).
+- `run [--mode dry-run|write] [--chunk <n>]` runs the reconcile once,
+  locally, writing exactly as the scheduled run does. Turn the scheduled
+  reconcile off (`LIBRARY_RECONCILE_MODE=off`) while a local run goes, so
+  the two do not move the cursor at once.
+
 ## library-sync
 
 The sixth step of the nightly `library-backfill` job
