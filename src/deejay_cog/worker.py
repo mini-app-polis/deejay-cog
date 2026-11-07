@@ -62,6 +62,7 @@ from deejay_cog.library_backfill import MODE_VAR as BACKFILL_MODE_VAR
 from deejay_cog.library_backfill import ROOT_FOLDER_VAR as BACKFILL_ROOT_FOLDER_VAR
 from deejay_cog.library_backfill import SKIP_IDS_VAR as BACKFILL_SKIP_IDS_VAR
 from deejay_cog.library_backfill import chunk_size_setting
+from deejay_cog.library_duplicates import MODE_VAR as DUPLICATES_MODE_VAR
 from deejay_cog.library_identify import CHUNK_SIZE_VAR as IDENTIFY_CHUNK_SIZE_VAR
 from deejay_cog.library_identify import MODE_VAR as IDENTIFY_MODE_VAR
 from deejay_cog.library_identify import (
@@ -79,6 +80,7 @@ from deejay_cog.library_scan import listing_seconds_setting
 from deejay_cog.library_sync import CHUNK_SIZE_VAR as SYNC_CHUNK_SIZE_VAR
 from deejay_cog.library_sync import MODE_VAR as SYNC_MODE_VAR
 from deejay_cog.library_sync import chunk_size_setting as sync_chunk_size_setting
+from deejay_cog.library_trash import MODE_VAR as TRASH_MODE_VAR
 from deejay_cog.music_safety import flow_mode
 from deejay_cog.new_music import FOLDER_VARS as NEW_MUSIC_FOLDER_VARS
 from deejay_cog.new_music import MAX_FILES_VAR as NEW_MUSIC_MAX_FILES_VAR
@@ -154,6 +156,8 @@ def effective_settings() -> dict[str, Any]:
         RECONCILE_MODE_VAR: flow_mode(RECONCILE_MODE_VAR).value,
         SYNC_MODE_VAR: flow_mode(SYNC_MODE_VAR).value,
         SYNC_CHUNK_SIZE_VAR: sync_chunk_size_setting(),
+        TRASH_MODE_VAR: flow_mode(TRASH_MODE_VAR).value,
+        DUPLICATES_MODE_VAR: flow_mode(DUPLICATES_MODE_VAR).value,
         RECONCILE_CHUNK_SIZE_VAR: reconcile_chunk_size_setting(),
     }
 

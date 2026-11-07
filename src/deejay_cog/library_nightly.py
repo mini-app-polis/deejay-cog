@@ -1,18 +1,22 @@
-"""The nightly ``library-backfill`` job: five steps over the music library,
+"""The nightly ``library-backfill`` job: seven steps over the music library,
 each with its own mode, settings and report.
 
 1. **library-scan** (:mod:`deejay_cog.library_scan`) — files added to and
    removed from the library reach the library registry.
-2. **library-identify** (:mod:`deejay_cog.library_identify`) — the next
+2. **library-trash** (:mod:`deejay_cog.library_trash`) — the copies the
+   owner sent to the trash on the duplicates page go to Drive's trash.
+3. **library-identify** (:mod:`deejay_cog.library_identify`) — the next
    unidentified files are identified, linked and written with the
    catalog's values.
-3. **library-backfill** (:mod:`deejay_cog.library_backfill`) — the next
+4. **library-backfill** (:mod:`deejay_cog.library_backfill`) — the next
    chunk of the library is linked to the catalog.
-4. **library-reconcile** (:mod:`deejay_cog.library_reconcile`) — the next
+5. **library-reconcile** (:mod:`deejay_cog.library_reconcile`) — the next
    chunk of linked files is compared with the catalog, by kind of
    difference.
-5. **library-sync** (:mod:`deejay_cog.library_sync`) — catalog edits and
+6. **library-sync** (:mod:`deejay_cog.library_sync`) — catalog edits and
    display-rule changes are written to the files they affect.
+7. **library-duplicates** (:mod:`deejay_cog.library_duplicates`) — files
+   that look like copies of one song are grouped for the duplicates page.
 
 A step other than the backfill that fails is reported as an ERROR finding and the next step runs
 anyway; only the run's deadline stops them all.
@@ -29,6 +33,8 @@ from mini_app_polis.lambda_worker import RunOutOfTime
 
 from deejay_cog._pipeline_eval import post_run_finding
 from deejay_cog.library_backfill import BackfillSummary, library_backfill
+from deejay_cog.library_duplicates import FLOW_NAME as DUPLICATES_FLOW_NAME
+from deejay_cog.library_duplicates import library_duplicates
 from deejay_cog.library_identify import FLOW_NAME as IDENTIFY_FLOW_NAME
 from deejay_cog.library_identify import library_identify
 from deejay_cog.library_reconcile import FLOW_NAME as RECONCILE_FLOW_NAME
@@ -37,6 +43,8 @@ from deejay_cog.library_scan import FLOW_NAME as SCAN_FLOW_NAME
 from deejay_cog.library_scan import library_scan
 from deejay_cog.library_sync import FLOW_NAME as SYNC_FLOW_NAME
 from deejay_cog.library_sync import library_sync
+from deejay_cog.library_trash import FLOW_NAME as TRASH_FLOW_NAME
+from deejay_cog.library_trash import library_trash
 
 log = logger_mod.get_logger()
 
@@ -62,16 +70,18 @@ def _step(flow_name: str, step: Callable[..., Any], run_id: str | None) -> None:
 
 
 def nightly_library_run(*, run_id: str | None = None) -> BackfillSummary:
-    """The scan, the identify step, the backfill's chunk, the reconcile's
-    chunk, then the sync.
+    """The scan, the trash, the identify step, the backfill's chunk, the
+    reconcile's chunk, the sync, then the duplicate report.
 
     ``run_id`` is the queue message id when the Lambda worker runs this.
     The backfill raises as it always has (its own failures are its run's
     failures); the other steps are reported and passed.
     """
     _step(SCAN_FLOW_NAME, library_scan, run_id)
+    _step(TRASH_FLOW_NAME, library_trash, run_id)
     _step(IDENTIFY_FLOW_NAME, library_identify, run_id)
     summary = library_backfill(run_id=run_id)
     _step(RECONCILE_FLOW_NAME, library_reconcile, run_id)
     _step(SYNC_FLOW_NAME, library_sync, run_id)
+    _step(DUPLICATES_FLOW_NAME, library_duplicates, run_id)
     return summary
