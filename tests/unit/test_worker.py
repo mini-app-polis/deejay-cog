@@ -57,6 +57,7 @@ def test_the_router_covers_exactly_the_modes_the_api_accepts() -> None:
         "retag-music",
         "new-music",
         "library-backfill",
+        "library-reconcile",
     }
     assert set(worker.FLOW_NAMES) == set(worker.MODES)
 

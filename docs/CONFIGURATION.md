@@ -152,8 +152,8 @@ The fingerprint function's confidence threshold is `RETAG_MIN_CONFIDENCE`
 
 ## Library reconcile
 
-After the backfill's chunk the same nightly job runs the
-**library-reconcile** step, which compares linked library files with the
+The **library-reconcile** worker mode, scheduled on its own rather than as
+a step of the nightly job, compares linked library files with the
 catalog; a dry run reads only, a write run applies what the owner approved. It reads `LIBRARY_ROOT_FOLDER_ID` and
 `MUSIC_TAGGING_STATE_FOLDER_ID` as the backfill does, and:
 

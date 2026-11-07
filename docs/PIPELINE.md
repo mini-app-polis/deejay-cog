@@ -28,11 +28,11 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
   the queue's only producer.
 - **The Lambda** runs one flow per message, under the message id as its run
   id, so a run can be traced from watcher's log to its report.
-- **library-backfill** is the one mode meant to run on a schedule: nightly
-  ([ADR-0003](decisions/ADR-0003-on-demand-no-cadence.md), amended
-  2026-11-03). What sends its message each night is wired outside this
-  repo; it can also be run on demand through `POST /v1/deejay/runs` once
-  the API accepts the mode.
+- **library-backfill** and **library-reconcile** are the modes meant to run
+  on a schedule ([ADR-0003](decisions/ADR-0003-on-demand-no-cadence.md),
+  amended 2026-11-03), each on its own, so the reconcile has a whole run's
+  time to write in. What sends their messages is wired outside this repo;
+  either can also be run on demand through `POST /v1/deejay/runs`.
 - Nothing else runs between triggers. The queue, function, dead-letter queue and
   alarms are declared in `mini-app-polis/infra`: a FIFO queue
   with reserved concurrency 1, so two sweeps never race over one folder; a
@@ -51,6 +51,7 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
 | `retag-music` | **retag-music** | `retag_music_from_catalog.py` | Looks each audio file in the music upload folder up in the catalog and writes the catalog's tags over the same Drive file. |
 | `new-music` | **new-music** | `new_music.py` | Identifies each file in the new-music input folder, sends a tagged copy named `{title}_{artist}` to the destination folder and keeps the original in processed-originals. Off by default. |
 | `library-backfill` | **library-backfill** | `library_backfill.py` | Retags the music library from the catalog, in place, the next chunk of files each night from a stored position. Never renames, moves or deletes a library file. Off by default. |
+| `library-reconcile` | **library-reconcile** | `library_reconcile.py` | Compares the next chunk of linked library files with the catalog and, in write mode, writes the differences the owner approved. Off by default. |
 
 ### Local-only (never run by the worker)
 
@@ -443,7 +444,7 @@ under `library-identify` too.
 
 ## library-reconcile
 
-The fifth step of the nightly `library-backfill` job
+Its own worker mode, `library-reconcile`, on its own schedule
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), step 3 and
 decision 15): each linked file's owned fields are compared with what its
 catalog entry says they should be, and every difference is filed under a
@@ -532,7 +533,7 @@ The approvals file holds the current choices.
 
 ## library-sync
 
-The sixth step of the nightly `library-backfill` job
+The fifth step of the nightly `library-backfill` job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), step 4 and
 decision 5, edit): catalog edits and display-rule changes reach the files
 they affect. Off unless `LIBRARY_SYNC_MODE` is `dry-run` or `write`, and
