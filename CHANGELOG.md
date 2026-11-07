@@ -1,3 +1,11 @@
+## [2.28.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.28.0...v2.28.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 8.8.0 ([bbd2e38](https://github.com/mini-app-polis/deejay-cog/commit/bbd2e3823a87f02f2a8d6e7b7d31672be29b87bb))
+* **music:** a redelivered run keeps one run record, and reconcile_admin's Item.name has a docstring ([a4436e3](https://github.com/mini-app-polis/deejay-cog/commit/a4436e3e4fa8b6eecbb362d07758e9de7a6e8eef))
+
 # [2.28.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.27.1...v2.28.0) (2026-11-07)
 
 
