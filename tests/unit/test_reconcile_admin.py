@@ -184,7 +184,7 @@ def test_seed_sends_the_old_file_only_with_apply(drive, api, capsys) -> None:
     assert "2 kinds, 1 files" in capsys.readouterr().out
 
 
-def test_seed_refused_by_the_api_changes_nothing(drive, api, capsys) -> None:
+def test_seed_sends_nothing_once_the_api_holds_approvals(drive, api, capsys) -> None:
     _put(drive, rec.APPROVALS_NAME, {"kinds": ["fill_up"], "files": {}})
     api.approvals = ReconcileApprovals(
         kinds=["bpm_rounding"], updated_at=dt.datetime(2026, 11, 7, tzinfo=dt.UTC)
@@ -192,7 +192,8 @@ def test_seed_refused_by_the_api_changes_nothing(drive, api, capsys) -> None:
 
     assert admin.main(["seed", "--apply"]) == 2
 
-    assert "already set" in capsys.readouterr().err
+    assert "already holds approvals" in capsys.readouterr().err
+    assert api.seeds == []  # nothing was sent: no refused request
     assert api.approvals.kinds == ["bpm_rounding"]
 
 

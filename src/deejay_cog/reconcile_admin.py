@@ -23,8 +23,8 @@ each run reports them to the API.
 them. They are the owner's and are set on the review page: this command
 cannot change them. **seed** carries ``library-reconcile-approvals.json``
 (the approvals given before the API held them) over to the API, checked the
-way a write run read it; without ``--apply`` it is only printed, and the API
-refuses it once any approvals are set.
+way a write run read it; without ``--apply`` it is only printed. Once the API
+holds approvals it sends nothing and says so (the API would refuse it too).
 
 **cursor** prints the reconcile's cursor; ``--position N --apply`` moves it
 (0 starts the next run from the first identified file).
@@ -270,6 +270,12 @@ def _seed_cmd(args: argparse.Namespace, api: Any, drive: Any, state: str) -> int
     if data is None:
         raise AdminError(f"no {APPROVALS_NAME} in the state folder: nothing to seed")
     print(json.dumps(data, indent=1))
+    held = api.read_reconcile_approvals()
+    if held.updated_at is not None:
+        raise AdminError(
+            f"the API already holds approvals (saved {held.updated_at:%Y-%m-%d %H:%M} "
+            f"UTC by {held.updated_by}): they are changed only on the review page"
+        )
     if not args.apply:
         print("Nothing was sent. Run again with --apply to send it.")
         return 0
