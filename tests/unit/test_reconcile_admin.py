@@ -3,11 +3,13 @@ records, approvals and cursor."""
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from mini_app_polis.api.contract import ReconcileApprovals, ReconcileApprovalsSet
 from music_fakes import DriveItem, FakeDrive
 
 from deejay_cog import library_reconcile as rec
@@ -15,6 +17,36 @@ from deejay_cog import reconcile_admin as admin
 from deejay_cog.music_safety import STATE_FOLDER_VAR
 
 STATE = "state"
+
+
+class FakeApi:
+    """The API's approvals, as the admin commands read and seed them."""
+
+    def __init__(self) -> None:
+        self.approvals = ReconcileApprovals()
+        self.seeds: list[ReconcileApprovalsSet] = []
+
+    def read_reconcile_approvals(self) -> ReconcileApprovals:
+        return self.approvals
+
+    def seed_reconcile_approvals(self, payload: ReconcileApprovalsSet):
+        if self.approvals.updated_at is not None:
+            raise RuntimeError("409 Approvals are already set")
+        self.seeds.append(payload)
+        self.approvals = ReconcileApprovals(
+            kinds=payload.kinds,
+            files=payload.files,
+            updated_at=dt.datetime(2026, 11, 7, tzinfo=dt.UTC),
+            updated_by="seed:deejay-cog",
+        )
+        return self.approvals
+
+
+@pytest.fixture
+def api(monkeypatch: pytest.MonkeyPatch) -> FakeApi:
+    fake = FakeApi()
+    monkeypatch.setattr(admin, "api_client", lambda **_: fake)
+    return fake
 
 
 @pytest.fixture
@@ -104,7 +136,7 @@ def test_the_review_marks_each_kind_and_other_file_approved_or_held() -> None:
     assert "d.mp3 [d4] title: 'Bodies' -> 'Bodie' [held]" in text
 
 
-def test_review_reads_the_state_folders_records(drive, capsys, tmp_path) -> None:
+def test_review_reads_the_state_folders_records(drive, api, capsys, tmp_path) -> None:
     _put(
         drive,
         "library-reconcile-r1.dry-run.json",
@@ -124,52 +156,61 @@ def test_review_reads_the_state_folders_records(drive, capsys, tmp_path) -> None
 # -- approvals --------------------------------------------------------------
 
 
-def test_approve_adds_kinds_and_files_and_takes_kinds_back() -> None:
-    out = admin.changed_approvals(
-        {"kinds": ["genre_filled", "fill_up"], "files": {"d1": ["artist"]}},
-        kinds=["bpm_rounding", "genre_filled"],
-        revoke=["fill_up"],
-        files=["d1:title,artist", "d2:catalog_id"],
+def test_approvals_prints_what_the_api_holds(api, capsys) -> None:
+    assert admin.main(["approvals"]) == 0
+    assert "No approvals are set yet" in capsys.readouterr().out
+
+    api.approvals = ReconcileApprovals(
+        kinds=["fill_up"], updated_at=dt.datetime(2026, 11, 7, tzinfo=dt.UTC)
     )
-    assert out == {
-        "kinds": ["genre_filled", "bpm_rounding"],
-        "files": {"d1": ["artist", "title"], "d2": ["catalog_id"]},
-    }
+    assert admin.main(["approvals"]) == 0
+    assert '"fill_up"' in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("bad", ["d1", "d1:", ":artist", "d1:colour"])
-def test_a_badly_written_file_approval_is_refused(bad: str) -> None:
-    with pytest.raises(admin.AdminError):
-        admin.changed_approvals({}, files=[bad])
-
-
-def test_other_cannot_be_approved_as_a_whole_kind() -> None:
-    with pytest.raises(admin.AdminError, match="file by file"):
-        admin.changed_approvals({}, kinds=["other"])
-
-
-def test_approve_saves_only_with_apply(drive, capsys) -> None:
-    assert admin.main(["approve", "--kind", "bpm_rounding"]) == 0
-    assert _get(drive, rec.APPROVALS_NAME) is None
-    assert "Nothing was saved" in capsys.readouterr().out
-
-    assert (
-        admin.main(
-            ["approve", "--kind", "bpm_rounding", "--file", "d1:artist", "--apply"]
-        )
-        == 0
+def test_seed_sends_the_old_file_only_with_apply(drive, api, capsys) -> None:
+    _put(
+        drive,
+        rec.APPROVALS_NAME,
+        {"kinds": ["fill_up", "bpm_rounding"], "files": {"d1": ["title"]}},
     )
-    assert _get(drive, rec.APPROVALS_NAME) == {
-        "kinds": ["bpm_rounding"],
-        "files": {"d1": ["artist"]},
-    }
+
+    assert admin.main(["seed"]) == 0
+    assert api.seeds == []
+    assert "Nothing was sent" in capsys.readouterr().out
+
+    assert admin.main(["seed", "--apply"]) == 0
+    [seed] = api.seeds
+    assert seed.kinds == ["fill_up", "bpm_rounding"] and seed.files == {"d1": ["title"]}
+    assert "2 kinds, 1 files" in capsys.readouterr().out
 
 
-def test_a_refused_approval_changes_nothing(drive, capsys) -> None:
+def test_seed_refused_by_the_api_changes_nothing(drive, api, capsys) -> None:
     _put(drive, rec.APPROVALS_NAME, {"kinds": ["fill_up"], "files": {}})
-    assert admin.main(["approve", "--file", "d1:colour", "--apply"]) == 2
-    assert "nothing changed" in capsys.readouterr().err
-    assert _get(drive, rec.APPROVALS_NAME) == {"kinds": ["fill_up"], "files": {}}
+    api.approvals = ReconcileApprovals(
+        kinds=["bpm_rounding"], updated_at=dt.datetime(2026, 11, 7, tzinfo=dt.UTC)
+    )
+
+    assert admin.main(["seed", "--apply"]) == 2
+
+    assert "already set" in capsys.readouterr().err
+    assert api.approvals.kinds == ["bpm_rounding"]
+
+
+@pytest.mark.parametrize(
+    "data",
+    [{"kinds": ["other"]}, {"kinds": ["everything"]}, {"files": {"d1": ["colour"]}}],
+)
+def test_an_old_file_that_does_not_parse_is_not_seeded(
+    drive, api, capsys, data
+) -> None:
+    _put(drive, rec.APPROVALS_NAME, data)
+    assert admin.main(["seed", "--apply"]) == 2
+    assert api.seeds == []
+
+
+def test_with_no_old_file_there_is_nothing_to_seed(drive, api, capsys) -> None:
+    assert admin.main(["seed", "--apply"]) == 2
+    assert "nothing to seed" in capsys.readouterr().err
 
 
 # -- cursor -----------------------------------------------------------------
@@ -197,7 +238,7 @@ def test_there_is_no_cursor_to_move_before_a_first_run(drive, capsys) -> None:
 
 def test_without_a_state_folder_nothing_is_done(monkeypatch, capsys) -> None:
     monkeypatch.delenv(STATE_FOLDER_VAR, raising=False)
-    assert admin.main(["approvals"]) == 2
+    assert admin.main(["cursor"]) == 2
     assert STATE_FOLDER_VAR in capsys.readouterr().err
 
 

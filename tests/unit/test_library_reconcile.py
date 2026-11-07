@@ -21,6 +21,9 @@ from mini_app_polis.api.contract import (
     CatalogFillUpResult,
     LibraryFile,
     LibraryFileRegister,
+    ReconcileApprovals,
+    ReconcileReport,
+    ReconcileReportResult,
 )
 from music_fakes import DriveItem, FakeDrive, mp3
 from mutagen.id3 import COMM, TBPM, TCON, TDRC, TIT2, TPE1, TPUB, TXXX
@@ -221,8 +224,24 @@ class FakeCatalog:
         start = kwargs["offset"]
         return self.rows[start : start + kwargs["limit"]]
 
+    approvals: ReconcileApprovals = field(default_factory=ReconcileApprovals)
+    reviews: list[ReconcileReport] = field(default_factory=list)
+    review_fails: bool = False
+
     def read_catalog_display(self, payload: CatalogDisplayRequest):
         return [self.displays.get(i) for i in payload.ids]
+
+    def read_reconcile_approvals(self) -> ReconcileApprovals:
+        return self.approvals
+
+    def report_reconcile_differences(self, payload: ReconcileReport):
+        if self.review_fails:
+            raise RuntimeError("API down")
+        self.reviews.append(payload)
+        return ReconcileReportResult(
+            open_differences=len(payload.differences),
+            files_with_differences=len({d.drive_file_id for d in payload.differences}),
+        )
 
 
 @dataclass
@@ -450,12 +469,9 @@ def writing(monkeypatch: pytest.MonkeyPatch, drive: FakeDrive) -> WritingCatalog
     return api
 
 
-def _approve(drive: FakeDrive, **approvals) -> None:
-    drive.add(
-        rec.APPROVALS_NAME,
-        STATE,
-        json.dumps(approvals).encode(),
-        mime_type="application/json",
+def _approve(api: FakeCatalog, **approvals) -> None:
+    api.approvals = ReconcileApprovals.model_validate(
+        {**approvals, "updated_at": _NOW, "updated_by": "owner"}
     )
 
 
@@ -471,7 +487,7 @@ def test_a_write_applies_only_approved_kinds_with_the_catalogs_value(
     [drive_id] = _library(
         drive, writing, [{"genre": "Neo Soul", "year": "2016", "label": "ATLANTIC"}]
     )
-    _approve(drive, kinds=["genre_remapped", "case_punctuation"])
+    _approve(writing, kinds=["genre_remapped", "case_punctuation"])
 
     summary = rec.library_reconcile(run_id="r-1")
 
@@ -496,7 +512,7 @@ def test_after_a_write_a_dry_run_shows_no_approved_difference_left(
     settings, writing, drive, monkeypatch
 ) -> None:
     _library(drive, writing, [{"genre": "Neo Soul", "artist": "charlie puth"}])
-    _approve(drive, kinds=["genre_remapped", "case_punctuation"])
+    _approve(writing, kinds=["genre_remapped", "case_punctuation"])
     rec.library_reconcile(run_id="r-1")
 
     monkeypatch.setenv(rec.MODE_VAR, "dry-run")
@@ -512,7 +528,7 @@ def test_an_other_difference_is_written_only_when_its_file_is_approved(
     ids = _library(
         drive, writing, [{"title": "Something Else"}, {"title": "Something Else"}]
     )
-    _approve(drive, kinds=[], files={ids[1]: ["title"]})
+    _approve(writing, kinds=[], files={ids[1]: ["title"]})
 
     rec.library_reconcile(run_id="r-1")
 
@@ -527,7 +543,7 @@ def test_an_approved_fill_up_goes_to_the_catalog_and_the_file_is_unchanged(
     entry = writing.rows[0].catalog_id
     writing.displays[entry] = _display(entry, label=None)
     before = drive.items[drive_id].data
-    _approve(drive, kinds=["fill_up"])
+    _approve(writing, kinds=["fill_up"])
 
     summary = rec.library_reconcile(run_id="r-1")
 
@@ -551,16 +567,16 @@ def test_without_approvals_a_write_run_writes_nothing(
     assert "no_approvals" in _text(posted)
 
 
-@pytest.mark.parametrize(
-    "approvals",
-    [{"kinds": ["other"]}, {"kinds": ["everything"]}, {"files": {"f1": ["comment"]}}],
-)
-def test_approvals_that_do_not_parse_stop_the_run(
-    settings, writing, drive, posted, approvals
+def test_approvals_that_cannot_be_read_stop_the_run(
+    settings, writing, drive, posted, monkeypatch
 ) -> None:
     [drive_id] = _library(drive, writing, [{"genre": "Neo Soul"}])
     before = drive.items[drive_id].data
-    _approve(drive, **approvals)
+
+    def down():
+        raise RuntimeError("API down")
+
+    monkeypatch.setattr(writing, "read_reconcile_approvals", down, raising=False)
 
     summary = rec.library_reconcile(run_id="r-1")
 
@@ -570,13 +586,70 @@ def test_approvals_that_do_not_parse_stop_the_run(
     assert _state(drive, rec.CURSOR_NAME) is None  # the cursor did not move
 
 
+# ---------------------------------------------------------------------------
+# The review: every run sends the files it compared and what is still open
+# ---------------------------------------------------------------------------
+
+
+def test_a_dry_run_sends_every_difference_to_the_review(
+    settings, wired, drive, catalog
+) -> None:
+    ids = _library(drive, catalog, [{}, {"genre": "Neo Soul", "year": "2016"}])
+
+    rec.library_reconcile(run_id="r-1")
+
+    [review] = catalog.reviews
+    assert review.run_id == "r-1"
+    assert review.compared == ids
+    assert {(d.drive_file_id, d.field, d.kind) for d in review.differences} == {
+        (ids[1], "genre", "genre_remapped"),
+        (ids[1], "year", "year_later"),
+    }
+
+
+def test_a_write_run_sends_only_what_it_left_open(settings, writing, drive) -> None:
+    [drive_id] = _library(drive, writing, [{"genre": "Neo Soul", "year": "2016"}])
+    _approve(writing, kinds=["genre_remapped"])
+
+    rec.library_reconcile(run_id="r-1")
+
+    [review] = writing.reviews
+    assert review.compared == [drive_id]
+    assert [(d.field, d.kind) for d in review.differences] == [("year", "year_later")]
+
+
+def test_a_filled_up_difference_is_not_left_open(settings, writing, drive) -> None:
+    [drive_id] = _library(drive, writing, [{}])
+    entry = writing.rows[0].catalog_id
+    writing.displays[entry] = _display(entry, label=None)
+    _approve(writing, kinds=["fill_up"])
+
+    rec.library_reconcile(run_id="r-1")
+
+    [review] = writing.reviews
+    assert review.compared == [drive_id] and review.differences == []
+
+
+def test_a_review_that_cannot_be_sent_is_reported_and_the_run_carries_on(
+    settings, wired, drive, catalog, posted
+) -> None:
+    _library(drive, catalog, [{"genre": "Neo Soul"}])
+    catalog.review_fails = True
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.compared == 1 and "API down" in summary.review_problem
+    assert _state(drive, rec.CURSOR_NAME)["position"] == 1
+    assert "review_not_sent" in _text(posted)
+
+
 def test_audio_that_would_change_stops_the_write_and_keeps_the_cursor(
     settings, writing, drive, monkeypatch
 ) -> None:
     from deejay_cog import music_safety
 
     _library(drive, writing, [{"genre": "Neo Soul"}, {"genre": "Neo Soul"}])
-    _approve(drive, kinds=["genre_remapped"])
+    _approve(writing, kinds=["genre_remapped"])
     finding = MagicMock()
     monkeypatch.setattr(rec, "post_run_finding", finding)
 

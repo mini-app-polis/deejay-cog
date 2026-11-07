@@ -159,7 +159,7 @@ catalog; a dry run reads only, a write run applies what the owner approved. It r
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_RECONCILE_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Off, the step reads nothing and sends no report. `write` applies only what `library-reconcile-approvals.json` in the state folder approves, and writes nothing without it. |
+| `LIBRARY_RECONCILE_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Off, the step reads nothing and sends no report. `write` applies only what the owner approved on the review page (read from the API), and writes nothing until any approvals are set. Every run sends its differences to the review. |
 | `LIBRARY_RECONCILE_CHUNK_SIZE` | `50` | Linked files compared per run; a whole number of at least 1. Each is downloaded to read its tags. |
 
 See [PIPELINE.md](PIPELINE.md#library-reconcile).
