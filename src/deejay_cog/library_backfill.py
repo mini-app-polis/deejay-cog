@@ -666,6 +666,7 @@ class Backfill:
                 tagged=tagged,
                 identified_by="catalog",
                 folder=str(item["folder_id"]),
+                head_revision=meta.get("headRevisionId"),
             )
         except AudioChanged:
             raise

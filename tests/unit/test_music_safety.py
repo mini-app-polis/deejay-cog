@@ -131,6 +131,19 @@ def test_a_record_is_created_once_then_updated(drive: FakeDrive) -> None:
     ]
 
 
+def test_a_save_with_nothing_new_is_skipped(drive: FakeDrive) -> None:
+    record = safety.RunRecord("flow", "r-1", FlowMode.WRITE).attach(drive, "state")
+    record.add(safety.RecordEntry("f", "a.mp3", "deliver"))
+    record.checkpoint()
+    record.checkpoint()
+    record.entries[0].state = "done"
+    record.checkpoint()
+    record.checkpoint()
+
+    saves = [m for m, _ in drive.calls if m in ("upload_bytes", "update_file")]
+    assert saves == ["upload_bytes", "update_file"]
+
+
 def test_a_dry_run_record_is_saved_only_at_the_end_and_marked(
     drive: FakeDrive,
 ) -> None:
@@ -188,6 +201,36 @@ def test_in_place_keeps_a_revision_and_never_renames_or_moves(
         "keep_revision",
         "update_file",
     }
+
+
+def test_in_place_saves_the_record_three_times_a_file_after_the_first(
+    drive: FakeDrive,
+) -> None:
+    record = safety.RunRecord("music-backfill", "r-1", FlowMode.WRITE).attach(
+        drive, "state"
+    )
+    for n in range(2):
+        original = mp3(TIT2(encoding=3, text=[f"song {n}"]))
+        file_id = drive.add(f"{n}.mp3", "library", original)
+        before = len(drive.calls)
+        safety.write_in_place(
+            drive,
+            record,
+            file_id=file_id,
+            name=f"{n}.mp3",
+            original=original,
+            tagged=mp3(TIT2(encoding=3, text=[f"Song {n}"])),
+            identified_by="catalog",
+            head_revision="r1",
+        )
+        saves = [
+            m
+            for m, args in drive.calls[before:]
+            if m in ("upload_bytes", "update_file") and args[0] != file_id
+        ]
+        # The first file also saves the record before its first change.
+        assert len(saves) == (4 if n == 0 else 3)
+    assert drive.items[file_id].kept == {"r1"}
 
 
 def test_in_place_dry_run_writes_nothing(drive: FakeDrive) -> None:

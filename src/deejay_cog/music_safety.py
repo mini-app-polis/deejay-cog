@@ -222,10 +222,12 @@ def file_meta(drive: Any, file_id: str) -> dict[str, Any]:
     return result
 
 
-def keep_head_revision(drive: Any, file_id: str) -> str:
+def keep_head_revision(drive: Any, file_id: str, revision_id: str | None = None) -> str:
     """Pin the file's current revision so Drive does not prune it, and
-    return its id: what an in-place write is undone to."""
-    revision_id = str(file_meta(drive, file_id)["headRevisionId"])
+    return its id: what an in-place write is undone to. ``revision_id`` is
+    the head revision when the caller already read it with the file."""
+    if not revision_id:
+        revision_id = str(file_meta(drive, file_id)["headRevisionId"])
     drive.service.revisions().update(
         fileId=file_id, revisionId=revision_id, body={"keepForever": True}
     ).execute()
@@ -305,8 +307,8 @@ class RecordEntry:
 class RunRecord:
     """Every file a run touched, saved as JSON in the state folder.
 
-    Saved on every change in a writing run (before a step and after it) and
-    once at the end of a dry run, under ``<flow>-<run id>.json`` (a dry
+    Saved on every change in a writing run (a save with nothing new since
+    the last is skipped) and once at the end of a dry run, under ``<flow>-<run id>.json`` (a dry
     run's name ends ``.dry-run.json``). A save that fails in a writing run
     raises, so no write happens that its record does not show.
     """
@@ -323,6 +325,7 @@ class RunRecord:
     _drive: Any = field(default=None, repr=False)
     _state_folder: str = field(default="", repr=False)
     _file_id: str | None = field(default=None, repr=False)
+    _saved: dict[str, Any] | None = field(default=None, repr=False)
 
     @property
     def file_name(self) -> str:
@@ -364,6 +367,10 @@ class RunRecord:
         """
         if self._drive is None or self.mode is FlowMode.OFF:
             return
+        unchanged = {**self.to_json(), "updated_at": None}
+        if self._file_id is not None and unchanged == self._saved:
+            return  # nothing new since the last save
+        self._saved = unchanged
         self.updated_at = _now()
         content = json.dumps(self.to_json(), indent=2, sort_keys=False).encode()
         if self._file_id is None:
@@ -381,6 +388,11 @@ class RunRecord:
             self._drive.update_file(self._file_id, path, mime_type=RECORD_MIME_TYPE)
         finally:
             os.unlink(path)
+
+    @property
+    def saved(self) -> bool:
+        """Whether the record has been saved to the state folder yet."""
+        return self._file_id is not None
 
     def checkpoint(self) -> None:
         """Save in a writing run; nothing in a dry run."""
@@ -407,6 +419,7 @@ def write_in_place(
     tagged: bytes,
     identified_by: str,
     folder: str = "",
+    head_revision: str | None = None,
 ) -> RecordEntry:
     """Write ``tagged`` over the same Drive file, safely: for the library,
     where a file is never renamed, moved or deleted.
@@ -415,7 +428,13 @@ def write_in_place(
     entry ``planned``. Otherwise pins the current revision (the record
     names it, so the write can be undone), writes, downloads the file again
     and checks the audio once more. A mismatch then puts the original bytes
-    back and raises :class:`AudioChanged`.
+    back and raises :class:`AudioChanged`. ``head_revision`` is the file's
+    head revision as the caller read it with ``original``; without it, it is
+    read again.
+
+    The record is saved before the run's first change, then once the
+    revision is pinned (the record names it before anything is written),
+    once the write is made, and once it is checked.
     """
     check_no_emptied_tags(original, tagged)
     check_audio_unchanged(original, tagged)
@@ -435,8 +454,10 @@ def write_in_place(
     if not record.mode.writes:
         entry.state = "planned"
         return entry
-    record.checkpoint()
-    entry.revision_kept = keep_head_revision(drive, file_id)
+    if not record.saved:
+        # The run's first change: the record must save before anything does.
+        record.checkpoint()
+    entry.revision_kept = keep_head_revision(drive, file_id, head_revision)
     record.checkpoint()
     update_contents(drive, file_id, name, tagged)
     entry.written_md5 = md5(tagged)

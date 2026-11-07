@@ -191,6 +191,7 @@ def _sync_one(
         original=data,
         tagged=tagged,
         identified_by="sync (catalog wins)",
+        head_revision=meta.get("headRevisionId"),
     )
     summary.reached[shown] += 1
     if entry.state == "done":
