@@ -1,3 +1,10 @@
+# [2.21.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.20.0...v2.21.0) (2026-11-07)
+
+
+### Features
+
+* **library-identify:** identify unidentified library files by their tags or fingerprint, link them and write the catalog's values ([51f00e8](https://github.com/mini-app-polis/deejay-cog/commit/51f00e8693a6cf94219688a2239dbc4f05df8d41))
+
 # [2.20.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.19.0...v2.20.0) (2026-11-07)
 
 
