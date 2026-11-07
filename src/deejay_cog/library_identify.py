@@ -390,6 +390,7 @@ class Identify:
 
     @property
     def mode_writes(self) -> bool:
+        """Whether this run writes (``write``), rather than only planning."""
         return self.record.mode.writes
 
 

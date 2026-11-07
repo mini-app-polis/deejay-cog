@@ -227,6 +227,7 @@ class Difference:
     kind: str
 
     def as_dict(self) -> dict[str, str]:
+        """The difference as the run record stores it."""
         return {
             "path": self.path,
             "drive_file_id": self.drive_file_id,
@@ -236,6 +237,7 @@ class Difference:
         }
 
     def example(self) -> str:
+        """One line naming the file, the field and both values, for reports."""
         return (
             f"{self.path}: {self.field} {self.file_value!r} -> {self.catalog_value!r}"
         )
@@ -415,6 +417,8 @@ class Approvals:
     files: dict[str, frozenset[str]] = field(default_factory=dict)
 
     def approves(self, diff: Difference) -> bool:
+        """Whether the owner approved ``diff``: its kind, or for ``other``,
+        its file and field."""
         if diff.kind == "other":
             return diff.field in self.files.get(diff.drive_file_id, frozenset())
         return diff.kind in self.kinds
@@ -495,6 +499,7 @@ class ReconcileSummary:
 
     @property
     def files_with_differences(self) -> int:
+        """How many files compared had at least one difference."""
         return len(
             {d.drive_file_id for diffs in self.differences.values() for d in diffs}
         )
