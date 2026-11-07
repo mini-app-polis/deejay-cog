@@ -663,15 +663,34 @@ def identify_library_file(
     result = _identify(identifier, name, data)
     chosen = result.chosen
     score = float(chosen.confidence or 0.0) if chosen is not None else 0.0
-    if chosen is None or score < threshold:
-        return LibraryIdentifyResult(path, Outcome.BELOW_CONFIDENCE.value, score)
     metadata = result.metadata or {}
     title = str(metadata.get("title") or "").strip()
     artist = str(metadata.get("artist") or "").strip()
+
+    def unidentified(outcome: str, note: str) -> LibraryIdentifyResult:
+        if record.mode.writes:
+            library_identify.record_unidentified(
+                api, file_id=file_id, root=root, path=path, data=data, note=note
+            )
+        return LibraryIdentifyResult(path, outcome, score)
+
+    if chosen is None or score < threshold:
+        guess = f"{artist} - {title}" if title and artist else ""
+        if chosen is None:
+            note = "fingerprint: no match"
+        elif guess:
+            note = f"fingerprint: no confident match (best guess {guess}, score {score:.2f})"
+        else:
+            note = f"fingerprint: no confident match (score {score:.2f})"
+        return unidentified(Outcome.BELOW_CONFIDENCE.value, note)
     year = _year(metadata.get("year"))
     track = ingest_track({"title": title, "artist": artist, "year": year})
     if track is None:
-        return LibraryIdentifyResult(path, Outcome.NO_RECORDING_TAGS.value, score)
+        return unidentified(
+            Outcome.NO_RECORDING_TAGS.value,
+            f"fingerprint: matched (score {score:.2f}) but the recording has no "
+            "title or artist",
+        )
 
     match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
     created = False

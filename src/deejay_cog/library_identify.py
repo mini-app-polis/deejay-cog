@@ -17,7 +17,9 @@ this step takes the next ``LIBRARY_IDENTIFY_CHUNK_SIZE`` of them (default
    AcoustID match is looked up in the catalog, or made a library entry
    (``POST /v1/catalog/library/entries``) when the catalog has no song for
    it, and then linked as below. Unconfident, the file stays unidentified
-   for the owner's page. Tags the catalog does not know are not enough on
+   for the owner's page. A file left unidentified is registered with its
+   own tags and why (``identify_note``: the tags' miss, then the
+   fingerprint's best guess and score), which that page shows. Tags the catalog does not know are not enough on
    their own to make an entry: the fingerprint confirms them first.
 
 **Linking a file** (:func:`link_and_write`): the file's values go up to the
@@ -61,6 +63,7 @@ from mini_app_polis.api.contract import (
     CatalogMatch,
     LibraryFile,
     LibraryFileRegister,
+    LibraryFileTags,
 )
 from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
@@ -189,6 +192,28 @@ class Linked:
     written: bool
     would_write: bool
     filled: list[str] = field(default_factory=list)
+
+
+def record_unidentified(
+    api: Any, *, file_id: str, root: str, path: str, data: bytes, note: str
+) -> None:
+    """Keep the file's own tags and why it is still unidentified in the
+    registry, for the owner's unidentified-files page. A failure here is
+    logged and does not stop the run."""
+    tags = {key: value or None for key, value in read_tag_row(data).items()}
+    try:
+        api.register_library_file(
+            LibraryFileRegister(
+                drive_file_id=file_id,
+                library_root_id=root,
+                path=path,
+                identification_status="unidentified",
+                tags=LibraryFileTags(**tags),
+                identify_note=note,
+            )
+        )
+    except Exception:  # noqa: BLE001 — the note is not the identification
+        log.exception("library-identify: could not record why %s is unidentified", path)
 
 
 def link_and_write(
@@ -345,6 +370,7 @@ class Identify:
                 row,
                 name,
                 "no usable title or artist" if track is None else "not in the catalog",
+                data,
             )
             return
         linked = link_and_write(
@@ -369,11 +395,19 @@ class Identify:
             summary.filled.append(f"{row.path} ({', '.join(linked.filled)})")
         self._mark(row, "linked")
 
-    def _fingerprint(self, row: LibraryFile, name: str, why: str) -> None:
+    def _fingerprint(self, row: LibraryFile, name: str, why: str, data: bytes) -> None:
         summary = self.summary
         if not self.mode_writes:
             summary.to_fingerprint.append(f"{row.path} ({why})")
             return
+        record_unidentified(
+            self.api,
+            file_id=row.drive_file_id,
+            root=self.settings.root,
+            path=row.path,
+            data=data,
+            note=f"its tags did not identify it ({why}); sent to fingerprinting",
+        )
         if self.jobs is None:
             summary.no_queue.append(f"{row.path} ({why})")
             return

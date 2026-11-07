@@ -411,6 +411,10 @@ it) to try again.
    No MusicBrainz tags are written. Below the score the file is unchanged
    and stays unidentified for the owner's page. Tags alone never make an
    entry: the fingerprint confirms them first.
+4. A file left unidentified is registered with its own tags and why
+   (`identify_note`): first that its tags did not identify it, then the
+   fingerprint's best guess and score. The owner's unidentified-files page
+   on the WCS site shows both.
 
 **Linking** fills the entry's empty fields from the file
 (`POST /v1/catalog/{id}/fill-up`), writes the catalog's owned fields as the

@@ -314,7 +314,14 @@ def test_a_file_without_usable_tags_goes_to_the_fingerprint_queue(
         "New/track01.mp3",
         "write",
     )
-    assert summary.to_fingerprint and api.registrations == []
+    assert summary.to_fingerprint
+    [note] = api.registrations
+    assert note.identification_status == "unidentified" and note.catalog_id is None
+    assert note.identify_note == (
+        "its tags did not identify it (no usable title or artist); "
+        "sent to fingerprinting"
+    )
+    assert note.tags is not None
     assert _state(drive, ident.TRIED_NAME)["files"][drive_id]["outcome"] == (
         "sent_to_fingerprint"
     )
@@ -505,7 +512,7 @@ def test_a_confident_fingerprint_the_catalog_lacks_gets_a_library_entry(
     assert api.registrations[0].identification_status == "identified"
 
 
-def test_an_unconfident_fingerprint_changes_nothing(drive, api) -> None:
+def test_an_unconfident_fingerprint_only_records_why(drive, api) -> None:
     drive_id = drive.add("track01.mp3", ROOT, _no_tags())
 
     result = fp.identify_library_file(
@@ -521,6 +528,29 @@ def test_an_unconfident_fingerprint_changes_nothing(drive, api) -> None:
 
     assert result.outcome == "below_confidence"
     assert drive.writes(except_folder=STATE) == []
+    assert api.created == []
+    [note] = api.registrations
+    assert note.identification_status == "unidentified" and note.catalog_id is None
+    assert note.identify_note == (
+        "fingerprint: no confident match (best guess Thomas Gold - Temple, score 0.50)"
+    )
+
+
+def test_a_dry_run_unconfident_fingerprint_records_nothing(drive, api) -> None:
+    drive_id = drive.add("track01.mp3", ROOT, _no_tags())
+
+    result = fp.identify_library_file(
+        drive,
+        api,
+        FakeIdentifier(score=0.5),
+        _record(drive, FlowMode.DRY_RUN),
+        file_id=drive_id,
+        root=ROOT,
+        path="New/track01.mp3",
+        threshold=0.9,
+    )
+
+    assert result.outcome == "below_confidence"
     assert api.registrations == [] and api.created == []
 
 
