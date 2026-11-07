@@ -1,3 +1,10 @@
+# [2.26.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.25.2...v2.26.0) (2026-11-07)
+
+
+### Features
+
+* **library-reconcile:** split year differences by which year is older (year_filled, year_earlier, year_later) ([2e6fdbc](https://github.com/mini-app-polis/deejay-cog/commit/2e6fdbce11de88d66bec019b0c90c63cca094f6c))
+
 ## [2.25.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.25.1...v2.25.2) (2026-11-07)
 
 
