@@ -14,7 +14,7 @@ metadata only (no downloads), and compared with the API's library registry:
   registered again with its link and status unchanged, at its listed path.
 - **Moved.** A present file listed under a different path keeps its link
   and gets the new path.
-- **Removed.** A present file no longer listed, or in the trash, is marked
+- **Removed.** A present file the listing does not find, or in the trash, is marked
   not present (``POST /v1/catalog/library/files/absent``). Its row and link
   stay; the API archives an entry left with no plays and no present file.
 
