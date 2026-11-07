@@ -1,3 +1,15 @@
+# [2.27.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.26.0...v2.27.0) (2026-11-07)
+
+
+### Bug Fixes
+
+* **reconcile-admin:** run refuses when the mode comes out off, instead of doing nothing ([6d48b6f](https://github.com/mini-app-polis/deejay-cog/commit/6d48b6f3d80c947acd03fdf6e81a2cd357e34f4b))
+
+
+### Features
+
+* **reconcile-admin:** a session command to review reconcile differences, record approvals, move the cursor and run it ([0d04587](https://github.com/mini-app-polis/deejay-cog/commit/0d04587a20f2337834e488d4f613df7f96d78bf8))
+
 # [2.26.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.25.2...v2.26.0) (2026-11-07)
 
 
