@@ -27,7 +27,9 @@ the way a write run reads it; without ``--apply`` it is only printed.
 (0 starts the next run from the first identified file).
 
 **run** runs the reconcile once, here, with the environment's settings or
-the ``--mode`` and ``--chunk`` given, and prints what it did. A write run
+the ``--mode`` and ``--chunk`` given, and prints what it did. When the mode
+comes out off (the scheduled reconcile turned off, and no ``--mode``), it
+runs nothing and says so. A write run
 here writes exactly as the scheduled one does; run it while the scheduled
 reconcile is off (``LIBRARY_RECONCILE_MODE=off``), so the two do not move
 the cursor at once.
@@ -62,7 +64,7 @@ from deejay_cog.library_reconcile import (
     library_reconcile,
     parse_approvals,
 )
-from deejay_cog.music_safety import STATE_FOLDER_VAR
+from deejay_cog.music_safety import STATE_FOLDER_VAR, FlowMode, flow_mode
 
 PROG = "python -m deejay_cog.reconcile_admin"
 
@@ -325,6 +327,8 @@ def _run_cmd(args: argparse.Namespace) -> int:
         os.environ[MODE_VAR] = args.mode
     if args.chunk is not None:
         os.environ[CHUNK_SIZE_VAR] = str(args.chunk)
+    if flow_mode(MODE_VAR) is FlowMode.OFF:
+        raise AdminError(f"{MODE_VAR} is off here: give --mode dry-run or --mode write")
     s = library_reconcile()
     print(
         f"{s.record_name or 'no record'}: mode {s.mode.value}, files "

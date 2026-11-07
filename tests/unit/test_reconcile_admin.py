@@ -204,6 +204,17 @@ def test_without_a_state_folder_nothing_is_done(monkeypatch, capsys) -> None:
 # -- run --------------------------------------------------------------------
 
 
+def test_run_with_the_mode_off_runs_nothing_and_says_so(monkeypatch, capsys) -> None:
+    called = MagicMock()
+    monkeypatch.setattr(admin, "library_reconcile", called)
+    monkeypatch.setenv(rec.MODE_VAR, "off")
+
+    assert admin.main(["run", "--chunk", "5"]) == 2
+
+    called.assert_not_called()
+    assert "--mode" in capsys.readouterr().err
+
+
 def test_run_sets_the_mode_and_chunk_it_is_given(monkeypatch, capsys) -> None:
     seen = {}
 
