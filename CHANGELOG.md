@@ -1,3 +1,10 @@
+# [2.22.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.21.0...v2.22.0) (2026-11-07)
+
+
+### Features
+
+* **library-reconcile:** the write run applies only the approved kinds, catalog winning ([9cc1ffb](https://github.com/mini-app-polis/deejay-cog/commit/9cc1ffbda1d20700037fce335052d641950a7371))
+
 # [2.21.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.20.0...v2.21.0) (2026-11-07)
 
 
