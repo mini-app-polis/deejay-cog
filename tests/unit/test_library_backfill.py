@@ -480,6 +480,68 @@ def test_a_redelivered_run_finishes_its_own_chunk_not_a_new_one(
     assert len(record["entries"]) == 3
 
 
+def test_it_stops_short_to_leave_time_for_the_steps_after_it(
+    settings, wired, posted, drive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(flow.CHUNK_SIZE_VAR, "3")
+    monkeypatch.setenv(flow.RESERVE_SECONDS_VAR, "100")
+    _library(drive, 8)
+    flow.library_backfill(run_id="m-0")  # lists, and does the first 3
+    # 300s left before the 4th file, 90s before the 5th: it stops there.
+    left = iter([300.0, 90.0])
+    monkeypatch.setattr(flow, "remaining_seconds", lambda: next(left, 90.0))
+
+    summary = flow.library_backfill(run_id="m-1")
+
+    assert summary.scanned == 1
+    assert "to leave 100s" in summary.paused
+    assert _cursor(drive)["position"] == 4
+    assert _record(drive, "m-1")["status"] == "complete"
+
+    # The next run, a new message, carries on from the cursor.
+    monkeypatch.setattr(flow, "remaining_seconds", lambda: None)
+    nxt = flow.library_backfill(run_id="m-2")
+    assert nxt.scanned == 3
+    assert _cursor(drive)["position"] == 7
+
+
+def test_progress_is_saved_even_past_the_run_deadline(
+    settings, wired, drive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(flow.CHUNK_SIZE_VAR, "2")
+    _library(drive, 4)
+    flow.library_backfill(run_id="m-0")  # lists, and does the first 2
+    saving_outside: list[bool] = []
+    real = flow._save_progress
+
+    def watched(*args, **kwargs):
+        from mini_app_polis.deadline import remaining_seconds
+
+        saving_outside.append(remaining_seconds() is None)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(flow, "_save_progress", watched)
+    from mini_app_polis.deadline import run_deadline
+
+    with run_deadline(3600):
+        flow.library_backfill(run_id="m-1")
+
+    assert saving_outside == [True, True]
+    assert _cursor(drive)["position"] == 4
+
+
+def test_a_bad_reserve_does_nothing(
+    settings, wired, drive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(flow.RESERVE_SECONDS_VAR, "soon")
+    _library(drive, 2)
+
+    summary = flow.library_backfill(run_id="m-1")
+
+    assert any(flow.RESERVE_SECONDS_VAR in p for p in summary.problems)
+    assert _music_writes(drive) == []
+
+
 # ---------------------------------------------------------------------------
 # The dry run
 # ---------------------------------------------------------------------------

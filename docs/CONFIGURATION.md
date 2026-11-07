@@ -102,11 +102,13 @@ The **library-backfill** worker mode reads:
 | `LIBRARY_BACKFILL_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. |
 | `LIBRARY_ROOT_FOLDER_ID` | none | The music library's root folder, listed recursively. |
 | `MUSIC_TAGGING_STATE_FOLDER_ID` | none | Holds the manifest, the cursor and the run records (shared with new-music). |
-| `LIBRARY_BACKFILL_CHUNK_SIZE` | `10` | Files per run; a whole number of at least 1. |
+| `LIBRARY_BACKFILL_CHUNK_SIZE` | `10` | Files per run at most; a whole number of at least 1. A written file takes about 20 s (download, upload, audio check, record and cursor saved). |
+| `LIBRARY_BACKFILL_RESERVE_SECONDS` | `120` | Seconds left for the nightly steps after the backfill: it starts no file with less than this left before the run deadline, and the next run carries on from the cursor. |
 | `LIBRARY_BACKFILL_SKIP_FILE_IDS` | empty | Comma-separated Drive file ids to pass over, named in the report: how a file whose audio check fails is passed. |
 
 With either folder unset, the two the same folder, or a chunk size that is
-not a whole number of at least 1, the run does nothing and its report
+not a whole number of at least 1 (or a reserve that is not a whole number
+of seconds), the run does nothing and its report
 (WARN) names the problem. The settings are read at the start of each run,
 so a change in Doppler applies to the next night. The nightly trigger is
 not configured here: what sends the `library-backfill` job each night is

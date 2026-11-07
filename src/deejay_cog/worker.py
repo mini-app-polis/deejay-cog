@@ -59,6 +59,9 @@ from deejay_cog.fingerprint_jobs import QUEUE_URL_VAR
 from deejay_cog.ingest_live_history import ingest_live_history
 from deejay_cog.library_backfill import CHUNK_SIZE_VAR as BACKFILL_CHUNK_SIZE_VAR
 from deejay_cog.library_backfill import MODE_VAR as BACKFILL_MODE_VAR
+from deejay_cog.library_backfill import (
+    RESERVE_SECONDS_VAR as BACKFILL_RESERVE_SECONDS_VAR,
+)
 from deejay_cog.library_backfill import ROOT_FOLDER_VAR as BACKFILL_ROOT_FOLDER_VAR
 from deejay_cog.library_backfill import SKIP_IDS_VAR as BACKFILL_SKIP_IDS_VAR
 from deejay_cog.library_backfill import chunk_size_setting
@@ -149,6 +152,9 @@ def effective_settings() -> dict[str, Any]:
         BACKFILL_ROOT_FOLDER_VAR: os.getenv(BACKFILL_ROOT_FOLDER_VAR, "").strip(),
         BACKFILL_CHUNK_SIZE_VAR: chunk_size_setting(),
         BACKFILL_SKIP_IDS_VAR: os.getenv(BACKFILL_SKIP_IDS_VAR, "").strip(),
+        BACKFILL_RESERVE_SECONDS_VAR: os.getenv(
+            BACKFILL_RESERVE_SECONDS_VAR, ""
+        ).strip(),
         SCAN_MODE_VAR: flow_mode(SCAN_MODE_VAR).value,
         SCAN_LISTING_SECONDS_VAR: listing_seconds_setting(),
         IDENTIFY_MODE_VAR: flow_mode(IDENTIFY_MODE_VAR).value,
