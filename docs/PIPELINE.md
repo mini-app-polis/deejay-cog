@@ -493,6 +493,38 @@ decided. An audio mismatch stops the run with an ERROR finding and leaves
 the cursor on that file. After a write run, a dry run over the same files
 shows no approved difference left.
 
+## library-sync
+
+The fifth step of the nightly `library-backfill` job
+([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), step 4 and
+decision 5, edit): catalog edits and display-rule changes reach the files
+they affect. Off unless `LIBRARY_SYNC_MODE` is `dry-run` or `write`, and
+meant to stay off until the library is reconciled (see
+[CONFIGURATION.md](CONFIGURATION.md#library-sync)).
+
+**Each run** takes the next `LIBRARY_SYNC_CHUNK_SIZE` files the API lists
+as needing a sync (`GET /v1/catalog/library/files/needing-sync`): present,
+linked files whose entry or the display rules changed after the catalog's
+values were last written to them, or that never had them. For each, the
+entry as the display rules write it out (`POST /v1/catalog/display`) is
+written over the same file, in place: the title with the file's own release
+label, artist, year, genre, BPM and label, and `TXXX:CATALOG_ID`. A tag
+another tool changed gets the catalog's value. Genre is written; subgenre
+is not. The comment and VirtualDJ's frames are left as they are. Then the
+files are recorded as synced (`POST /v1/catalog/library/files/synced`),
+including those that already carried the catalog's values.
+
+The write follows the backfill's safety rules: never renamed, moved or
+deleted; head revision kept; audio checked before and after; every write
+in `library-sync-<run id>.json`, which `music_rollback` undoes. An audio
+mismatch stops the run with an ERROR finding; that file is not marked
+synced and comes up first next time. A dry run writes no music and marks
+nothing synced.
+
+**Report:** counts for `waiting`, `written`, `would_write`,
+`already_in_step`, `marked_synced` and `failed`, every file by its path,
+and how many files each entry's change reached.
+
 ### Run records
 
 Every run of a music-writing flow that touches a file leaves a JSON record in

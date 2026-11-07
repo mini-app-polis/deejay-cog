@@ -162,6 +162,20 @@ catalog; a dry run reads only, a write run applies what the owner approved. It r
 
 See [PIPELINE.md](PIPELINE.md#library-reconcile).
 
+## Library sync
+
+The last step of the nightly job, **library-sync**, writes catalog edits
+and display-rule changes to the files they affect. It reads
+`LIBRARY_ROOT_FOLDER_ID` and `MUSIC_TAGGING_STATE_FOLDER_ID` as the
+backfill does, and:
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `LIBRARY_SYNC_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Off, the step reads nothing and sends no report. Keep it off until the library is reconciled. |
+| `LIBRARY_SYNC_CHUNK_SIZE` | `50` | Files written per run; a whole number of at least 1. Each is downloaded to write its tags. |
+
+See [PIPELINE.md](PIPELINE.md#library-sync).
+
 ---
 
 ## The fingerprint function

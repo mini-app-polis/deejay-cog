@@ -76,6 +76,9 @@ from deejay_cog.library_reconcile import (
 from deejay_cog.library_scan import LISTING_SECONDS_VAR as SCAN_LISTING_SECONDS_VAR
 from deejay_cog.library_scan import MODE_VAR as SCAN_MODE_VAR
 from deejay_cog.library_scan import listing_seconds_setting
+from deejay_cog.library_sync import CHUNK_SIZE_VAR as SYNC_CHUNK_SIZE_VAR
+from deejay_cog.library_sync import MODE_VAR as SYNC_MODE_VAR
+from deejay_cog.library_sync import chunk_size_setting as sync_chunk_size_setting
 from deejay_cog.music_safety import flow_mode
 from deejay_cog.new_music import FOLDER_VARS as NEW_MUSIC_FOLDER_VARS
 from deejay_cog.new_music import MAX_FILES_VAR as NEW_MUSIC_MAX_FILES_VAR
@@ -149,6 +152,8 @@ def effective_settings() -> dict[str, Any]:
         IDENTIFY_MODE_VAR: flow_mode(IDENTIFY_MODE_VAR).value,
         IDENTIFY_CHUNK_SIZE_VAR: identify_chunk_size_setting(),
         RECONCILE_MODE_VAR: flow_mode(RECONCILE_MODE_VAR).value,
+        SYNC_MODE_VAR: flow_mode(SYNC_MODE_VAR).value,
+        SYNC_CHUNK_SIZE_VAR: sync_chunk_size_setting(),
         RECONCILE_CHUNK_SIZE_VAR: reconcile_chunk_size_setting(),
     }
 
