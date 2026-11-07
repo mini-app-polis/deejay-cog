@@ -1,3 +1,10 @@
+## [2.27.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.27.0...v2.27.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **library:** a nightly step due past the run deadline is skipped, not failed ([10573ca](https://github.com/mini-app-polis/deejay-cog/commit/10573ca402686f5fb6ff633375691d0759ca7f1d))
+
 # [2.27.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.26.0...v2.27.0) (2026-11-07)
 
 
