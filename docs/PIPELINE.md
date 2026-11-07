@@ -385,7 +385,7 @@ names each would-be change (`would_add`, `would_mark_back`, `would_move`,
 
 ## library-identify
 
-The second step of the nightly `library-backfill` job
+The third step of the nightly `library-backfill` job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decisions 2 and
 5): the library files the registry holds as `unidentified` (new to the
 library, or ones the backfill could not match) are identified, linked to
@@ -434,7 +434,7 @@ under `library-identify` too.
 
 ## library-reconcile
 
-The last step of the nightly `library-backfill` job
+The fifth step of the nightly `library-backfill` job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), step 3 and
 decision 15): each linked file's owned fields are compared with what its
 catalog entry says they should be, and every difference is filed under a
@@ -495,7 +495,7 @@ shows no approved difference left.
 
 ## library-sync
 
-The fifth step of the nightly `library-backfill` job
+The sixth step of the nightly `library-backfill` job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), step 4 and
 decision 5, edit): catalog edits and display-rule changes reach the files
 they affect. Off unless `LIBRARY_SYNC_MODE` is `dry-run` or `write`, and
@@ -524,6 +524,55 @@ nothing synced.
 **Report:** counts for `waiting`, `written`, `would_write`,
 `already_in_step`, `marked_synced` and `failed`, every file by its path,
 and how many files each entry's change reached.
+
+## library-trash
+
+The second step of the nightly `library-backfill` job
+([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decision 7).
+Off unless `LIBRARY_TRASH_MODE` is `dry-run` or `write`.
+
+When the owner resolves a duplicate group on the WCS duplicates page, the
+API marks the group's other copies trash-requested in the library registry.
+**Each run** lists the present files under the root marked so
+(`GET /v1/catalog/library/files?trash_requested=true`), moves each to
+Drive's trash (`files.update`, `trashed=true`; recoverable, never deleted)
+and marks it not present (`POST /v1/catalog/library/files/absent`). A file
+already in the trash or gone from Drive is only marked not present. No file
+the registry does not mark is touched. A dry run lists what it would trash
+and changes nothing.
+
+**Report:** counts for `trash_requested`, `trashed`, `would_trash`,
+`already_gone`, `marked_not_present` and `failed`, every file by its path.
+
+## library-duplicates
+
+The last step of the nightly `library-backfill` job
+([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decision 7).
+Off unless `LIBRARY_DUPLICATES_MODE` is `dry-run` or `write`. Read-only: it
+never writes, renames, moves or deletes a music file.
+
+**Each run** reads the registry's present files under the root (leaving out
+those already marked for the trash) and the catalog's title and artist for
+the entries they link to (`POST /v1/catalog/display`), and links files that
+share an md5 (exact copies), a catalog entry, a title and artist as the
+display rules write them out (case, spacing and punctuation ignored), or a
+file name in the same folder (ignoring a copy suffix such as ` (1)`).
+
+**Kept on purpose:** files of one song with a different release label
+(Clean, Explicit, Radio Edit, …) or durations more than three seconds
+apart (a No Intro Edit) are different edits, never duplicates of each
+other. Each linked set is split into its edits; every edit with two or
+more files is a group, listing the song's other edits marked kept on
+purpose with why, so the page can never send them to the trash.
+
+A group's key is made from its files, so an unchanged library gives the
+same groups. `write` sends them to the API
+(`POST /v1/catalog/library/duplicates`), replacing the root's open groups;
+a dry run only reports them.
+
+**Report:** counts for `files` and `groups` (and, in write, the API's
+`open_groups`, `added` and `dropped`), and every group with its reasons and
+files by path.
 
 ### Run records
 

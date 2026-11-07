@@ -1,5 +1,5 @@
-"""The nightly library job: scan, backfill, reconcile, in that order, and a
-failed scan or reconcile does not stop the rest."""
+"""The nightly library job runs its steps in order, and a failed step other
+than the backfill does not stop the rest."""
 
 from __future__ import annotations
 
@@ -16,10 +16,12 @@ def order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     seen: list[str] = []
     for name in (
         "library_scan",
+        "library_trash",
         "library_identify",
         "library_backfill",
         "library_reconcile",
         "library_sync",
+        "library_duplicates",
     ):
         monkeypatch.setattr(nightly, name, lambda _n=name, **_: seen.append(_n))
     return seen
@@ -32,22 +34,31 @@ def finding(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return fake
 
 
-def test_the_job_scans_identifies_backfills_then_reconciles(order, finding) -> None:
+def test_the_job_runs_its_steps_in_order(order, finding) -> None:
     nightly.nightly_library_run(run_id="m-1")
 
     assert order == [
         "library_scan",
+        "library_trash",
         "library_identify",
         "library_backfill",
         "library_reconcile",
         "library_sync",
+        "library_duplicates",
     ]
     finding.assert_not_called()
 
 
 @pytest.mark.parametrize(
     "broken",
-    ["library_scan", "library_identify", "library_reconcile", "library_sync"],
+    [
+        "library_scan",
+        "library_trash",
+        "library_identify",
+        "library_reconcile",
+        "library_sync",
+        "library_duplicates",
+    ],
 )
 def test_a_failed_step_is_reported_and_the_rest_runs(
     order, finding, monkeypatch: pytest.MonkeyPatch, broken: str

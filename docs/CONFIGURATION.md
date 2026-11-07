@@ -164,7 +164,7 @@ See [PIPELINE.md](PIPELINE.md#library-reconcile).
 
 ## Library sync
 
-The last step of the nightly job, **library-sync**, writes catalog edits
+The sixth step of the nightly job, **library-sync**, writes catalog edits
 and display-rule changes to the files they affect. It reads
 `LIBRARY_ROOT_FOLDER_ID` and `MUSIC_TAGGING_STATE_FOLDER_ID` as the
 backfill does, and:
@@ -175,6 +175,20 @@ backfill does, and:
 | `LIBRARY_SYNC_CHUNK_SIZE` | `50` | Files written per run; a whole number of at least 1. Each is downloaded to write its tags. |
 
 See [PIPELINE.md](PIPELINE.md#library-sync).
+
+## Library trash and duplicates
+
+Two more steps of the nightly job handle duplicate files. Both read
+`LIBRARY_ROOT_FOLDER_ID` and `MUSIC_TAGGING_STATE_FOLDER_ID` as the
+backfill does.
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `LIBRARY_TRASH_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. `write` moves the files the owner sent to the trash on the WCS duplicates page to Drive's trash (never deleted) and marks them not present. |
+| `LIBRARY_DUPLICATES_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Groups files that look like copies of one song. `dry-run` lists the groups in the run report; `write` also sends them to the API for the duplicates page. Never writes a music file. |
+
+See [PIPELINE.md](PIPELINE.md#library-trash) and
+[PIPELINE.md](PIPELINE.md#library-duplicates).
 
 ---
 

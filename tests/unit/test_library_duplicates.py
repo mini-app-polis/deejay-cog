@@ -1,0 +1,317 @@
+"""The library-duplicates report: files that look like copies of one song
+are grouped by md5, catalog entry, title and artist, or name in a folder;
+different edits and release labels are kept on purpose; the groups are the
+same every run; nothing is written but the API's groups in write mode."""
+
+from __future__ import annotations
+
+import datetime as dt
+import uuid
+from dataclasses import dataclass, field
+from typing import Any
+
+import pytest
+from mini_app_polis.api.contract import (
+    CatalogDisplay,
+    CatalogDisplayRequest,
+    DuplicateGroupReport,
+    DuplicateReport,
+    DuplicateReportResult,
+    LibraryFile,
+)
+
+from deejay_cog import library_backfill as backfill
+from deejay_cog import library_duplicates as dup
+from deejay_cog.music_safety import FlowMode
+
+ROOT, STATE = "root", "state"
+_NOW = dt.datetime(2026, 11, 7, tzinfo=dt.UTC)
+
+
+def _file(
+    drive_id: str,
+    path: str,
+    *,
+    catalog_id: uuid.UUID | None = None,
+    md5: str | None = None,
+    secs: float | None = 200.0,
+    label: str | None = None,
+    requested: bool = False,
+) -> LibraryFile:
+    return LibraryFile(
+        id=uuid.uuid4(),
+        drive_file_id=drive_id,
+        library_root_id=ROOT,
+        path=path,
+        md5=md5,
+        duration_secs=secs,
+        size_bytes=1000,
+        catalog_id=catalog_id,
+        edit_label=label,
+        identification_status="identified" if catalog_id else "unidentified",
+        present=True,
+        trash_requested=requested,
+        first_seen=_NOW,
+        last_seen=_NOW,
+    )
+
+
+def _display(entry: uuid.UUID, title: str, artist: str) -> CatalogDisplay:
+    return CatalogDisplay(
+        id=entry,
+        title=title,
+        artist=artist,
+        release_year=None,
+        genre=None,
+        bpm=None,
+        label=None,
+        changed_at=_NOW,
+    )
+
+
+def _members(group: DuplicateGroupReport) -> dict[str, str | None]:
+    """Each file: None for a duplicate, why for one kept on purpose."""
+    return {m.drive_file_id: m.why_kept for m in group.files}
+
+
+# ── Grouping ──────────────────────────────────────────────────────────────
+
+
+def test_exact_copies_are_grouped_by_md5() -> None:
+    files = [
+        _file("a", "House/x.mp3", md5="m1"),
+        _file("b", "Pop/y.mp3", md5="m1"),
+        _file("c", "Pop/z.mp3", md5="m2"),
+    ]
+
+    [group] = dup.find_groups(files, {})
+
+    assert group.reasons == ["same_md5"]
+    assert _members(group) == {"a": None, "b": None}
+    assert group.key.startswith("same_md5:")
+
+
+def test_files_linked_to_one_entry_are_grouped() -> None:
+    entry = uuid.uuid4()
+    files = [
+        _file("a", "Pop/9to5_kellyclarkson.mp3", catalog_id=entry),
+        _file("b", "Pop/9to5_kellyclarkson (1).mp3", catalog_id=entry),
+        _file("c", "Pop/9to5_kellyclarkson (2).mp3", catalog_id=entry),
+    ]
+
+    [group] = dup.find_groups(files, {})
+
+    assert group.reasons == ["same_catalog_id", "same_name"]
+    assert set(_members(group)) == {"a", "b", "c"}
+
+
+def test_entries_shown_with_the_same_title_and_artist_are_grouped() -> None:
+    one, two = uuid.uuid4(), uuid.uuid4()
+    files = [
+        _file("a", "House/temple.mp3", catalog_id=one),
+        _file("b", "Dance/temple_gold.mp3", catalog_id=two),
+    ]
+    shown = {
+        one: _display(one, "Temple", "Thomas Gold"),
+        two: _display(two, "temple ", "Thomas  Gold!"),
+    }
+
+    [group] = dup.find_groups(files, shown)
+
+    assert group.reasons == ["same_title_artist"]
+
+
+def test_the_same_name_twice_in_one_folder_is_grouped() -> None:
+    files = [
+        _file("a", "Pop/2step_edsheeran.mp3"),
+        _file("b", "Pop/2step_edsheeran.mp3"),
+        _file("c", "Other/2step_edsheeran.mp3"),
+    ]
+
+    [group] = dup.find_groups(files, {})
+
+    assert group.reasons == ["same_name"]
+    assert set(_members(group)) == {"a", "b"}
+
+
+def test_files_with_nothing_in_common_are_not_grouped() -> None:
+    files = [
+        _file("a", "Pop/one.mp3", catalog_id=uuid.uuid4(), md5="1"),
+        _file("b", "Pop/two.mp3", catalog_id=uuid.uuid4(), md5="2"),
+    ]
+
+    assert dup.find_groups(files, {}) == []
+
+
+# ── Kept on purpose ───────────────────────────────────────────────────────
+
+
+def test_a_no_intro_edit_is_kept_on_purpose_not_grouped() -> None:
+    entry = uuid.uuid4()
+    files = [
+        _file("full", "Blues/baby_ettajames.mp3", catalog_id=entry, secs=150.0),
+        _file(
+            "cut", "Blues/baby_nointroedit_ettajames.mp3", catalog_id=entry, secs=132.0
+        ),
+    ]
+
+    assert dup.find_groups(files, {}) == []
+
+
+def test_another_edit_is_shown_kept_in_the_group_of_real_copies() -> None:
+    entry = uuid.uuid4()
+    files = [
+        _file("full", "Blues/baby.mp3", catalog_id=entry, secs=150.0),
+        _file("full2", "Blues/baby (1).mp3", catalog_id=entry, secs=151.5),
+        _file("cut", "Blues/baby_nointro.mp3", catalog_id=entry, secs=132.0),
+    ]
+
+    [group] = dup.find_groups(files, {})
+
+    members = _members(group)
+    assert members["full"] is None and members["full2"] is None
+    assert members["cut"] == "a different edit (2:12 against 2:31)"
+    kept = [m for m in group.files if m.kept_on_purpose]
+    assert [m.drive_file_id for m in kept] == ["cut"]
+
+
+def test_clean_and_explicit_copies_are_kept_on_purpose() -> None:
+    entry = uuid.uuid4()
+    files = [
+        _file("x1", "Pop/song.mp3", catalog_id=entry, label="Explicit"),
+        _file("x2", "Pop/song (1).mp3", catalog_id=entry, label="Explicit"),
+        _file("c", "Pop/song_clean.mp3", catalog_id=entry, label="Clean"),
+    ]
+
+    [group] = dup.find_groups(files, {})
+
+    members = _members(group)
+    assert members["x1"] is None and members["x2"] is None
+    assert members["c"] == "a different release label (Clean)"
+
+
+def test_one_of_each_label_is_not_a_group() -> None:
+    entry = uuid.uuid4()
+    files = [
+        _file("x", "Pop/song.mp3", catalog_id=entry, label="Explicit"),
+        _file("c", "Pop/song_clean.mp3", catalog_id=entry, label="Clean"),
+        _file("r", "Pop/song_radio.mp3", catalog_id=entry, label="Radio Edit"),
+    ]
+
+    assert dup.find_groups(files, {}) == []
+
+
+def test_a_file_of_unknown_length_joins_the_largest_edit() -> None:
+    entry = uuid.uuid4()
+    files = [
+        _file("a", "Pop/s.mp3", catalog_id=entry, secs=200.0),
+        _file("b", "Pop/s (1).mp3", catalog_id=entry, secs=None),
+    ]
+
+    [group] = dup.find_groups(files, {})
+
+    assert _members(group) == {"a": None, "b": None}
+
+
+# ── Stability ─────────────────────────────────────────────────────────────
+
+
+def test_the_same_library_gives_the_same_groups() -> None:
+    entry = uuid.uuid4()
+    files = [
+        _file("a", "Pop/s.mp3", catalog_id=entry),
+        _file("b", "Pop/s (1).mp3", catalog_id=entry),
+        _file("c", "House/x.mp3", md5="m"),
+        _file("d", "House/y.mp3", md5="m"),
+    ]
+
+    first = dup.find_groups(files, {})
+    second = dup.find_groups(list(reversed(files)), {})
+
+    assert first == second
+    assert len({g.key for g in first}) == 2
+
+
+# ── The run ───────────────────────────────────────────────────────────────
+
+
+@dataclass
+class FakeCatalog:
+    rows: list[LibraryFile] = field(default_factory=list)
+    displays: dict[uuid.UUID, CatalogDisplay] = field(default_factory=dict)
+    reports: list[DuplicateReport] = field(default_factory=list)
+
+    def list_library_files(self, **kwargs: Any) -> list[LibraryFile]:
+        assert kwargs["library_root_id"] == ROOT and kwargs["present"] is True
+        return self.rows[kwargs["offset"] : kwargs["offset"] + kwargs["limit"]]
+
+    def read_catalog_display(self, payload: CatalogDisplayRequest):
+        return [self.displays.get(i) for i in payload.ids]
+
+    def report_duplicate_groups(self, payload: DuplicateReport):
+        self.reports.append(payload)
+        return DuplicateReportResult(
+            open_groups=len(payload.groups), added=len(payload.groups), dropped=0
+        )
+
+
+@pytest.fixture(autouse=True)
+def settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(backfill.ROOT_FOLDER_VAR, ROOT)
+    monkeypatch.setenv(backfill.STATE_FOLDER_VAR, STATE)
+
+
+def _catalog() -> FakeCatalog:
+    entry = uuid.uuid4()
+    return FakeCatalog(
+        rows=[
+            _file("a", "Pop/s.mp3", catalog_id=entry),
+            _file("b", "Pop/s (1).mp3", catalog_id=entry),
+            _file("t", "Pop/s (2).mp3", catalog_id=entry, requested=True),
+        ]
+    )
+
+
+def test_write_sends_the_groups_to_the_api() -> None:
+    catalog = _catalog()
+
+    summary = dup.run_duplicates(run_id="d-1", mode=FlowMode.WRITE, api=catalog)
+
+    [report] = catalog.reports
+    assert report.library_root_id == ROOT
+    [group] = report.groups
+    assert set(_members(group)) == {"a", "b"}
+    assert summary.result is not None and summary.result.open_groups == 1
+
+
+def test_a_file_already_marked_for_the_trash_is_left_out() -> None:
+    catalog = _catalog()
+
+    summary = dup.run_duplicates(run_id="d-2", mode=FlowMode.WRITE, api=catalog)
+
+    assert "t" not in _members(summary.groups[0])
+
+
+def test_a_dry_run_sends_nothing() -> None:
+    catalog = _catalog()
+
+    summary = dup.run_duplicates(run_id="d-3", mode=FlowMode.DRY_RUN, api=catalog)
+
+    assert len(summary.groups) == 1 and catalog.reports == []
+
+
+def test_off_reads_nothing() -> None:
+    catalog = _catalog()
+
+    class Untouchable(FakeCatalog):
+        def list_library_files(self, **_: Any) -> list[LibraryFile]:
+            raise AssertionError("off must not read")
+
+    summary = dup.run_duplicates(run_id="d-4", mode=FlowMode.OFF, api=Untouchable())
+
+    assert summary.groups == [] and catalog.reports == []
+
+
+def test_a_name_key_drops_the_extension_and_copy_suffix() -> None:
+    assert dup.name_key("Pop/9to5 (1).mp3") == dup.name_key("pop/9to5.MP3")
+    assert dup.name_key("Pop/9to5.mp3") != dup.name_key("Rock/9to5.mp3")
