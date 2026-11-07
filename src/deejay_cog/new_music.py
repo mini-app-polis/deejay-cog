@@ -81,6 +81,7 @@ from deejay_cog.music_safety import (
 )
 from deejay_cog.music_tags import (
     CatalogLookup,
+    edit_label,
     ingest_track,
     read_tag_row,
     write_catalog_tags,
@@ -542,14 +543,18 @@ def intake_one(intake: Intake, api: IntakeCatalog, file_id: str) -> None:
         intake.review(file_id, name, None, "not an MP3: only ID3 tags are written")
         return
 
-    track = ingest_track(read_tag_row(data))
+    row = read_tag_row(data)
+    track = ingest_track(row)
+    # Clean and explicit copies are one catalog song but two files: each
+    # keeps its own release label, in its title and so in its name.
+    label = edit_label(row.get("title", ""))
     match = (
         api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
         if track is not None
         else None
     )
     if match is not None:
-        tagged = write_catalog_tags(data, match) or data
+        tagged = write_catalog_tags(data, match, label=label) or data
         intake.deliver(file_id, name, data, tagged, identified_by="catalog")
         return
 
@@ -571,7 +576,7 @@ def intake_one(intake: Intake, api: IntakeCatalog, file_id: str) -> None:
         by = "own tags + new catalog entry"
     else:
         by = "own tags + catalog"
-    tagged = write_catalog_tags(data, made.entry) or data
+    tagged = write_catalog_tags(data, made.entry, label=label) or data
     intake.deliver(file_id, name, data, tagged, identified_by=by)
 
 

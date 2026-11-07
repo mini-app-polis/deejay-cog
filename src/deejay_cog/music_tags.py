@@ -230,7 +230,11 @@ def _bpm_text(bpm: float) -> str:
 
 
 def write_catalog_tags(
-    data: bytes, match: CatalogMatch, *, id_only: bool = False
+    data: bytes,
+    match: CatalogMatch,
+    *,
+    id_only: bool = False,
+    label: str | None = None,
 ) -> bytes | None:
     """The file's bytes with the catalog's tags written, or None when its
     tags already say what the catalog says.
@@ -238,11 +242,13 @@ def write_catalog_tags(
     Only the frames the catalog supplies are set; a field the catalog lacks
     keeps the file's own value, and every other frame is left as it is.
     With ``id_only``, only ``TXXX:CATALOG_ID`` is written: no other frame
-    changes, even an empty one.
+    changes, even an empty one. ``label`` is the file's own release label,
+    kept in parentheses after the catalog's title (ADR-0008, decision 6).
     """
     tags = _load(data)
+    title = catalog_title(match)
     wanted: list[tuple[str, Any]] = [
-        ("TIT2", TIT2(encoding=3, text=[catalog_title(match)])),
+        ("TIT2", TIT2(encoding=3, text=[f"{title} ({label})" if label else title])),
         ("TPE1", TPE1(encoding=3, text=[match.artist])),
     ]
     if match.release_year is not None:
