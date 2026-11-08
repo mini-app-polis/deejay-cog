@@ -1,3 +1,10 @@
+## [2.31.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.31.0...v2.31.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* **deps:** take common-python-utils 8.10.1, whose failed Google and API calls no longer keep a file's bytes alive ([b7cc4a1](https://github.com/mini-app-polis/deejay-cog/commit/b7cc4a161fe70a73900d6067fc9ac58948c29881))
+
 # [2.31.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.30.1...v2.31.0) (2026-11-08)
 
 
