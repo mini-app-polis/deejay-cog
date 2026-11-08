@@ -1,3 +1,10 @@
+# [2.31.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.30.1...v2.31.0) (2026-11-08)
+
+
+### Features
+
+* **worker:** log the process's memory when each run starts and ends ([30e267b](https://github.com/mini-app-polis/deejay-cog/commit/30e267b77b8d7f9b332ac4b08b778a33d260a4c8))
+
 ## [2.30.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.30.0...v2.30.1) (2026-11-07)
 
 
