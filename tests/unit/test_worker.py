@@ -394,3 +394,21 @@ def test_effective_settings_show_values_only_for_allowlisted_names(
     assert "MAX_UPLOADS_PER_RUN=7 (set)" in lines
     assert "SPOTIPY_CLIENT_SECRET (set)" in lines
     assert not any(secret in line for line in lines)
+
+
+def test_a_run_logs_its_memory_when_it_starts_and_when_it_ends(
+    flows: dict[str, MagicMock], caplog: pytest.LogCaptureFixture
+) -> None:
+    flows["process-new-files"].side_effect = RuntimeError("boom")
+
+    with caplog.at_level(logging.INFO), pytest.raises(RuntimeError):
+        worker.process_message(_body(), run_id="m-1")
+
+    lines = [record.getMessage() for record in caplog.records]
+    assert any(
+        line.startswith("worker: run m-1 mode=process-new-files rss=") for line in lines
+    )
+    assert any(
+        line.startswith("worker: run m-1 ended rss=") and "peak=" in line
+        for line in lines
+    )

@@ -34,6 +34,7 @@ run can be traced from watcher's log to the report without a join table.
 from __future__ import annotations
 
 import os
+import resource
 from collections.abc import Callable
 from typing import Any
 
@@ -95,6 +96,22 @@ from deejay_cog.retag_music_from_catalog import _max_uploads_per_run, retag_musi
 from deejay_cog.spotify_sync import SPOTIFY_CREDENTIAL_ENV, radio_playlist_id
 
 log = logger_mod.get_logger()
+
+
+def _rss_mb() -> int | None:
+    """The process's resident memory now, in MB; None where /proc is absent."""
+    try:
+        with open("/proc/self/statm") as f:
+            pages = int(f.read().split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return pages * os.sysconf("SC_PAGE_SIZE") // 2**20
+
+
+def _peak_mb() -> int:
+    """The most resident memory the process has held, in MB (Linux: KB)."""
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
+
 
 #: How long before the function's timeout a run is stopped, so that it can
 #: still send its report and the handler can still return. The report is
@@ -199,8 +216,15 @@ def process_message(body: str, *, run_id: str) -> None:
     the API deduplicates.
     """
     mode = _mode_of(body)
-    log.info("worker: run %s mode=%s", run_id, mode)
-    MODES[mode](run_id=run_id)
+    log.info("worker: run %s mode=%s rss=%sMB", run_id, mode, _rss_mb())
+    try:
+        MODES[mode](run_id=run_id)
+    finally:
+        # A warm container runs every mode in turn: the memory each run
+        # starts and ends at shows which one leaves it behind.
+        log.info(
+            "worker: run %s ended rss=%sMB peak=%sMB", run_id, _rss_mb(), _peak_mb()
+        )
 
 
 def _report_failure(flow_name: str, what: str, exc: BaseException, run_id: str) -> None:
