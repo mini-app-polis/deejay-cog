@@ -6,15 +6,15 @@ Run locally:
 
 The catalog's values from play history can flatten deliberate styling: an
 all-caps name (``WSTRN`` -> ``Wstrn``) or an all-lowercase title
-(``i'm so tired...`` -> ``I'm So Tired``). While ``case_punctuation`` was
-approved, the reconcile wrote those over the files; it is held again
-(ADR-0008, decision 6), and this undoes the writes that lost styling.
+(``i'm so tired...`` -> ``I'm So Tired``). Reconcile runs that applied
+``case_punctuation`` wrote those over the files (ADR-0008, decision 6); this
+undoes the writes that lost styling.
 
 It reads the same run records as :mod:`deejay_cog.restore_bpm`, finds each
 title or artist a write changed only in case and punctuation, and restores
 the file's own value where the write lost styling: a word of two or more
-capitals that is no longer all capitals, or an all-lowercase value that is
-no longer all lowercase. A write that only corrected sloppy casing
+capitals that the write took out of all capitals, or an all-lowercase value
+the write gave capitals. A write that only corrected sloppy casing
 (``GoldFish`` -> ``Goldfish``) or brought in the catalog's own styling
 (``If We Never Met`` -> ``if we never met``) is left as it is. Only the
 flattened field is written, and only while the file still holds what the
