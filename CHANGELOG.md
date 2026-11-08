@@ -1,3 +1,10 @@
+# [2.32.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.31.1...v2.32.0) (2026-11-08)
+
+
+### Features
+
+* run on Python 3.14 ([823ef1f](https://github.com/mini-app-polis/deejay-cog/commit/823ef1f2a156934a03b49defd851368ebac3b03b))
+
 ## [2.31.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.31.0...v2.31.1) (2026-11-08)
 
 
