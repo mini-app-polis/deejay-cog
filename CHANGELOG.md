@@ -1,3 +1,10 @@
+# [2.34.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.33.0...v2.34.0) (2026-11-08)
+
+
+### Features
+
+* **library:** restore_styling puts back a title or artist's styling where a library write flattened it ([8397eb0](https://github.com/mini-app-polis/deejay-cog/commit/8397eb062e24ae0b69379d0fa798907db37cf859))
+
 # [2.33.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.32.1...v2.33.0) (2026-11-08)
 
 
