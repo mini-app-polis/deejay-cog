@@ -638,6 +638,21 @@ the reason for a skip or failure, the Drive revision kept and the MD5 of the
 original and written contents (in-place writes), any copy made (id, folder,
 name) and any move (from, to).
 
+### Restoring a file's own BPM
+
+```bash
+doppler run -- uv run python -m deejay_cog.restore_bpm          # what it would do
+doppler run -- uv run python -m deejay_cog.restore_bpm --apply  # do it
+```
+
+A dry run unless `--apply`. It reads every library-reconcile and
+library-sync run record, finds each file whose BPM a write moved by more
+than 0.5 (bpm_differs; rounding is left), and writes back the BPM the file
+had before: that field only, and only while the file still holds what
+the write left. Each restore is an in-place write recorded as a
+`library-bpm-restore` run, which the rollback below can undo. Why BPM
+differences are held: ADR-0008, decision 4.
+
 ### Rolling a music run back
 
 ```bash
