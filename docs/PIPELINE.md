@@ -653,6 +653,21 @@ the write left. Each restore is an in-place write recorded as a
 `library-bpm-restore` run, which the rollback below can undo. Why BPM
 differences are held: ADR-0008, decision 4.
 
+### Restoring an artist's own styling
+
+```bash
+doppler run -- uv run python -m deejay_cog.restore_styling          # what it would do
+doppler run -- uv run python -m deejay_cog.restore_styling --apply  # do it
+```
+
+The same shape as the BPM restore, for titles and artists: a write that
+changed one only in case and punctuation and lost its styling (an
+all-caps word, or an all-lowercase value) is undone, that field only, and
+only while the file still holds what the write left. A fix of sloppy
+casing (`GoldFish` -> `Goldfish`) stays. Recorded as a
+`library-styling-restore` run. Why case differences are held: ADR-0008,
+decision 6.
+
 ### Rolling a music run back
 
 ```bash

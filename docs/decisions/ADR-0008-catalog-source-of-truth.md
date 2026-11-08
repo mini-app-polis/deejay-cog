@@ -244,7 +244,9 @@ catalog (stats, summaries, the collection) uses the same rules.
    of 2026-11-05). The catalog's values from play history flatten all-caps
    names and remixer names (`FRENSHIP`, `RAC Remix`) and hold a few typos;
    those entries are fixed in the editor before case differences are
-   approved.
+   approved. Approved for a while on 2026-11-07, case_punctuation flattened
+   styling the catalog still lacked (`WSTRN`, `i'm so tired...`) and is
+   held again; `python -m deejay_cog.restore_styling` undoes those writes.
 7. **The artist joiner is held** until an act whose name contains "&" (Jack
    & Jack) is stored as one artist, not two.
 8. **Anything else is approved file by file**, and a file is left out when
