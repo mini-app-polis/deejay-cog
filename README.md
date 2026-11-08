@@ -84,7 +84,7 @@ worker loads them and what each part does when one is missing.
 
 ## Running locally with uv (DOC-013)
 
-**Prerequisites:** Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), and the
+**Prerequisites:** Python ≥ 3.14, [uv](https://docs.astral.sh/uv/), and the
 [Doppler CLI](https://docs.doppler.com/docs/install-cli). Secrets come from
 this repo's own Doppler `dev` config — nothing reads a `.env` file, and local
 commands use `dev`. A command that must act on production would say
