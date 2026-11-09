@@ -90,9 +90,13 @@ class Api(Protocol):
 
     def lookup_catalog(
         self, payload: CatalogLookupRequest
-    ) -> list[CatalogMatch | None]: ...
+    ) -> list[CatalogMatch | None]:
+        """Each track's catalog entry, or None (``POST /v1/catalog/lookup``)."""
+        ...
 
-    def register_library_file(self, payload: LibraryFileRegister) -> LibraryFile: ...
+    def register_library_file(self, payload: LibraryFileRegister) -> LibraryFile:
+        """Register a library file, or bring its registry row up to date."""
+        ...
 
     def list_library_files(
         self,
@@ -100,7 +104,9 @@ class Api(Protocol):
         present: bool | None = None,
         limit: int | None = None,
         offset: int | None = None,
-    ) -> list[LibraryFile]: ...
+    ) -> list[LibraryFile]:
+        """One page of registered library files."""
+        ...
 
 
 @dataclass
