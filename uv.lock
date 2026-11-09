@@ -470,7 +470,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "miniapppolis-common-utils", extras = ["google", "mp3", "spotify"], specifier = ">=9.1.0,<10" },
+    { name = "miniapppolis-common-utils", extras = ["google", "mp3", "spotify"], specifier = ">=9.2.0,<10" },
     { name = "music-tag", specifier = ">=0.4.3" },
     { name = "musicbrainzngs", specifier = ">=0.7.1" },
     { name = "mutagen", specifier = ">=1.47" },
@@ -752,16 +752,16 @@ wheels = [
 
 [[package]]
 name = "miniapppolis-common-utils"
-version = "9.1.0"
+version = "9.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1c/8f/c50c0229c7e608cf2c67a6ef6d40104dd0f12fc07b07dad03b6e7331e8c9/miniapppolis_common_utils-9.1.0.tar.gz", hash = "sha256:3df7e6fc3241d820451fa7938120ec5a5722018ecf0960f526a69c8df9696e62", size = 469965, upload-time = "2026-11-09T16:32:36.515Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/60/c9/2b4d269515d4606a439a756bc5c09b5395a654f8a872343325ceb547946c/miniapppolis_common_utils-9.2.0.tar.gz", hash = "sha256:ccebfe78538b6e219386005ed0f8ab8c26f718461e9edc97925e8575f07406a3", size = 470334, upload-time = "2026-11-09T19:34:18.767Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/86/3d/83a0327added8761b253249952fcd4662f2dcbdf1b032875a06ad0b74bcf/miniapppolis_common_utils-9.1.0-py3-none-any.whl", hash = "sha256:731fc92bc02f45210d69f70ec2baaded61e638804fe642348db0ed488ea164ab", size = 239356, upload-time = "2026-11-09T16:32:35.305Z" },
+    { url = "https://files.pythonhosted.org/packages/52/49/f0e15110467e276f1a22f4b76f341890f8b7342d1c1a9336cc124719e570/miniapppolis_common_utils-9.2.0-py3-none-any.whl", hash = "sha256:6dec0a7da7336d0cb841d231f3d764a60d7e4c347be52f9b2288ee88c1fff744", size = 239518, upload-time = "2026-11-09T19:34:17.204Z" },
 ]
 
 [package.optional-dependencies]

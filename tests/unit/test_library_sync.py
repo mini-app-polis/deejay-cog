@@ -1,6 +1,7 @@
 """The library-sync step: catalog edits and display-rule changes reach the
-files they affect, in place and safely; the catalog wins over a tag another
-tool wrote; a dry run changes nothing."""
+files they affect, in place and safely; only the fields whose catalog value
+moved since the last sync are written, so a value the file keeps on purpose
+survives an edit to another field; a dry run changes nothing."""
 
 from __future__ import annotations
 
@@ -21,9 +22,10 @@ from mini_app_polis.api.contract import (
     LibraryFile,
     LibraryFilesSynced,
     LibraryFilesSyncedResult,
+    LibraryFileTags,
 )
 from music_fakes import DriveItem, FakeDrive, mp3
-from mutagen.id3 import COMM, ID3, TCON, TIT2, TPE1, TXXX
+from mutagen.id3 import COMM, ID3, TBPM, TCON, TIT2, TPE1, TXXX
 
 from deejay_cog import library_backfill as backfill
 from deejay_cog import library_sync as sync
@@ -48,14 +50,37 @@ def _display(entry: uuid.UUID, **kw: Any) -> CatalogDisplay:
     return CatalogDisplay(**values)
 
 
-def _song(entry: uuid.UUID, title: str, artist: str, genre: str = "R&B/Soul") -> bytes:
-    return mp3(
+#: The values the last sync recorded for a file linked to ``_display()``.
+SYNCED = LibraryFileTags(
+    title="Honesty",
+    artist="Pink Sweat$ feat. Kehlani",
+    year="2019",
+    genre="R&B/Soul",
+    bpm="95.5",
+)
+
+
+def _synced(**kw: str | None) -> LibraryFileTags:
+    return SYNCED.model_copy(update=kw)
+
+
+def _song(
+    entry: uuid.UUID,
+    title: str,
+    artist: str,
+    genre: str = "R&B/Soul",
+    bpm: str | None = None,
+) -> bytes:
+    frames: list[Any] = [
         TIT2(encoding=3, text=[title]),
         TPE1(encoding=3, text=[artist]),
         TCON(encoding=3, text=[genre]),
         COMM(encoding=3, lang="eng", desc="", text=["cue: drop at 1:02"]),
         TXXX(encoding=3, desc="CATALOG_ID", text=[str(entry)]),
-    )
+    ]
+    if bpm is not None:
+        frames.append(TBPM(encoding=3, text=[bpm]))
+    return mp3(*frames)
 
 
 def _frames(data: bytes) -> dict[str, str]:
@@ -128,6 +153,7 @@ def _linked(
     data: bytes,
     entry: uuid.UUID,
     label: str | None = None,
+    synced: LibraryFileTags | None = SYNCED,
 ) -> str:
     drive_id = drive.add(name, ROOT, data)
     catalog.rows.append(
@@ -143,6 +169,7 @@ def _linked(
             trash_requested=False,
             first_seen=_NOW,
             last_seen=_NOW,
+            synced=synced,
         )
     )
     return drive_id
@@ -175,12 +202,14 @@ def test_an_entry_edit_reaches_every_file_linked_to_it(
     entry = uuid.uuid4()
     # The entry was edited: its parts now write out a featured artist.
     catalog.displays[entry] = _display(entry)
+    before = {"title": "Honesty (feat. Kehlani)", "artist": "Pink Sweat$"}
     clean = _linked(
         drive,
         catalog,
         "honesty.mp3",
         _song(entry, "Honesty (feat. Kehlani)", "Pink Sweat$"),
         entry,
+        synced=_synced(**before),
     )
     radio = _linked(
         drive,
@@ -189,6 +218,9 @@ def test_an_entry_edit_reaches_every_file_linked_to_it(
         _song(entry, "Honesty (Radio Edit)", "Pink Sweat$"),
         entry,
         label="Radio Edit",
+        synced=_synced(
+            title="Honesty (feat. Kehlani) (Radio Edit)", artist="Pink Sweat$"
+        ),
     )
 
     summary = sync.library_sync(run_id="y-1")
@@ -198,13 +230,18 @@ def test_an_entry_edit_reaches_every_file_linked_to_it(
     for drive_id in (clean, radio):
         frames = _frames(drive.items[drive_id].data)
         assert frames["TPE1"] == "Pink Sweat$ feat. Kehlani"
-        assert frames["TBPM"] == "95.5"
+        assert "TBPM" not in frames  # its value did not move: not written
         assert frames["COMM::eng"] == "cue: drop at 1:02"  # never written
         assert drive.items[drive_id].kept  # the revision before is kept
         assert drive.items[drive_id].parents == [ROOT]  # never moved
-    assert sorted(summary.written) == ["RnB/honesty-radio.mp3", "RnB/honesty.mp3"]
+    assert sorted(summary.written) == [
+        "RnB/honesty-radio.mp3 (artist, title)",
+        "RnB/honesty.mp3 (artist, title)",
+    ]
     [marked] = catalog.marked
     assert set(marked.drive_file_ids) == {clean, radio}
+    assert marked.values[clean] == SYNCED
+    assert marked.values[radio].title == "Honesty (Radio Edit)"
     assert summary.reached == {"Pink Sweat$ feat. Kehlani - Honesty": 2}
     assert "Pink Sweat$ feat. Kehlani - Honesty: 2 files" in _text(posted)
     assert _state(drive, "library-sync-y-1.json")["entries"][0]["action"] == "in_place"
@@ -235,35 +272,104 @@ def test_a_rule_change_rewrites_files_whose_entry_did_not_change(
     )
 
 
-def test_a_tag_another_tool_changed_gets_the_catalogs_value(
-    settings, wired, drive, catalog
-) -> None:
+def test_a_held_bpm_survives_a_genre_change(settings, wired, drive, catalog) -> None:
     entry = uuid.uuid4()
-    catalog.displays[entry] = _display(entry)
-    # VirtualDJ wrote its own genre back.
+    # The catalog says 95.5; the owner held the file's own 96 in the
+    # reconcile. Then the entry's genre was edited.
+    catalog.displays[entry] = _display(entry, genre="Neo Soul")
     drive_id = _linked(
         drive,
         catalog,
         "honesty.mp3",
-        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", genre="Neo Soul"),
+        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", bpm="96"),
+        entry,
+    )
+
+    summary = sync.library_sync(run_id="y-1")
+
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TCON"] == "Neo Soul"
+    assert frames["TBPM"] == "96"  # held: its catalog value did not move
+    assert summary.written == ["RnB/honesty.mp3 (genre)"]
+    assert catalog.marked[0].values[drive_id] == _synced(genre="Neo Soul")
+
+
+def test_a_field_whose_catalog_value_moved_gets_it_over_the_files_own(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry, bpm=96.0)
+    # VirtualDJ wrote its own genre back; the entry's BPM was then edited.
+    drive_id = _linked(
+        drive,
+        catalog,
+        "honesty.mp3",
+        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", "House", bpm="95.5"),
         entry,
     )
 
     sync.library_sync(run_id="y-1")
 
-    assert _frames(drive.items[drive_id].data)["TCON"] == "R&B/Soul"
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TBPM"] == "96"  # the catalog wins on the field that moved
+    assert frames["TCON"] == "House"  # left for the reconcile to find
+
+
+def test_a_file_with_no_recorded_values_gets_them_recorded_and_nothing_written(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry, genre="Neo Soul")
+    drive_id = _linked(
+        drive,
+        catalog,
+        "honesty.mp3",
+        _song(entry, "Honesty", "Pink Sweat$", bpm="96"),
+        entry,
+        synced=None,
+    )
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.recorded == ["RnB/honesty.mp3"] and summary.written == []
+    assert drive.calls == []  # not even read
+    [marked] = catalog.marked
+    assert marked.values[drive_id] == _synced(genre="Neo Soul")
+
+
+def test_an_entry_change_that_moves_no_field_writes_nothing(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    # Its subgenre changed, which a file does not carry; and the catalog no
+    # longer has a BPM, so the file keeps its own.
+    catalog.displays[entry] = _display(entry, bpm=None)
+    drive_id = _linked(
+        drive,
+        catalog,
+        "honesty.mp3",
+        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", bpm="96"),
+        entry,
+    )
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.unmoved == ["RnB/honesty.mp3"] and summary.written == []
+    assert drive.calls == []
+    assert catalog.marked[0].values[drive_id] == _synced(bpm=None)
 
 
 def test_a_file_already_in_step_is_marked_synced_without_a_write(
     settings, wired, drive, catalog
 ) -> None:
     entry = uuid.uuid4()
-    catalog.displays[entry] = _display(entry, bpm=None, release_year=None)
+    catalog.displays[entry] = _display(entry, genre="Neo Soul")
+    # Its genre moved, and the file already says so.
     drive_id = _linked(
         drive,
         catalog,
         "honesty.mp3",
-        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani"),
+        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", "Neo Soul"),
         entry,
     )
 
@@ -286,12 +392,13 @@ def test_a_dry_run_writes_nothing_and_marks_nothing(
         "honesty.mp3",
         _song(entry, "Honesty (feat. Kehlani)", "Pink Sweat$"),
         entry,
+        synced=_synced(title="Honesty (feat. Kehlani)", artist="Pink Sweat$"),
     )
     before = drive.items[drive_id].data
 
     summary = sync.library_sync(run_id="y-1")
 
-    assert summary.would_write == ["RnB/honesty.mp3"]
+    assert summary.would_write == ["RnB/honesty.mp3 (artist, title)"]
     assert drive.items[drive_id].data == before
     assert drive.writes(except_folder=STATE) == []
     assert catalog.marked == []
@@ -304,7 +411,12 @@ def test_each_run_takes_a_chunk(settings, wired, drive, catalog, monkeypatch) ->
     catalog.displays[entry] = _display(entry)
     for n in range(3):
         _linked(
-            drive, catalog, f"{n}.mp3", _song(entry, "Honesty", "Pink Sweat$"), entry
+            drive,
+            catalog,
+            f"{n}.mp3",
+            _song(entry, "Honesty", "Pink Sweat$"),
+            entry,
+            synced=_synced(artist="Pink Sweat$"),
         )
 
     first = sync.library_sync(run_id="y-1")
@@ -338,6 +450,7 @@ def test_audio_that_would_change_stops_the_run_and_marks_nothing(
         "a.mp3",
         _song(entry, "Honesty (feat. Kehlani)", "Pink Sweat$"),
         entry,
+        synced=_synced(artist="Pink Sweat$"),
     )
     _linked(
         drive,
@@ -345,6 +458,7 @@ def test_audio_that_would_change_stops_the_run_and_marks_nothing(
         "b.mp3",
         _song(entry, "Honesty (feat. Kehlani)", "Pink Sweat$"),
         entry,
+        synced=_synced(artist="Pink Sweat$"),
     )
     finding = MagicMock()
     monkeypatch.setattr(sync, "post_run_finding", finding)

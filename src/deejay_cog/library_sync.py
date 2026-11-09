@@ -10,20 +10,33 @@ catalog's values were last written to them, or that never had them written
 the next ``LIBRARY_SYNC_CHUNK_SIZE`` of them (default 50) and, for each:
 
 1. reads its entry as the display rules write it out
-   (``POST /v1/catalog/display``);
-2. writes every owned field from it over the same file, in place: the title
-   with the file's own release label, artist, year, genre, BPM and label,
-   and ``TXXX:CATALOG_ID``. A tag another tool changed in the file (VirtualDJ
-   can write tags back) gets the catalog's value; the catalog wins;
-3. records the file as synced (``POST /v1/catalog/library/files/synced``),
-   whether a write was needed or the file already said so.
+   (``POST /v1/catalog/display``): the owned fields, the title with the
+   file's own release label, artist, year, genre, BPM and label;
+2. compares them with the values recorded at the file's last sync (its
+   ``synced``) and writes, over the same file and in place, only the fields
+   whose value moved (ADR-0008, 2026-11-09:
+   the sync writes only what moved). A field that did not move is
+   never written, so a value the file keeps on purpose (a BPM, year or
+   spelling the owner held in the reconcile) survives an edit to another
+   field of its entry. A field the catalog empties keeps the file's value;
+3. records the file as synced (``POST /v1/catalog/library/files/synced``)
+   with the values it now records, whether a write was needed, the file
+   already said so, or nothing moved.
+
+A file with no recorded values (never synced since the change, or
+registered again by identify or the reconcile, which clears them) gets the
+entry's current values recorded and nothing written: the reconcile, not the
+sync, is what brings a file in step with its entry. Neither that nor a file
+whose fields did not move reads the file from Drive.
 
 The write follows ADR-0007: never renamed, moved or deleted, the head
 revision kept, the audio checked before and after, and every write in the
 run record (``library-sync-<run id>.json``), which
 ``python -m deejay_cog.music_rollback <run id>`` undoes. The comment and
 every frame VirtualDJ owns are never written. Genre is written; subgenre
-is not, until a frame for it is decided.
+is not, until a frame for it is decided. A tag another tool changed in the
+file (VirtualDJ can write tags back) is not put back until its catalog value
+moves; the reconcile is what finds it.
 
 **The report** says how many files each entry's change reached, so an edit
 or a rule change can be followed to the files it touched.
@@ -55,6 +68,7 @@ from mini_app_polis.api.contract import (
     LibraryFile,
     LibraryFilesSynced,
     LibraryFilesSyncedResult,
+    LibraryFileTags,
 )
 from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
@@ -76,7 +90,7 @@ from deejay_cog.music_safety import (
     local_run_id,
     write_in_place,
 )
-from deejay_cog.music_tags import write_display_tags
+from deejay_cog.music_tags import display_fields, write_owned_fields
 
 log = logger_mod.get_logger()
 
@@ -133,6 +147,10 @@ class SyncSummary:
     written: list[str] = field(default_factory=list)
     would_write: list[str] = field(default_factory=list)
     already: list[str] = field(default_factory=list)
+    #: Files with no recorded values: recorded now, nothing written.
+    recorded: list[str] = field(default_factory=list)
+    #: Files whose entry changed but none of whose fields moved.
+    unmoved: list[str] = field(default_factory=list)
     synced: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     #: Files written (or that would be) per entry, as the entry is shown.
@@ -163,26 +181,45 @@ def _displays(api: Catalog, rows: list[LibraryFile]) -> dict[uuid.UUID, CatalogD
     return found
 
 
+def _moved(now: dict[str, str | None], synced: LibraryFileTags) -> dict[str, str]:
+    """The fields whose value moved since the last sync. A field the
+    catalog now leaves empty is not one: the file keeps its value."""
+    return {
+        name: value
+        for name, value in now.items()
+        if value and value != getattr(synced, name)
+    }
+
+
 def _sync_one(
     drive: Any,
     record: RunRecord,
     row: LibraryFile,
     display: CatalogDisplay,
     summary: SyncSummary,
-) -> bool:
-    """Write one file from its entry. True when it now carries the
-    catalog's values (written, or already so). Raises :class:`AudioChanged`."""
+) -> LibraryFileTags | None:
+    """Write one file's moved fields from its entry. The values to record
+    when it now carries them (written, already so, or nothing moved), None
+    when not. Raises :class:`AudioChanged`."""
+    now = display_fields(display, label=row.edit_label)
+    values = LibraryFileTags(**now)
+    if row.synced is None:
+        summary.recorded.append(row.path)
+        return values
+    moved = _moved(now, row.synced)
+    if not moved:
+        summary.unmoved.append(row.path)
+        return values
     meta = file_meta(drive, row.drive_file_id)
     if meta.get("trashed"):
         summary.failed.append(f"{row.path} (in the trash; the scan will mark it)")
-        return False
+        return None
     name = str(meta.get("name") or row.path.rsplit("/", 1)[-1])
     data: bytes = drive.download_file_bytes(row.drive_file_id).data
-    tagged = write_display_tags(data, display, label=row.edit_label)
-    shown = f"{display.artist} - {display.title}"
+    tagged = write_owned_fields(data, moved)
     if tagged is None:
         summary.already.append(row.path)
-        return True
+        return values
     entry = write_in_place(
         drive,
         record,
@@ -190,23 +227,29 @@ def _sync_one(
         name=name,
         original=data,
         tagged=tagged,
-        identified_by="sync (catalog wins)",
+        identified_by="sync (catalog wins on the fields that moved)",
         head_revision=meta.get("headRevisionId"),
     )
-    summary.reached[shown] += 1
+    summary.reached[f"{display.artist} - {display.title}"] += 1
+    label = f"{row.path} ({', '.join(sorted(moved))})"
     if entry.state == "done":
-        summary.written.append(row.path)
-        return True
-    summary.would_write.append(row.path)
-    return False
+        summary.written.append(label)
+        return values
+    summary.would_write.append(label)
+    return None
 
 
-def _mark(api: Catalog, ids: list[str]) -> None:
+def _mark(api: Catalog, done: dict[str, LibraryFileTags]) -> None:
     when = datetime.now(UTC)
+    ids = list(done)
     for start in range(0, len(ids), LIBRARY_ABSENT_MAX_FILES):
         batch = ids[start : start + LIBRARY_ABSENT_MAX_FILES]
         api.mark_library_files_synced(
-            LibraryFilesSynced(drive_file_ids=batch, synced_at=when)
+            LibraryFilesSynced(
+                drive_file_ids=batch,
+                synced_at=when,
+                values={i: done[i] for i in batch},
+            )
         )
 
 
@@ -233,7 +276,7 @@ def _sync(
         folders={"root": settings.root, "state": settings.state},
     ).attach(drive, settings.state)
     summary.record_name = record.file_name
-    done: list[str] = []
+    done: dict[str, LibraryFileTags] = {}
     status = "complete"
     try:
         for row in rows:
@@ -248,8 +291,9 @@ def _sync(
                 )
                 continue
             try:
-                if _sync_one(drive, record, row, display, summary):
-                    done.append(row.drive_file_id)
+                values = _sync_one(drive, record, row, display, summary)
+                if values is not None:
+                    done[row.drive_file_id] = values
             except AudioChanged as exc:
                 summary.aborted = f"{row.path}: {exc}"
                 status = "aborted"
@@ -269,7 +313,7 @@ def _sync(
                 record.finish(status)
             if summary.mode.writes and done:
                 _mark(api, done)
-                summary.synced = done
+                summary.synced = list(done)
     if summary.aborted:
         _report_abort(run_id, summary)
 
@@ -348,6 +392,8 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
     report.count("written", len(summary.written))
     report.count("would_write", len(summary.would_write))
     report.count("already_in_step", len(summary.already))
+    report.count("nothing_moved", len(summary.unmoved))
+    report.count("values_recorded", len(summary.recorded))
     report.count("marked_synced", len(summary.synced))
     report.count("failed", len(summary.failed))
     for shown, files in sorted(summary.reached.items()):
