@@ -950,6 +950,19 @@ def test_a_second_opinion_that_backs_neither_side_leaves_it_for_the_owner(
     )
 
 
+def test_a_spotify_client_that_cannot_start_is_no_second_opinion(monkeypatch) -> None:
+    from deejay_cog import spotify_sync
+
+    class _Broken:
+        @property
+        def client(self):
+            raise ValueError("Missing one or more required Spotify credentials.")
+
+    monkeypatch.setattr(spotify_sync, "get_spotify_client", lambda: _Broken())
+
+    assert fp.build_track_search() is None
+
+
 def test_a_fingerprint_that_agrees_with_the_tags_is_linked(drive, api) -> None:
     drive_id = drive.add(
         "temple.mp3", ROOT, _song("Temple (Radio Edit)", "Thomas Gold feat. X")

@@ -19,7 +19,10 @@ dependencies = [
     "musicbrainzngs>=0.7.1",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
+# Installed by every `uv sync` and `uv run` (uv's default group), so a
+# rebuilt .venv always has the pre-commit hook's tools; deploys leave it
+# out with --no-dev.
 dev = [
     "pytest>=8.3.2",
     "pytest-cov>=5.0.0",

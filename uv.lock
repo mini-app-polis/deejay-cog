@@ -458,7 +458,7 @@ dependencies = [
     { name = "sentry-sdk" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "mypy" },
     { name = "pre-commit" },
@@ -474,18 +474,21 @@ requires-dist = [
     { name = "music-tag", specifier = ">=0.4.3" },
     { name = "musicbrainzngs", specifier = ">=0.7.1" },
     { name = "mutagen", specifier = ">=1.47" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.2" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.8.0" },
     { name = "pyacoustid", specifier = ">=1.2.2" },
     { name = "pydantic", specifier = ">=2.6,<3.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.2" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
     { name = "pytz" },
-    { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "sentry-sdk" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.11.2" },
+    { name = "pre-commit", specifier = ">=3.8.0" },
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-cov", specifier = ">=5.0.0" },
+    { name = "respx", specifier = ">=0.21.0" },
+    { name = "ruff", specifier = ">=0.8.0" },
+]
 
 [[package]]
 name = "distlib"
