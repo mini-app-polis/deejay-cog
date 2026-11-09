@@ -207,6 +207,11 @@ project like the worker, and:
   the file is written (default 0.90). Below it the file is not changed and
   is named in the run report.
 - `DEEJAY_COG_API_KEY` and `GOOGLE_CREDENTIALS_JSON`, as the worker.
+- `SPOTIPY_CLIENT_ID`, `SPOTIPY_CLIENT_SECRET` and `SPOTIPY_REFRESH_TOKEN`,
+  as the worker — optional: Spotify's search is the second opinion's
+  length check when a library file's fingerprint and tags disagree. Without
+  them the second opinion rests on AcoustID alone, and a file it does not
+  settle is left for the owner.
 - For a new-music message: the new-music settings above, in the stricter
   of the message's mode and its own `NEW_MUSIC_MODE`. The new-music mode
   sends none at present (ADR-0007, amended 2026-11-07).

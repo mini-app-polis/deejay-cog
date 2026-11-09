@@ -274,7 +274,28 @@ catalog (stats, summaries, the collection) uses the same rules.
    `identified by its own tags (<the fingerprint's note>)`, not the
    comment: the comment is VirtualDJ's (decision 3).
 3. **A disagreement still goes to the owner.** A file the fingerprint names
-   as another song is not linked by its tags.
+   as another song is not linked by its tags. (Amended below: a second
+   source decides first.)
+
+## Decided with the owner, 2026-11-09 (a second opinion on a disagreement)
+
+1. **Neither the fingerprint nor the tags wins by itself.** AcoustID's best
+   recording is often another song, another version of the file's song, or
+   the right song spelled or credited differently; and a file's tags can be
+   wrong too (a remix tagged with the remixer as its artist, a credit left as
+   "Various Artist"). Trusting either side every time throws away what the
+   other catches.
+2. **A second source decides, then the owner.** First, the other recordings
+   AcoustID links to the same audio: when one of them is the song and
+   version the tags name, the file is linked by its tags. Otherwise Spotify
+   is searched for each side, and a track that is that side's song and
+   version within 3 seconds of the file's own length backs it; when exactly
+   one side is backed, the file is linked by that side. Both backed, neither,
+   or no Spotify: the file stays for the owner, with what each source said
+   in its note. A paid second fingerprint service is not used.
+3. **Files held before this are tried once more.** A file already left for
+   review because its fingerprint disagreed with its tags is sent to the
+   fingerprint function again, once, after the untried files.
 
 ## Consequences
 

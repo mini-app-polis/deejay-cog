@@ -36,6 +36,7 @@ from deejay_cog import library_backfill as backfill
 from deejay_cog import library_identify as ident
 from deejay_cog.fingerprint_jobs import FingerprintJobMessage
 from deejay_cog.music_safety import FlowMode, RunRecord
+from deejay_cog.second_opinion import Heard, Recording
 
 ROOT, STATE = "root", "state"
 _NOW = dt.datetime(2026, 11, 6, tzinfo=dt.UTC)
@@ -384,6 +385,40 @@ def test_a_tried_file_is_not_tried_again(settings, wired, drive, api, jobs) -> N
     assert len(jobs.sent) == 1
 
 
+def test_a_file_held_before_the_second_opinion_is_tried_once_more(
+    settings, wired, drive, api, jobs
+) -> None:
+    drive_id = _unidentified(drive, api, "Beggin_Madcon.mp3", _song("Beggin", "Madcon"))
+    held = _unidentified(drive, api, "x.mp3", _song("Sunny", "Boogie Pimps"))
+    api.known.clear()
+    api.rows[0] = api.rows[0].model_copy(
+        update={
+            "identify_note": "fingerprint: Madcon - Don't Worry (score 0.95) "
+            "disagrees with the file's own tags (Madcon - Beggin); left for review"
+        }
+    )
+    api.rows[1] = api.rows[1].model_copy(
+        update={"identify_note": "fingerprint: no match"}
+    )
+    state = {
+        "flow": ident.FLOW_NAME,
+        "files": {
+            drive_id: {"outcome": "sent_to_fingerprint", "at": "2026-11-08"},
+            held: {"outcome": "sent_to_fingerprint", "at": "2026-11-08"},
+        },
+    }
+    backfill.StateFile(drive, STATE, ident.TRIED_NAME).save(state)
+
+    first = ident.library_identify(run_id="i-1")
+    second = ident.library_identify(run_id="i-2")
+
+    assert first.tried == 1 and [j["file_id"] for j in jobs.sent] == [drive_id]
+    tried = _state(drive, ident.TRIED_NAME)["files"]
+    assert tried[drive_id]["second_opinion"] is True
+    assert "second_opinion" not in tried[held]
+    assert second.tried == 0
+
+
 def test_each_run_takes_the_next_chunk(
     settings, wired, drive, api, jobs, monkeypatch
 ) -> None:
@@ -467,6 +502,8 @@ class FakeIdentifier:
             "year": "2019",
         }
     )
+    #: What AcoustID heard, for a second opinion; None: nothing heard.
+    heard: Heard | None = None
 
     def identify(self, path: str, *, fetch_metadata: bool = True):
         del path, fetch_metadata
@@ -837,6 +874,79 @@ def test_a_fingerprint_that_names_another_song_than_the_tags_is_held(
     assert note.identification_status == "unidentified"
     assert "disagrees with the file's own tags (Madcon - Beggin)" in (
         note.identify_note or ""
+    )
+
+
+def _disagreeing(drive, api, heard: Heard | None, search: Any = None):
+    drive_id = drive.add("Beggin_Madcon.mp3", ROOT, _song("Beggin", "Madcon"))
+    api.known.clear()
+    result = fp.identify_library_file(
+        drive,
+        api,
+        FakeIdentifier(
+            metadata={"title": "Don't Worry", "artist": "Madcon"}, heard=heard
+        ),
+        _record(drive),
+        file_id=drive_id,
+        root=ROOT,
+        path="Beggin_Madcon.mp3",
+        threshold=0.9,
+        search=search,
+    )
+    return drive_id, result
+
+
+@dataclass
+class FakeSearch:
+    tracks_by: dict[str, list[Recording]] = field(default_factory=dict)
+
+    def tracks(self, artist: str, title: str) -> list[Recording]:
+        del artist  # the fake answers by title
+        return self.tracks_by.get(title, [])
+
+
+def test_another_acoustid_recording_of_its_song_links_it_by_its_tags(
+    drive, api
+) -> None:
+    heard = Heard(
+        214.0, (Recording("Don't Worry", "Madcon"), Recording("Beggin'", "Madcon"))
+    )
+
+    drive_id, result = _disagreeing(drive, api, heard)
+
+    assert result.outcome == "linked_by_tags" and result.entry_created
+    [made] = api.created
+    assert (made.title, made.artist) == ("Beggin", "Madcon")
+    [row] = api.registrations
+    assert row.identification_status == "identified"
+    assert "AcoustID also links this audio to Madcon - Beggin'" in (
+        row.identify_note or ""
+    )
+    assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == result.catalog_id
+
+
+def test_spotify_at_the_files_length_can_back_the_fingerprint(drive, api) -> None:
+    search = FakeSearch({"Don't Worry": [Recording("Don't Worry", "Madcon", 214.5)]})
+
+    _, result = _disagreeing(drive, api, Heard(214.0), search)
+
+    assert result.outcome == "linked" and result.entry_created
+    [made] = api.created
+    assert (made.title, made.artist) == ("Don't Worry", "Madcon")
+
+
+def test_a_second_opinion_that_backs_neither_side_leaves_it_for_the_owner(
+    drive, api
+) -> None:
+    _, result = _disagreeing(drive, api, Heard(214.0), FakeSearch())
+
+    assert result.outcome == fp.DISAGREES_WITH_TAGS
+    assert drive.writes(except_folder=STATE) == []
+    [note] = api.registrations
+    assert note.identify_note == (
+        "fingerprint: Madcon - Don't Worry (score 0.95) disagrees with the file's "
+        "own tags (Madcon - Beggin); Spotify has neither song at the file's length "
+        "(3:34); left for review"
     )
 
 

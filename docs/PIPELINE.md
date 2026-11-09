@@ -425,9 +425,19 @@ it) to try again.
    the catalog's entry for them, or to a library entry made from its title,
    artist and year. Its registry note says so (`identified by its own tags
    (fingerprint: no match)`), marking the link as one no fingerprint
-   confirmed. A file the fingerprint names as another song is not linked
-   by its tags: the two disagree, and the owner decides.
-5. A file left unidentified is registered with its own tags and why
+   confirmed.
+5. A confident fingerprint match that disagrees with the file's own tags
+   gets a second opinion (`second_opinion.py`, ADR-0008, decided
+   2026-11-09): when another recording AcoustID links to the same audio is
+   the song and version the tags name, the file is linked by its tags;
+   otherwise Spotify is searched for each side, and a track that is that
+   side's song and version within 3 seconds of the file's length backs it.
+   Exactly one side backed → linked by that side, with the reason in its
+   registry note. Both, neither, or no Spotify → left for the owner, the
+   note saying what each source found. A file held for a disagreement
+   before the second opinion existed is tried once more, after the untried
+   files (marked `second_opinion` in `library-identify-tried.json`).
+6. A file left unidentified is registered with its own tags and why
    (`identify_note`): first that its tags did not identify it, then the
    fingerprint's best guess and score. The owner's unidentified-files page
    on the WCS site shows both.

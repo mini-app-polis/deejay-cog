@@ -40,7 +40,11 @@ every write in the run record (``library-identify-<run id>.json``), which
 **Tried once.** Every file this step has tried, and with what outcome, is in
 ``library-identify-tried.json`` in the state folder, so a file is not
 fingerprinted again every night. To try a file again, remove its id from
-that file (or trash the file to try them all).
+that file (or trash the file to try them all). The one exception: a file
+left for review because its fingerprint disagreed with its tags, before the
+fingerprint function took a second opinion (:mod:`deejay_cog.second_opinion`),
+is tried once more, after the untried files, and then marked so it is not
+tried again.
 
 **Safety:** ``LIBRARY_IDENTIFY_MODE`` is ``off`` unless ``dry-run`` or
 ``write``. A dry run reads and looks up, and names what it would link,
@@ -116,6 +120,13 @@ CHUNK_SIZE_VAR = "LIBRARY_IDENTIFY_CHUNK_SIZE"
 DEFAULT_CHUNK_SIZE = 20
 
 TRIED_NAME = f"{FLOW_NAME}-tried.json"
+
+#: The tried entry's mark for a file sent again for a second opinion.
+SECOND_OPINION = "second_opinion"
+
+#: What a file's note says when its fingerprint disagreed with its tags
+#: (the current wording, and the rolled-back links' of 2026-11-07).
+_DISAGREED = ("disagrees with the file's own tags", "the file says")
 
 #: Registry rows asked for per page.
 REGISTRY_PAGE = 500
@@ -466,6 +477,7 @@ class Identify:
         summary: IdentifySummary,
         jobs: FingerprintJobs | None,
         tried: dict[str, Any],
+        again: frozenset[str] = frozenset(),
     ) -> None:
         self.drive = drive
         self.api = api
@@ -474,9 +486,13 @@ class Identify:
         self.summary = summary
         self.jobs = jobs
         self.tried = tried
+        self.again = again
 
     def _mark(self, row: LibraryFile, outcome: str) -> None:
-        self.tried[row.drive_file_id] = {"outcome": outcome, "at": _now()}
+        entry: dict[str, Any] = {"outcome": outcome, "at": _now()}
+        if row.drive_file_id in self.again:
+            entry[SECOND_OPINION] = True
+        self.tried[row.drive_file_id] = entry
 
     def one(self, row: LibraryFile) -> None:
         """Try one file. Raises :class:`AudioChanged` (the run stops)."""
@@ -582,7 +598,8 @@ def _identify(
         return
     tried: dict[str, Any] = dict(tried_doc.get("files") or {})
     unidentified = _unidentified(api, settings.root)
-    waiting = [r for r in unidentified if r.drive_file_id not in tried]
+    again = [r for r in unidentified if _second_opinion_due(r, tried)]
+    waiting = [r for r in unidentified if r.drive_file_id not in tried] + again
     summary.waiting = len(waiting)
     summary.fingerprinted_unlinked = sum(
         1
@@ -600,7 +617,16 @@ def _identify(
         folders={"root": settings.root, "state": settings.state},
     ).attach(drive, settings.state)
     summary.record_name = record.file_name
-    work = Identify(drive, api, settings, record, summary, jobs, tried)
+    work = Identify(
+        drive,
+        api,
+        settings,
+        record,
+        summary,
+        jobs,
+        tried,
+        frozenset(r.drive_file_id for r in again),
+    )
     status = "complete"
     try:
         for row in chunk:
@@ -633,6 +659,18 @@ def _identify(
                 )
     if summary.aborted:
         _report_abort(run_id, summary)
+
+
+def _second_opinion_due(row: LibraryFile, tried: dict[str, Any]) -> bool:
+    """Whether a file left for review because its fingerprint disagreed
+    with its tags has yet to be tried with a second opinion."""
+    entry = tried.get(row.drive_file_id) or {}
+    note = row.identify_note or ""
+    return (
+        entry.get("outcome") == "sent_to_fingerprint"
+        and not entry.get(SECOND_OPINION)
+        and any(phrase in note for phrase in _DISAGREED)
+    )
 
 
 def _report_abort(run_id: str, summary: IdentifySummary) -> None:
