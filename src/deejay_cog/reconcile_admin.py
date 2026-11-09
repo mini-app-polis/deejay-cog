@@ -204,13 +204,14 @@ def old_approvals(drive: Any, state: str) -> dict[str, Any] | None:
 
 
 def moved_cursor(cursor: dict[str, Any] | None, position: int) -> dict[str, Any]:
-    """The cursor at ``position``; everything else in it is kept."""
+    """The cursor at ``position``; everything else in it is kept but the
+    file it last compared, so the next run starts at ``position``."""
     if position < 0:
         raise AdminError("--position must be 0 or more")
     if cursor is None:
         raise AdminError(f"no {CURSOR_NAME} in the state folder: nothing to move")
     return {
-        **cursor,
+        **{key: value for key, value in cursor.items() if key != "after"},
         "position": position,
         "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }

@@ -218,7 +218,11 @@ def test_with_no_old_file_there_is_nothing_to_seed(drive, api, capsys) -> None:
 
 
 def test_the_cursor_moves_only_with_apply_and_keeps_its_other_fields(drive) -> None:
-    _put(drive, rec.CURSOR_NAME, {"flow": rec.FLOW_NAME, "position": 272, "passes": 0})
+    _put(
+        drive,
+        rec.CURSOR_NAME,
+        {"flow": rec.FLOW_NAME, "position": 272, "after": "row-id", "passes": 0},
+    )
 
     assert admin.main(["cursor", "--position", "0"]) == 0
     assert _get(drive, rec.CURSOR_NAME)["position"] == 272
@@ -230,6 +234,8 @@ def test_the_cursor_moves_only_with_apply_and_keeps_its_other_fields(drive) -> N
         0,
         rec.FLOW_NAME,
     )
+    # The file it last compared goes, so the next run starts at the position.
+    assert "after" not in cursor
 
 
 def test_there_is_no_cursor_to_move_before_a_first_run(drive, capsys) -> None:

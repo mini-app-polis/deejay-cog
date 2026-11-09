@@ -17,9 +17,13 @@ next ``LIBRARY_RECONCILE_CHUNK_SIZE`` files (default 50) after its own
 cursor, ``library-reconcile-cursor.json``, kept apart from the backfill's.
 A dry run moves this cursor: repeated dry runs step through the whole
 library, and after the last file the next run starts again from the first.
-The cursor counts files in that order, so a file marked not present between
-runs shifts the rest by one: a dry run may then pass over or repeat a file,
-which the next pass catches.
+The cursor names the last file compared (``after``, its registry id), and
+the next run asks for the files after that one. So a file linked, unlinked
+or marked not present between runs, earlier in the order, neither repeats
+nor skips a file; ``position`` only counts the files compared this pass,
+for the report. A cursor with no ``after`` (moved by hand) starts at its
+``position`` once; one whose file the registry no longer has starts the
+next pass.
 Past the run's deadline the run stops between files and saves where it got
 to.
 
@@ -107,6 +111,7 @@ from time import monotonic
 from typing import Any, Protocol, cast
 
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.api import ApiUnavailable, KaianoApiError
 from mini_app_polis.api.contract import (
     CATALOG_DISPLAY_MAX_IDS,
     CatalogDisplay,
@@ -571,6 +576,7 @@ class ReconcileSummary:
     record_name: str = ""
     start: int = 0
     position: int = 0
+    after: str = ""
     total: int = 0
     wrapped: bool = False
     compared: int = 0
@@ -609,14 +615,37 @@ def _settings() -> tuple[BackfillSettings | None, int, list[str]]:
     return settings, size, problems
 
 
-def _page(api: Catalog, root: str, offset: int, limit: int) -> list[LibraryFile]:
+def _page(
+    api: Catalog, root: str, limit: int, *, offset: int = 0, after: str = ""
+) -> list[LibraryFile]:
+    paging: dict[str, Any] = (
+        {"after": uuid.UUID(after)} if after else {"offset": offset}
+    )
     return api.list_library_files(
         library_root_id=root,
         identification_status="identified",
         present=True,
-        offset=offset,
         limit=limit,
+        **paging,
     )
+
+
+def _resume(
+    api: Catalog, root: str, limit: int, cursor: dict[str, Any]
+) -> tuple[list[LibraryFile], bool]:
+    """The next chunk after the cursor, and whether it wrapped to the first
+    file: past the last file, or after a file the registry no longer has."""
+    after = str(cursor.get("after") or "")
+    position = int(cursor.get("position", 0))
+    try:
+        rows = _page(api, root, limit, offset=position, after=after)
+    except KaianoApiError as exc:
+        if not after or isinstance(exc, ApiUnavailable) or exc.status_code != 404:
+            raise
+        rows = []
+    if rows or not (after or position):
+        return rows, False
+    return _page(api, root, limit), True
 
 
 def _displays(api: Catalog, rows: list[LibraryFile]) -> dict[uuid.UUID, CatalogDisplay]:
@@ -769,12 +798,12 @@ def _reconcile(
     if cursor.get("root_folder_id") not in (None, settings.root):
         cursor = {}
     position = int(cursor.get("position", 0))
-    rows = _page(api, settings.root, position, chunk_size)
-    if not rows and position:
+    rows, summary.wrapped = _resume(api, settings.root, chunk_size, cursor)
+    if summary.wrapped:
         # Past the last file: the next pass starts from the first.
-        summary.wrapped = True
         position = 0
-        rows = _page(api, settings.root, 0, chunk_size)
+    else:
+        summary.after = str(cursor.get("after") or "")
     summary.start = summary.position = position
     approvals = Approvals()
     record: RunRecord | None = None
@@ -832,6 +861,7 @@ def _reconcile(
                 log.exception("library-reconcile: failed on %s", row.path)
                 summary.failed.append(f"{row.path} ({type(exc).__name__}: {exc})")
             summary.position += 1
+            summary.after = str(row.id)
     finally:
         # Saved even past the deadline: the next run must carry on from here.
         with without_run_deadline():
@@ -871,6 +901,7 @@ def _save_state(
             "version": 1,
             "root_folder_id": settings.root,
             "position": summary.position,
+            "after": summary.after,
             "passes": int(cursor.get("passes", 0)) + (1 if summary.wrapped else 0),
             "updated_at": _now(),
         }
