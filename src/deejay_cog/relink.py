@@ -178,11 +178,26 @@ def relink(
     *,
     apply: bool,
     run_id: str | None = None,
+    path: str = "",
 ) -> tuple[str, list[Relink]]:
     """Plan, and with ``apply`` make, each relink. Returns the run record's
-    name and the files, each with its result."""
-    planned = candidates(read_run_records(drive, state_folder))
-    rows = registry_rows(api) if planned else {}
+    name and the files, each with its result. With ``path``, the files are
+    instead the present registry rows whose path contains it (case
+    ignored), whatever their title."""
+    if path:
+        rows = registry_rows(api)
+        needle = path.lower()
+        planned = sorted(
+            (
+                Relink(file_id=row.drive_file_id, name=row.path, title="")
+                for row in rows.values()
+                if needle in row.path.lower()
+            ),
+            key=lambda r: r.name.lower(),
+        )
+    else:
+        planned = candidates(read_run_records(drive, state_folder))
+        rows = registry_rows(api) if planned else {}
     mode = FlowMode.WRITE if apply else FlowMode.DRY_RUN
     record = RunRecord(FLOW_NAME, run_id or local_run_id(), mode).attach(
         drive, state_folder
@@ -215,7 +230,9 @@ def _one(
         return
     data: bytes = drive.download_file_bytes(r.file_id).data
     r.linked = linked_catalog_id(data)
-    track = ingest_track(read_tag_row(data))
+    tags = read_tag_row(data)
+    r.title = r.title or tags["title"]
+    track = ingest_track(tags)
     if track is None:
         r.result = "left alone: no usable title or artist now"
         return
@@ -285,6 +302,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="write the relinks (without this, only print what would be done)",
     )
+    parser.add_argument(
+        "--path",
+        default="",
+        help=(
+            "look up again the files whose registry path contains this text, "
+            "instead of the titles the backfill records name"
+        ),
+    )
     args = parser.parse_args(argv)
     state_folder = os.getenv(STATE_FOLDER_VAR, "").strip()
     if not state_folder:
@@ -292,7 +317,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     drive = GoogleAPI.from_env().drive
     api = api_client(base_url=api_base_url().strip() or None)
-    record_name, files = relink(drive, api, state_folder, apply=args.apply)
+    record_name, files = relink(
+        drive, api, state_folder, apply=args.apply, path=args.path
+    )
     print(
         f"{'Relinking' if args.apply else 'Dry run of relinking'}: "
         f"{len(files)} files with a version after a feat. credit"
