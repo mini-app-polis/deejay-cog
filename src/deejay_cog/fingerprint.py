@@ -49,7 +49,12 @@ the catalog has no song for it, and the file is then linked to that entry
 (fill-up, the catalog's values written in place, registered as identified).
 Below the score, or with no match, the file is linked by its own tags when
 they name a song (:func:`deejay_cog.library_identify.link_by_own_tags`), and
-otherwise left unchanged and unidentified. That run
+otherwise left unchanged and unidentified. A confident match that disagrees
+with the file's own tags goes to a second opinion
+(:mod:`deejay_cog.second_opinion`): the other recordings AcoustID links to
+the audio, then Spotify's length for each side. The file is linked by
+whichever side a second source backs, and left for the owner when none
+does or both are. That run
 is reported under ``library-identify`` and follows the stricter of the
 message's mode and ``LIBRARY_IDENTIFY_MODE``.
 """
@@ -129,6 +134,13 @@ from deejay_cog.music_tags import (
     write_catalog_tags,
     write_recording_tags,
 )
+from deejay_cog.second_opinion import (
+    Heard,
+    SpotifyTrackSearch,
+    TrackSearch,
+    acoustid_recordings,
+)
+from deejay_cog.second_opinion import decide as second_opinion
 
 log = logger_mod.get_logger()
 
@@ -319,11 +331,16 @@ class AcoustIdLookup:
         self._lookup = lookup
         self._sleep = sleep
         self._max_candidates = max_candidates
+        #: The last file's length and every titled recording AcoustID linked
+        #: to its audio, for a second opinion (:mod:`deejay_cog.second_opinion`).
+        self.heard: Heard | None = None
 
     def identify(self, path: str) -> list[TrackId]:
         """The MusicBrainz recordings AcoustID matches ``path`` to, best first."""
+        self.heard = None
         duration, fingerprint = run_fpcalc(path, fpcalc=self._fpcalc)
         data = self._lookup_answer(fingerprint, duration)
+        self.heard = Heard(duration, acoustid_recordings(data))
         candidates: list[TrackId] = []
         for result in data.get("results") or []:
             score = float(result.get("score") or 0.0)
@@ -401,23 +418,56 @@ class MusicBrainzRecordings(MusicBrainzRecordingProvider):
             return {"_provider": "musicbrainz", "_mbid": track_id.id, NOT_SERVED: True}
 
 
-def build_identifier(*, threshold: float) -> Mp3Identifier:
+class FingerprintIdentifier:
+    """``Mp3Identifier`` with what its AcoustID lookup heard on the last
+    file (``heard``), for a second opinion."""
+
+    def __init__(self, identifier: Mp3Identifier, lookup: AcoustIdLookup) -> None:
+        self._identifier = identifier
+        self._lookup = lookup
+
+    def identify(
+        self, path: str, *, fetch_metadata: bool = True
+    ) -> IdentificationResult:
+        """Identify the audio file at ``path``."""
+        return self._identifier.identify(path, fetch_metadata=fetch_metadata)
+
+    @property
+    def heard(self) -> Heard | None:
+        """The last file's length and the recordings linked to its audio."""
+        return self._lookup.heard
+
+
+def build_identifier(*, threshold: float) -> FingerprintIdentifier:
     """An ``Mp3Identifier`` on fpcalc, AcoustID and MusicBrainz, with
     MusicBrainz asked only for a match that reaches ``threshold``."""
     api_key = os.getenv("ACOUSTID_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("ACOUSTID_API_KEY is not set")
-    return Mp3Identifier(
-        acoustid_identifier=AcoustIdLookup(api_key, fpcalc=find_fpcalc()),
-        musicbrainz_provider=MusicBrainzRecordings(
-            app_name=REPO, app_version=__version__, contact=MUSICBRAINZ_CONTACT
+    lookup = AcoustIdLookup(api_key, fpcalc=find_fpcalc())
+    return FingerprintIdentifier(
+        Mp3Identifier(
+            acoustid_identifier=lookup,
+            musicbrainz_provider=MusicBrainzRecordings(
+                app_name=REPO, app_version=__version__, contact=MUSICBRAINZ_CONTACT
+            ),
+            policy=IdentificationPolicy(
+                min_confidence=threshold,
+                max_candidates=MAX_CANDIDATES,
+                fetch_metadata_min_confidence=threshold,
+            ),
         ),
-        policy=IdentificationPolicy(
-            min_confidence=threshold,
-            max_candidates=MAX_CANDIDATES,
-            fetch_metadata_min_confidence=threshold,
-        ),
+        lookup,
     )
+
+
+def build_track_search() -> TrackSearch | None:
+    """Spotify's search for a second opinion, or None without Spotify's
+    credentials (the second opinion then rests on AcoustID alone)."""
+    from deejay_cog.spotify_sync import get_spotify_client
+
+    spotify = get_spotify_client()
+    return None if spotify is None else SpotifyTrackSearch(spotify.client)
 
 
 # ---------------------------------------------------------------------------
@@ -735,11 +785,15 @@ def identify_library_file(
     root: str,
     path: str,
     threshold: float,
+    search: TrackSearch | None = None,
 ) -> LibraryIdentifyResult:
     """Identify one library file by its fingerprint and, on a confident
     match, link it to its catalog entry (made a library entry when the
     catalog has no song for it). No MusicBrainz tags are written; below
-    ``threshold`` nothing changes."""
+    ``threshold`` nothing changes. A match that disagrees with the file's
+    own tags is linked by whichever side a second opinion backs
+    (:mod:`deejay_cog.second_opinion`, with ``search`` as its Spotify), and
+    otherwise left for the owner."""
     meta = file_meta(drive, file_id)
     if meta.get("trashed"):
         return LibraryIdentifyResult(path, "in_trash")
@@ -751,6 +805,34 @@ def identify_library_file(
 
     # The best match's score, once there is one; read when a note is made.
     score: float | None = None
+
+    def by_own_tags(why: str) -> LibraryIdentifyResult | None:
+        """Link the file by its own tags; None when they name no song."""
+        by_tags = library_identify.link_by_own_tags(
+            drive,
+            api,
+            record,
+            file_id=file_id,
+            name=name,
+            root=root,
+            path=path,
+            data=data,
+            why=why,
+        )
+        if by_tags is None:
+            return None
+        if by_tags.linked is None:
+            return LibraryIdentifyResult(path, "would_create_entry_from_tags", score)
+        return LibraryIdentifyResult(
+            path,
+            LINKED_BY_TAGS,
+            score,
+            by_tags.catalog_id,
+            by_tags.entry_created,
+            by_tags.linked.written,
+            by_tags.linked.would_write,
+            tuple(by_tags.linked.filled),
+        )
 
     def unidentified(outcome: str, note: str) -> LibraryIdentifyResult:
         if record.mode.writes:
@@ -782,31 +864,10 @@ def identify_library_file(
             note = f"fingerprint: no confident match (score {score:.2f})"
         # Nothing says the file's own tags are wrong, and the fingerprint
         # never will: they make its entry when they name a song.
-        by_tags = library_identify.link_by_own_tags(
-            drive,
-            api,
-            record,
-            file_id=file_id,
-            name=name,
-            root=root,
-            path=path,
-            data=data,
-            why=note,
-        )
+        by_tags = by_own_tags(note)
         if by_tags is None:
             return unidentified(Outcome.BELOW_CONFIDENCE.value, note)
-        if by_tags.linked is None:
-            return LibraryIdentifyResult(path, "would_create_entry_from_tags", score)
-        return LibraryIdentifyResult(
-            path,
-            LINKED_BY_TAGS,
-            score,
-            by_tags.catalog_id,
-            by_tags.entry_created,
-            by_tags.linked.written,
-            by_tags.linked.would_write,
-            tuple(by_tags.linked.filled),
-        )
+        return by_tags
     if metadata.get(NOT_SERVED):
         return unidentified(
             Outcome.RECORDING_NOT_SERVED.value,
@@ -827,14 +888,33 @@ def identify_library_file(
     # and can be wrong, and its answer must not retitle a file that already
     # said what it is.
     own = read_tag_row(data)
+    identified_by = f"fingerprint ({score:.2f}) + catalog"
     if ingest_track(own) is not None and not tags_agree(
         own["title"], own["artist"], title, artist
     ):
-        return unidentified(
-            DISAGREES_WITH_TAGS,
+        disagreement = (
             f"fingerprint: {artist} - {title} (score {score:.2f}) disagrees with "
-            f"the file's own tags ({own['artist']} - {own['title']}); left for review",
+            f"the file's own tags ({own['artist']} - {own['title']})"
         )
+        # Neither side wins by itself: a second source decides, or the owner.
+        verdict = second_opinion(
+            own["title"],
+            own["artist"],
+            title,
+            artist,
+            getattr(identifier, "heard", None),
+            search,
+        )
+        if verdict.side == "tags":
+            by_tags = by_own_tags(f"{disagreement}; {verdict.why}")
+            if by_tags is not None:
+                return by_tags
+        if verdict.side != "fingerprint":
+            return unidentified(
+                DISAGREES_WITH_TAGS,
+                f"{disagreement}; {verdict.why}; left for review",
+            )
+        identified_by = f"fingerprint ({score:.2f}) + catalog; {verdict.why}"
 
     match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
     created = False
@@ -862,7 +942,7 @@ def identify_library_file(
         path=path,
         data=data,
         catalog_id=catalog_id,
-        identified_by=f"fingerprint ({score:.2f}) + catalog",
+        identified_by=identified_by,
     )
     return LibraryIdentifyResult(
         path,
@@ -887,6 +967,7 @@ def library_identify_by_fingerprint(
     drive: Any | None = None,
     api: Any | None = None,
     identifier: Identifier | None = None,
+    search: TrackSearch | None = None,
 ) -> LibraryIdentifyResult | None:
     """One library file's fingerprint run, reported under
     ``library-identify``, in the stricter of the sender's mode and
@@ -937,6 +1018,7 @@ def library_identify_by_fingerprint(
                 root=root,
                 path=path or name or file_id,
                 threshold=threshold,
+                search=search if search is not None else build_track_search(),
             )
         except AudioChanged as exc:
             report.issue("audio_changed", f"{path}: {exc}")
