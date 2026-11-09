@@ -1,3 +1,10 @@
+## [2.37.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.37.2...v2.37.3) (2026-11-09)
+
+
+### Bug Fixes
+
+* **fingerprint:** audio fpcalc cannot read leaves the file for review instead of failing the run ([e18739f](https://github.com/mini-app-polis/deejay-cog/commit/e18739f417dcff2faaeae3f2e6b39098d9175d74))
+
 ## [2.37.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.37.1...v2.37.2) (2026-11-09)
 
 
