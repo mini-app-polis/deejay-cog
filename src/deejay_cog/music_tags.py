@@ -170,7 +170,8 @@ def _agree_key(text: str) -> str:
     ignored."""
     folded = unicodedata.normalize("NFKD", text.replace("&", " and "))
     folded = "".join(c for c in folded if not unicodedata.combining(c))
-    return re.sub(r"[^a-z0-9]+", "", folded.lower())
+    key = re.sub(r"[^a-z0-9]+", "", folded.lower())
+    return key.replace("rmix", "remix")
 
 
 def _title_core(title: str) -> str:
@@ -190,7 +191,8 @@ _NOT_A_VERSION = re.compile(
     r"|^(?:super clean|clean|explicit|dirty|edited|radio edit|radio version"
     r"|no intro edit|intro edit|clean version|explicit version|album version"
     r"|single version|lp version|original mix|original version|main|mono|stereo)$"
-    r"|remaster|^\d{4}$",
+    r"|remaster|^\d{4}$|official|lyric video|originally (?:by|performed)"
+    r"|promo only|clean edit|^part\b",
     re.IGNORECASE,
 )
 _PARTS = re.compile(r"[\[(]([^\])]*)[\])]|\s+-\s+(.*)$")
@@ -200,8 +202,10 @@ def _versions(title: str) -> set[str]:
     """The versions a title names (a remix, an acoustic take, a cover),
     folded: its bracketed or " - " parts that are not credits or labels."""
     found = set()
-    for bracketed, dashed in _PARTS.findall(title):
-        part = (bracketed or dashed).strip()
+    for match in _PARTS.finditer(title):
+        if match.start() == 0:
+            continue  # a title that opens with a bracket: the bracket is its name
+        part = (match.group(1) or match.group(2) or "").strip()
         if part and not _NOT_A_VERSION.search(part):
             key = _agree_key(part)
             if key:
@@ -228,9 +232,14 @@ def tags_agree(
         my_main in _agree_key(found_artist) or found_main in _agree_key(file_artist)
     ):
         return False
+    mine_v, found_v = _versions(file_title), _versions(found_title)
     found_key, file_key = _agree_key(found_title), _agree_key(file_title)
-    return all(v in found_key for v in _versions(file_title)) and all(
-        v in file_key for v in _versions(found_title)
+
+    def covered(version: str, other_key: str, other_versions: set[str]) -> bool:
+        return version in other_key or any(o in version for o in other_versions)
+
+    return all(covered(v, found_key, found_v) for v in mine_v) and all(
+        covered(v, file_key, mine_v) for v in found_v
     )
 
 
