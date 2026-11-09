@@ -170,6 +170,16 @@ class FpcalcNotFound(RuntimeError):  # noqa: N818 — named for what happened
     """fpcalc is neither on PATH nor where the layer puts it."""
 
 
+class AudioUnreadable(RuntimeError):  # noqa: N818 — named for what happened
+    """fpcalc could not open or decode the file's audio (its exit status 2
+    or 3). The same bytes give the same answer every time, so the file is
+    left for review rather than tried again."""
+
+
+#: fpcalc's exit statuses for audio it cannot open (2) or decode (3).
+FPCALC_UNREADABLE = frozenset({2, 3})
+
+
 class AcoustIdError(RuntimeError):
     """AcoustID refused a lookup."""
 
@@ -208,6 +218,10 @@ class Outcome(enum.Enum):
     NOT_MP3 = "not_mp3"
     """Not an MP3, so it has no ID3 tags to write. Not changed."""
 
+    AUDIO_UNREADABLE = "audio_unreadable"
+    """fpcalc could not read the audio (a damaged or mislabeled file). Not
+    changed."""
+
 
 #: The outcomes that leave a file as it was, to be tagged by hand.
 UNTOUCHED = frozenset(
@@ -216,6 +230,7 @@ UNTOUCHED = frozenset(
         Outcome.NO_RECORDING_TAGS,
         Outcome.RECORDING_NOT_SERVED,
         Outcome.NOT_MP3,
+        Outcome.AUDIO_UNREADABLE,
     }
 )
 
@@ -266,9 +281,10 @@ def run_fpcalc(path: str, *, fpcalc: str) -> tuple[float, str]:
         timeout=FPCALC_TIMEOUT_SECONDS,
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"fpcalc exited with status {proc.returncode}: {proc.stderr.strip()}"
-        )
+        message = f"fpcalc exited with status {proc.returncode}: {proc.stderr.strip()}"
+        if proc.returncode in FPCALC_UNREADABLE:
+            raise AudioUnreadable(message)
+        raise RuntimeError(message)
     try:
         parsed = json.loads(proc.stdout)
         return float(parsed["duration"]), str(parsed["fingerprint"])
@@ -449,7 +465,10 @@ def identify_file(
     if not _is_mp3(downloaded, name):
         return FingerprintResult(file_id, name, Outcome.NOT_MP3)
 
-    result = _identify(identifier, name, data)
+    try:
+        result = _identify(identifier, name, data)
+    except AudioUnreadable:
+        return FingerprintResult(file_id, name, Outcome.AUDIO_UNREADABLE)
     chosen = result.chosen
     score = float(chosen.confidence or 0.0) if chosen is not None else 0.0
     if chosen is None or score < threshold:
@@ -586,7 +605,11 @@ def intake_fingerprinted(
         intake.review(file_id, name, None, "not an MP3: only ID3 tags are written")
         return
 
-    result = _identify(identifier, name, data)
+    try:
+        result = _identify(identifier, name, data)
+    except AudioUnreadable as exc:
+        intake.review(file_id, name, data, f"fpcalc could not read the audio: {exc}")
+        return
     chosen = result.chosen
     score = float(chosen.confidence or 0.0) if chosen is not None else 0.0
     if chosen is None or score < threshold:
@@ -720,12 +743,8 @@ def identify_library_file(
     if not _is_mp3(downloaded, name):
         return LibraryIdentifyResult(path, Outcome.NOT_MP3.value)
 
-    result = _identify(identifier, name, data)
-    chosen = result.chosen
-    score = float(chosen.confidence or 0.0) if chosen is not None else 0.0
-    metadata = result.metadata or {}
-    title = str(metadata.get("title") or "").strip()
-    artist = str(metadata.get("artist") or "").strip()
+    # The best match's score, once there is one; read when a note is made.
+    score: float | None = None
 
     def unidentified(outcome: str, note: str) -> LibraryIdentifyResult:
         if record.mode.writes:
@@ -733,6 +752,19 @@ def identify_library_file(
                 api, file_id=file_id, root=root, path=path, data=data, note=note
             )
         return LibraryIdentifyResult(path, outcome, score)
+
+    try:
+        result = _identify(identifier, name, data)
+    except AudioUnreadable as exc:
+        return unidentified(
+            Outcome.AUDIO_UNREADABLE.value,
+            f"fingerprint: the audio could not be read ({exc}); left for review",
+        )
+    chosen = result.chosen
+    score = float(chosen.confidence or 0.0) if chosen is not None else 0.0
+    metadata = result.metadata or {}
+    title = str(metadata.get("title") or "").strip()
+    artist = str(metadata.get("artist") or "").strip()
 
     if chosen is None or score < threshold:
         guess = f"{artist} - {title}" if title and artist else ""

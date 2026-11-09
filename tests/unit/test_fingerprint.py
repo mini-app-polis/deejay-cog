@@ -234,6 +234,46 @@ def test_a_failing_fpcalc_raises(fake_fpcalc: str, tmp_path: Path) -> None:
         fp.run_fpcalc(str(tmp_path / "missing.mp3"), fpcalc=fake_fpcalc)
 
 
+def _fpcalc_exiting(tmp_path: Path, status: int) -> str:
+    script = tmp_path / "bin" / "fpcalc-broken"
+    script.parent.mkdir(exist_ok=True)
+    script.write_text(
+        "#!/bin/sh\n"
+        "echo 'ERROR: Error reading from the audio source' >&2\n"
+        f"exit {status}\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return str(script)
+
+
+def test_audio_fpcalc_cannot_read_is_unreadable(tmp_path: Path) -> None:
+    audio = tmp_path / "a.mp3"
+    audio.write_bytes(_AUDIO)
+    with pytest.raises(fp.AudioUnreadable, match="status 3"):
+        fp.run_fpcalc(str(audio), fpcalc=_fpcalc_exiting(tmp_path, 3))
+
+
+def test_any_other_fpcalc_failure_still_raises(tmp_path: Path) -> None:
+    audio = tmp_path / "a.mp3"
+    audio.write_bytes(_AUDIO)
+    with pytest.raises(RuntimeError, match="status 1") as raised:
+        fp.run_fpcalc(str(audio), fpcalc=_fpcalc_exiting(tmp_path, 1))
+    assert not isinstance(raised.value, fp.AudioUnreadable)
+
+
+def test_a_file_whose_audio_cannot_be_read_is_left_unchanged(tmp_path: Path) -> None:
+    drive, api = FakeDrive(), FakeApi()
+    identifier = _identifier(
+        _fpcalc_exiting(tmp_path, 3), FakeAcoustId([]), FakeMusicBrainz()
+    )
+
+    result = fp.identify_file(drive, api, identifier, "f1", threshold=0.9)
+
+    assert result.outcome is Outcome.AUDIO_UNREADABLE
+    assert drive.updates == []
+    assert api.requests == []
+
+
 # ---------------------------------------------------------------------------
 # AcoustID, and its rate limit
 # ---------------------------------------------------------------------------
