@@ -1,3 +1,10 @@
+## [2.39.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.39.0...v2.39.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **identify:** a Spotify client that cannot start leaves the second opinion to AcoustID instead of failing the file ([37116ee](https://github.com/mini-app-polis/deejay-cog/commit/37116ee77696f1ea606915bfa1e06e502a3cddfa))
+
 # [2.39.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.38.1...v2.39.0) (2026-11-09)
 
 
