@@ -435,10 +435,14 @@ with an ERROR finding; that file is marked tried and not retried.
 catalog or registry, sends nothing to the fingerprint queue and records no
 file as tried. Its record is `library-identify-<run id>.dry-run.json`.
 
-**Report:** counts for `waiting`, `tried`, `linked`, `written`,
-`would_write`, `filled_up`, `to_fingerprint` and `failed`, with every file
-by its path. The fingerprint function's run for a library file is reported
-under `library-identify` too.
+**Report:** counts for `waiting`, `fingerprinted_unlinked` (files an
+earlier run sent to fingerprinting that are still unidentified: left for the
+owner, or not run yet), `tried`, `linked`, `written`, `would_write`,
+`filled_up`, `to_fingerprint` and `failed`, with every file by its path.
+The fingerprint function's run for a library file is reported under
+`library-identify` too, but sent only when it has an issue: a chunk sends
+one run per file, so a run that went as expected is logged and kept in its
+run record, not posted.
 
 ## library-reconcile
 

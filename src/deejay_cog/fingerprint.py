@@ -753,10 +753,11 @@ def library_identify_by_fingerprint(
     if mode is FlowMode.OFF:
         log.info("deejay-fingerprint: library file %s skipped: off", path or file_id)
         return None
+    # Not notable: a run that went as expected is logged, not sent (see
+    # _record_library); an issue still sends.
     with run_report(
         library_identify.FLOW_NAME,
         repo=REPO,
-        notable=True,
         run_id=run_id,
         version=__version__,
     ) as report:
@@ -809,11 +810,16 @@ def _record_library(
     result: LibraryIdentifyResult | None,
     duration_sec: float,
 ) -> None:
+    """Count one library file's fingerprint run, and log what it did.
+
+    The library identify step sends a whole chunk to fingerprinting at once,
+    one run here per file, so a run that went as expected records counts
+    only and is not sent: its file is in the run record, and the next
+    nightly identify report counts what is still unidentified
+    (``fingerprinted_unlinked``). Only an issue (a missing setting, a
+    changed audio check, an exception) reaches the channel.
+    """
     report.duration_sec = duration_sec
-    if mode is FlowMode.DRY_RUN:
-        report.notice(
-            "dry_run", "LIBRARY_IDENTIFY_MODE is dry-run: nothing was changed"
-        )
     if result is None:
         return
     item = result.path
@@ -821,21 +827,18 @@ def _record_library(
         item = f"{item} (score {result.score:.2f})"
     report.count("scanned", 1)
     report.count("linked", 1 if result.outcome == "linked" else 0)
-    if result.outcome != "linked":
-        report.notice(result.outcome, item)
-        return
-    report.ok(1)
-    report.updated("library file linked", item)
+    report.count("entry_created", 1 if result.entry_created else 0)
+    report.count("tags_written", 1 if result.written else 0)
+    details = [result.outcome]
+    if mode is FlowMode.DRY_RUN:
+        details.append("dry run")
     if result.entry_created:
-        report.created("library entry", item)
+        details.append("library entry created")
     if result.written:
-        report.created("tags written", result.path)
-    if result.would_write:
-        report.notice("would_write", result.path)
+        details.append("tags written")
     if result.filled:
-        report.updated(
-            "catalog filled up", f"{result.path} ({', '.join(result.filled)})"
-        )
+        details.append(f"catalog filled up ({', '.join(result.filled)})")
+    log.info("library-identify fingerprint: %s: %s", item, "; ".join(details))
 
 
 # ---------------------------------------------------------------------------
