@@ -230,8 +230,9 @@ catalog (stats, summaries, the collection) uses the same rules.
    and the file keeps its own when that is older (the reconcile's
    year_filled, year_earlier and year_later kinds; only the first two are
    approved).
-4. **The catalog wins for BPM rounding only** (amended 2026-11-07). A real
-   difference (bpm_differs, more than 0.5 BPM apart) is held: the catalog
+4. **The catalog wins for BPM rounding only** (amended 2026-11-07; the
+   rounding window widened from 0.5 to under 1.5 BPM on 2026-11-08). A real
+   difference (bpm_differs, 1.5 BPM or more apart) is held: the catalog
    can keep one BPM for a song whose files are versions at different
    tempos (a 90 BPM edit and the 102 BPM original), so its BPM written
    over every file was wrong. The writes made before the hold are undone

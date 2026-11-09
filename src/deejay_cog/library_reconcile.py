@@ -49,7 +49,7 @@ comparison, and never written.
 - ``year_later`` — the file's year is older than the catalog's (the older
   year is kept: leave this kind unapproved and the file keeps its year)
 - ``year_differs`` — a year that is not a number, so neither is older
-- ``bpm_rounding`` (0.5 BPM or less apart), ``bpm_differs``,
+- ``bpm_rounding`` (less than ``BPM_ROUNDING`` apart), ``bpm_differs``,
   ``label_differs``
 - ``fill_up`` — the file has a value for a field the catalog leaves empty,
   which would go up to the catalog
@@ -190,8 +190,9 @@ FIELDS = ("title", "artist", "year", "genre", "bpm", "label")
 #: How many examples of each kind the run report shows (the record has all).
 REPORT_EXAMPLES = 5
 
-#: BPM this close is a rounding difference, not a different tempo.
-BPM_ROUNDING = 0.5
+#: BPM closer than this is a rounding difference, not a different tempo:
+#: versions at different tempos are further apart.
+BPM_ROUNDING = 1.5
 
 
 class Catalog(Protocol):
@@ -451,7 +452,7 @@ def classify(
                 if have_n == want_n:
                     continue
                 gap = abs(have_n - want_n)
-                add(name, "bpm_rounding" if gap <= BPM_ROUNDING else "bpm_differs")
+                add(name, "bpm_rounding" if gap < BPM_ROUNDING else "bpm_differs")
             else:
                 add(name, "bpm_differs")
             continue

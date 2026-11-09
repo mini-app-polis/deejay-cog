@@ -129,10 +129,14 @@ def test_a_year_that_is_not_a_number_differs() -> None:
     assert _kinds(_tags(year="2017-01-01"), _tags()) == {"year": "case_punctuation"}
 
 
-def test_bpm_half_a_beat_apart_is_rounding_and_more_is_different() -> None:
+def test_bpm_under_one_and_a_half_beats_is_rounding_and_more_is_different() -> None:
     assert _kinds(_tags(bpm="96"), _tags(bpm="95.5")) == {"bpm": "bpm_rounding"}
     assert _kinds(_tags(bpm="100"), _tags(bpm="100.0")) == {}
     assert _kinds(_tags(bpm="98"), _tags(bpm="95.5")) == {"bpm": "bpm_differs"}
+    # Less than 1.5 BPM is rounding; 1.5 or more, a different tempo.
+    assert _kinds(_tags(bpm="112.84"), _tags(bpm="113.1")) == {"bpm": "bpm_rounding"}
+    assert _kinds(_tags(bpm="100"), _tags(bpm="101.4")) == {"bpm": "bpm_rounding"}
+    assert _kinds(_tags(bpm="100"), _tags(bpm="101.5")) == {"bpm": "bpm_differs"}
     assert _kinds(_tags(bpm="fast"), _tags(bpm="95.5")) == {"bpm": "bpm_differs"}
 
 

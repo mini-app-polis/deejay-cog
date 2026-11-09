@@ -469,8 +469,8 @@ entry than the registry's link is listed under `other`.
 `version_brackets`, `genre_remapped`, `genre_filled`, `year_filled` (the
 file has none), `year_earlier` (the catalog's year is older), `year_later`
 (the file's year is older: left unapproved, the file keeps the older year),
-`year_differs` (a year that is not a number), `bpm_rounding` (0.5 BPM or
-less), `bpm_differs`, `label_differs`, `fill_up` (a file value for a field
+`year_differs` (a year that is not a number), `bpm_rounding` (less than
+1.5 BPM), `bpm_differs`, `label_differs`, `fill_up` (a file value for a field
 the catalog leaves empty) and `other`.
 
 **Record:** `library-reconcile-<run id>.dry-run.json` in the state folder,
@@ -646,8 +646,8 @@ doppler run -- uv run python -m deejay_cog.restore_bpm --apply  # do it
 ```
 
 A dry run unless `--apply`. It reads every library-reconcile and
-library-sync run record, finds each file whose BPM a write moved by more
-than 0.5 (bpm_differs; rounding is left), and writes back the BPM the file
+library-sync run record, finds each file whose BPM a write moved by 1.5
+or more (bpm_differs; rounding is left), and writes back the BPM the file
 had before: that field only, and only while the file still holds what
 the write left. Each restore is an in-place write recorded as a
 `library-bpm-restore` run, which the rollback below can undo. Why BPM
