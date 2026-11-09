@@ -1,3 +1,10 @@
+# [2.39.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.38.1...v2.39.0) (2026-11-09)
+
+
+### Features
+
+* **identify:** a second opinion from AcoustID's other recordings and Spotify's length decides when a fingerprint and the tags disagree ([36d9334](https://github.com/mini-app-polis/deejay-cog/commit/36d933431ed29ccffe94db48630f8f2696a32b73))
+
 ## [2.38.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.38.0...v2.38.1) (2026-11-09)
 
 
