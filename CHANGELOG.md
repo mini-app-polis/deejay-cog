@@ -1,3 +1,18 @@
+# [2.35.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.34.0...v2.35.0) (2026-11-09)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 9.0.1 ([01b56f1](https://github.com/mini-app-polis/deejay-cog/commit/01b56f19e25e441740d5cd5599afc534d485424e))
+* **deps:** bump the minor-and-patch group with 5 updates ([51580ca](https://github.com/mini-app-polis/deejay-cog/commit/51580ca2dfd1d9b5821ca2882d4ebb018fc2a00c))
+
+
+### Features
+
+* **identify:** post one nightly identify report, not one message per fingerprinted file ([4fda174](https://github.com/mini-app-polis/deejay-cog/commit/4fda1740978ac37e8bdff7646c048f12ec9c4bb9))
+* **reconcile:** a BPM gap under 1.5 is rounding ([6863ae7](https://github.com/mini-app-polis/deejay-cog/commit/6863ae7c0566e12f928fc611177d509a18b9f77a))
+* **relink:** link again the library files the lookup matched past a version after a feat. credit ([bb0edc0](https://github.com/mini-app-polis/deejay-cog/commit/bb0edc0b06cbf3d4fb17391cb8bed8f0f0885fcc))
+
 # [2.34.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.33.0...v2.34.0) (2026-11-08)
 
 
