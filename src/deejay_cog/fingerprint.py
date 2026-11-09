@@ -117,7 +117,9 @@ from deejay_cog.music_tags import (
     CatalogLookup,
     DriveFiles,
     ingest_track,
+    read_tag_row,
     replace_contents,
+    tags_agree,
     write_catalog_tags,
     write_recording_tags,
 )
@@ -170,6 +172,10 @@ class AcoustIdError(RuntimeError):
 
 class AcoustIdRateLimited(AcoustIdError):  # noqa: N818 — named for what happened
     """AcoustID refused a lookup as over its rate limit, every time it was tried."""
+
+
+#: A library file whose fingerprint names another song than its own tags do.
+DISAGREES_WITH_TAGS = "disagrees_with_tags"
 
 
 class Outcome(enum.Enum):
@@ -690,6 +696,20 @@ def identify_library_file(
             Outcome.NO_RECORDING_TAGS.value,
             f"fingerprint: matched (score {score:.2f}) but the recording has no "
             "title or artist",
+        )
+
+    # A file whose own tags name a song is linked only when the recording
+    # found is that song: AcoustID's links to recordings are crowd-sourced
+    # and can be wrong, and its answer must not retitle a file that already
+    # said what it is.
+    own = read_tag_row(data)
+    if ingest_track(own) is not None and not tags_agree(
+        own["title"], own["artist"], title, artist
+    ):
+        return unidentified(
+            DISAGREES_WITH_TAGS,
+            f"fingerprint: {artist} - {title} (score {score:.2f}) disagrees with "
+            f"the file's own tags ({own['artist']} - {own['title']}); left for review",
         )
 
     match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]

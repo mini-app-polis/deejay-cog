@@ -657,6 +657,23 @@ the write left. Each restore is an in-place write recorded as a
 `library-bpm-restore` run, which the rollback below can undo. Why BPM
 differences are held: ADR-0008, decision 4.
 
+### Undoing fingerprint links to another song
+
+```bash
+doppler run --config prd -- uv run python -m deejay_cog.fingerprint_check          # what it would do
+doppler run --config prd -- uv run python -m deejay_cog.fingerprint_check --apply  # do it
+```
+
+A dry run unless `--apply`. The fingerprint function now links a library
+file whose own tags name a song only when the recording AcoustID finds is
+that song (the titles without versions or credits, and the main artists,
+agree); otherwise the file stays unidentified with a note, for review.
+Before that check, a wrong AcoustID link could retitle a file ("Beggin" by
+Madcon written as "Don't Worry"). This reads every library-identify run
+record, takes each fingerprint write whose old title and artist disagree
+with the new ones, rolls its run back (the rollback below) and makes its
+registry row unidentified, its link cleared, with a note.
+
 ### Relinking files matched past a version
 
 ```bash

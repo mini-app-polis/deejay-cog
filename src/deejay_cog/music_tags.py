@@ -25,6 +25,7 @@ import io
 import os
 import re
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -154,6 +155,49 @@ def read_tag_row(data: bytes) -> dict[str, str]:
         "bpm": _text(tags, "TBPM"),
         "year": year[:4] if year[:4].isdigit() else "",
     }
+
+
+_AGREE_PARTS = re.compile(r"[\[(][^\])]*[\])]|\s+-\s+.*$")
+_AGREE_CREDIT = re.compile(r"\s+(?:feat\.?|ft\.?|featuring)\s+.*$", re.IGNORECASE)
+_AGREE_SPLIT = re.compile(
+    r"\s*(?:,|&|\bx\b|\band\b|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b)\s*",
+    re.IGNORECASE,
+)
+
+
+def _agree_key(text: str) -> str:
+    """``text`` folded for agreement: accents, case, "&" and punctuation
+    ignored."""
+    folded = unicodedata.normalize("NFKD", text.replace("&", " and "))
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]+", "", folded.lower())
+
+
+def _title_core(title: str) -> str:
+    """A title without its bracketed or " - " parts and its feat. credit."""
+    return _agree_key(_AGREE_CREDIT.sub("", _AGREE_PARTS.sub("", title)))
+
+
+def _main_artist(artist: str) -> str:
+    """The first credited artist."""
+    return _agree_key(_AGREE_SPLIT.split(artist.strip(), maxsplit=1)[0])
+
+
+def tags_agree(
+    file_title: str, file_artist: str, found_title: str, found_artist: str
+) -> bool:
+    """Whether a recording found for a file (by its fingerprint) is the song
+    the file's own title and artist name: the titles, without versions or
+    credits, contain one another, and so do the main artists. A cover found
+    under its original artist, or another song by the same artist, does not
+    agree."""
+    mine, found = _title_core(file_title), _title_core(found_title)
+    if not mine or not found or (mine not in found and found not in mine):
+        return False
+    my_main, found_main = _main_artist(file_artist), _main_artist(found_artist)
+    if not my_main or not found_main:
+        return False
+    return my_main in _agree_key(found_artist) or found_main in _agree_key(file_artist)
 
 
 #: Release labels a file's title may carry: copies with different labels are
