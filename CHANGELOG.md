@@ -1,3 +1,15 @@
+# [2.37.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.36.1...v2.37.0) (2026-11-09)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 9.0.2 ([feb5ba9](https://github.com/mini-app-polis/deejay-cog/commit/feb5ba9a4603ce80d5b9c29a335137ff34f17ef6))
+
+
+### Features
+
+* **relink:** --path looks up again the files whose path contains the given text ([f2dc331](https://github.com/mini-app-polis/deejay-cog/commit/f2dc33114e260647ba955342d6c6b5ce7c583688))
+
 ## [2.36.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.36.0...v2.36.1) (2026-11-09)
 
 
