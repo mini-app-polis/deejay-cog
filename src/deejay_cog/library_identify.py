@@ -213,17 +213,33 @@ _NO_ARTIST = re.compile(r"^(?:unknown(?: artist)?|various(?: artists)?|va|n/?a)$
 _NO_TITLE = re.compile(r"^(?:untitled|unknown|track\s*\d*|\d+)$", re.I)
 
 
-def usable_track(tags: dict[str, str]) -> IngestTrack | None:
+def _squashed(text: str) -> str:
+    return re.sub(r"[\W_]+", "", text).lower()
+
+
+def _title_is_file_name(title: str, name: str) -> bool:
+    """Whether ``title`` is only the file's name with its separators gone
+    ("FindAWayBayje112 Bayje 112" for ``FindAWayBayje112_Bayje_112.mp3``):
+    a tagger that copied the name, not the song's title. A one-part name
+    ("Happy.mp3") can be the title itself, so only a name of several parts
+    counts."""
+    stem = name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return "_" in stem and _squashed(title) == _squashed(stem)
+
+
+def usable_track(tags: dict[str, str], name: str = "") -> IngestTrack | None:
     """The file's own tags as a track to make a library entry from, or None
     when they do not name a song: no title or artist, an artist such as
-    "Unknown" or "Various Artists", or a title such as "Untitled" or
-    "Track 3"."""
+    "Unknown" or "Various Artists", a title such as "Untitled" or
+    "Track 3", or a title that is only the file's ``name``."""
     track = ingest_track(tags)
     if track is None:
         return None
     artist = str(tags.get("artist") or "").strip()
     title = str(tags.get("title") or "").strip()
     if _NO_ARTIST.match(artist) or _NO_TITLE.match(title):
+        return None
+    if name and _title_is_file_name(title, name):
         return None
     return track
 
@@ -268,7 +284,7 @@ def link_by_own_tags(
     nothing; one that would make an entry returns an empty ``catalog_id``.
     """
     tags = read_tag_row(data)
-    track = usable_track(tags)
+    track = usable_track(tags, name)
     if track is None:
         return None
     match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]

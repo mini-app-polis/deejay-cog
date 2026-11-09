@@ -102,7 +102,7 @@ def plan(api: Any, found: list[Candidate]) -> None:
     """What each file would get, from the tags the registry holds."""
     for c in found:
         tags = _registry_tags(c.row)
-        track = usable_track(tags)
+        track = usable_track(tags, c.row.path)
         if track is None:
             c.result = "left: its tags name no song"
             continue

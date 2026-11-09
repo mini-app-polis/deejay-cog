@@ -420,7 +420,8 @@ it) to try again.
    network error raises instead, and the message is tried again.
 4. No fingerprint match, or none confident → the file's own tags make its
    entry when they name a song (an artist other than "Unknown" or
-   "Various", a title other than "Untitled" or a track number): linked to
+   "Various", a title other than "Untitled", a track number or the file's
+   own name copied into the title): linked to
    the catalog's entry for them, or to a library entry made from its title,
    artist and year. Its registry note says so (`identified by its own tags
    (fingerprint: no match)`), marking the link as one no fingerprint

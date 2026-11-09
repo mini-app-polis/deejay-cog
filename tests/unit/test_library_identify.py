@@ -670,6 +670,21 @@ def test_usable_tags_name_a_song(title: str, artist: str, usable: bool) -> None:
     assert (ident.usable_track(tags) is not None) is usable
 
 
+@pytest.mark.parametrize(
+    ("title", "name", "usable"),
+    [
+        ("FindAWayBayje112 Bayje 112", "Pop/FindAWayBayje112_Bayje_112.mp3", False),
+        ("Find A Way", "Pop/FindAWayBayje112_Bayje_112.mp3", True),
+        ("Happy", "Pop/Happy.mp3", True),
+    ],
+)
+def test_a_title_that_is_only_the_file_name_names_no_song(
+    title: str, name: str, usable: bool
+) -> None:
+    tags = {"title": title, "artist": "Bayje", "year": "", "bpm": "", "genre": ""}
+    assert (ident.usable_track(tags, name) is not None) is usable
+
+
 def test_a_dry_run_unconfident_fingerprint_records_nothing(drive, api) -> None:
     drive_id = drive.add("track01.mp3", ROOT, _no_tags())
 
