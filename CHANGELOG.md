@@ -1,3 +1,11 @@
+## [2.38.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.38.0...v2.38.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **identify:** linking a library file writes only its catalog link ([c967021](https://github.com/mini-app-polis/deejay-cog/commit/c967021e628e1ad3b776006378e168b16a2f3525))
+* **reconcile:** the cursor names the last file compared, so files linked or gone earlier in the order neither repeat nor skip one ([80dab01](https://github.com/mini-app-polis/deejay-cog/commit/80dab01d563643da3e06e93af464a0a627cb4fc0))
+
 # [2.38.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.37.3...v2.38.0) (2026-11-09)
 
 
