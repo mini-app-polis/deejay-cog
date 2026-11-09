@@ -364,37 +364,22 @@ def display_title(display: CatalogDisplay, label: str | None) -> str:
     return f"{display.title} ({label})" if label else display.title
 
 
-def write_display_tags(
-    data: bytes, display: CatalogDisplay, *, label: str | None
-) -> bytes | None:
-    """The file's bytes with the catalog's owned fields written as the
-    display rules render them, or None when its tags already say so.
-
-    Title (with the file's own release label), artist, year, genre, BPM (as
-    the rules round it) and label where the catalog has them, and
-    ``TXXX:CATALOG_ID``. A field the catalog leaves empty keeps the file's
-    value; the comment and every other frame are left as they are.
+def display_fields(
+    display: CatalogDisplay, *, label: str | None
+) -> dict[str, str | None]:
+    """The owned fields as a file carries them, by name, as the display
+    rules render the entry: the title with the file's own release label,
+    artist, year, genre, BPM (as the rules round it) and label. A field the
+    catalog leaves empty is None, and the file keeps its own value for it.
     """
-    tags = _load(data)
-    wanted: list[tuple[str, Any]] = [
-        ("TIT2", TIT2(encoding=3, text=[display_title(display, label)])),
-        ("TPE1", TPE1(encoding=3, text=[display.artist])),
-    ]
-    if display.release_year is not None:
-        wanted.append(("TDRC", TDRC(encoding=3, text=[str(display.release_year)])))
-    if display.genre:
-        wanted.append(("TCON", TCON(encoding=3, text=[display.genre])))
-    if display.bpm is not None:
-        wanted.append(("TBPM", TBPM(encoding=3, text=[f"{display.bpm:g}"])))
-    if display.label:
-        wanted.append(("TPUB", TPUB(encoding=3, text=[display.label])))
-    wanted.append(
-        (
-            f"TXXX:{CATALOG_ID_DESC}",
-            TXXX(encoding=3, desc=CATALOG_ID_DESC, text=[str(display.id)]),
-        )
-    )
-    return _write_frames(data, tags, wanted)
+    return {
+        "title": display_title(display, label),
+        "artist": display.artist or None,
+        "year": None if display.release_year is None else str(display.release_year),
+        "genre": display.genre or None,
+        "bpm": None if display.bpm is None else f"{display.bpm:g}",
+        "label": display.label or None,
+    }
 
 
 #: The frame each owned field is written to.

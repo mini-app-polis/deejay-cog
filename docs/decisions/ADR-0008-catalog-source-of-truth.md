@@ -103,9 +103,11 @@ catalog (stats, summaries, the collection) uses the same rules.
   linked to an entry it affects that has not had it yet. Catalog edits and
   rule changes are the only way owned fields change once the library is
   reconciled. Sync runs nightly: edits made during the day reach the files
-  overnight. A tag edited in a file by another tool (VirtualDJ can write
-  tags back) is not read back, and the next sync for that entry writes the
-  catalog's value over it.
+  overnight. A sync writes only the fields whose catalog value moved since
+  the file's last sync (2026-11-09, the sync writes only what moved). A tag
+  edited in a file by another tool (VirtualDJ can write tags back) is not
+  read back; the next sync that moves that field writes the catalog's value
+  over it, and the reconcile finds it before then.
 - **Fill up.** When a file has a value for a field the catalog leaves empty,
   the value goes up to the catalog. A value the catalog already has is kept,
   as the set import already does.
@@ -296,6 +298,23 @@ catalog (stats, summaries, the collection) uses the same rules.
 3. **Files held before this are tried once more.** A file already left for
    review because its fingerprint disagreed with its tags is sent to the
    fingerprint function again, once, after the untried files.
+
+## Decided with the owner, 2026-11-09 (the sync writes only what moved)
+
+1. **A sync writes only the fields whose catalog value moved.** Each file's
+   owned fields are recorded, as the display rules wrote them out, when a
+   sync reaches it (the registry's synced values). The next sync compares
+   the entry's display with them and writes only the fields that differ, so
+   a value the owner held in the reconcile (a BPM, a year, an artist's
+   styling) survives an edit to another field of its entry. An edit to the
+   held field itself is the owner's decision, and it is written.
+2. **A file with no recorded values is recorded, not written.** Every file
+   linked before this, and a file identify or the reconcile has just
+   written (their registration clears the values), gets the entry's current
+   values recorded and nothing written: the reconcile, with the owner's
+   approvals, is what brings a file in step with its entry.
+3. **`LIBRARY_SYNC_MODE` stays off until the library is reconciled**, as
+   before.
 
 ## Consequences
 

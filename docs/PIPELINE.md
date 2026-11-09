@@ -583,14 +583,24 @@ meant to stay off until the library is reconciled (see
 **Each run** takes the next `LIBRARY_SYNC_CHUNK_SIZE` files the API lists
 as needing a sync (`GET /v1/catalog/library/files/needing-sync`): present,
 linked files whose entry or the display rules changed after the catalog's
-values were last written to them, or that never had them. For each, the
-entry as the display rules write it out (`POST /v1/catalog/display`) is
-written over the same file, in place: the title with the file's own release
-label, artist, year, genre, BPM and label, and `TXXX:CATALOG_ID`. A tag
-another tool changed gets the catalog's value. Genre is written; subgenre
-is not. The comment and VirtualDJ's frames are left as they are. Then the
-files are recorded as synced (`POST /v1/catalog/library/files/synced`),
-including those that already carried the catalog's values.
+values were last written to them, that never had them, or whose synced
+values are not recorded. For each, the entry as the display rules write it
+out (`POST /v1/catalog/display`) gives the owned fields: the title with the
+file's own release label, artist, year, genre, BPM and label. They are
+compared with the values recorded at the file's last sync, and only the
+fields that moved are written over the same file, in place
+([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), 2026-11-09: the
+sync writes only what moved). A value the owner held in the reconcile
+survives an edit to another field; a field the catalog empties keeps the
+file's value; a tag another tool changed is left until its catalog value
+moves. A file with no recorded values (linked before this, or just written
+by identify or the reconcile, whose registration clears them) gets them
+recorded and nothing written, and is not read from Drive; neither is a
+file none of whose fields moved. Genre is written; subgenre is not. The
+comment and VirtualDJ's frames are left as they are. Then the files are
+recorded as synced with their values
+(`POST /v1/catalog/library/files/synced`), including those that already
+carried them.
 
 The write follows the backfill's safety rules: never renamed, moved or
 deleted; head revision kept; audio checked before and after; every write
@@ -600,8 +610,9 @@ synced and comes up first next time. A dry run writes no music and marks
 nothing synced.
 
 **Report:** counts for `waiting`, `written`, `would_write`,
-`already_in_step`, `marked_synced` and `failed`, every file by its path,
-and how many files each entry's change reached.
+`already_in_step`, `nothing_moved`, `values_recorded`, `marked_synced` and
+`failed`, every file written by its path with the fields written, and how
+many files each entry's change reached.
 
 ## library-trash
 
