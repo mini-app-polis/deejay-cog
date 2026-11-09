@@ -28,10 +28,10 @@ this step takes the next ``LIBRARY_IDENTIFY_CHUNK_SIZE`` of them (default
    another song stays for the owner (ADR-0008, decided 2026-11-09).
 
 **Linking a file** (:func:`link_and_write`): the file's values go up to the
-catalog's empty fields (``POST /v1/catalog/{id}/fill-up``); the catalog's
-owned fields, as the display rules write them out, are written to the file
-in place, with the file's own release label kept in its title; and the file
-is registered as identified, with its link, edit label, comment backup and
+catalog's empty fields (``POST /v1/catalog/{id}/fill-up``); only the link
+(``TXXX:CATALOG_ID``) is written to the file in place, and every owned field
+is left to the reconcile, which writes the approved kinds when it reaches
+the file (ADR-0008); and the file is registered as identified, with its link, edit label, comment backup and
 when it was synced. The write follows ADR-0007: never renamed, moved or
 deleted, the head revision kept, the audio checked before and after, and
 every write in the run record (``library-identify-<run id>.json``), which
@@ -101,7 +101,7 @@ from deejay_cog.music_tags import (
     edit_label,
     ingest_track,
     read_tag_row,
-    write_display_tags,
+    write_owned_fields,
 )
 
 log = logger_mod.get_logger()
@@ -355,8 +355,8 @@ def link_and_write(
     note: str | None = None,
 ) -> Linked:
     """Link one identified library file to ``catalog_id``: fill the entry's
-    empty fields from the file, write the catalog's values to the file in
-    place, and register the file as identified, with ``note`` as its
+    empty fields from the file, write only the link (``TXXX:CATALOG_ID``) to
+    the file in place, and register the file as identified, with ``note`` as its
     ``identify_note`` when one is given (otherwise the row keeps its own).
 
     A dry run (``record.mode``) reads the entry and plans the write, but
@@ -370,13 +370,8 @@ def link_and_write(
     fill = fill_up_values(tags)
     if writes and fill is not None:
         filled = api.fill_up_catalog_entry(catalog_id, fill).filled
-    [display] = api.read_catalog_display(
-        CatalogDisplayRequest(ids=[uuid.UUID(catalog_id)])
-    )
-    if display is None:
-        raise LookupError(f"catalog entry {catalog_id} is gone")
     label = edit_label(tags["title"])
-    tagged = write_display_tags(data, display, label=label)
+    tagged = write_owned_fields(data, {"catalog_id": catalog_id})
     written = would_write = False
     current = data
     if tagged is not None:

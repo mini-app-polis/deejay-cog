@@ -92,8 +92,9 @@ catalog (stats, summaries, the collection) uses the same rules.
 
 - **Add.** A new file in the library (watcher-cog sees the Drive change) is
   identified (tags, then fingerprint, as in ADR-0007), linked to its catalog
-  entry or given a new library entry, registered, and written with the
-  catalog's values.
+  entry or given a new library entry, and registered. Linking writes only
+  the link (`TXXX:CATALOG_ID`); the reconcile writes the owned fields, the
+  approved kinds only, when it reaches the file.
 - **Remove.** A file gone from the library, or in the trash, is marked not
   present. Its catalog entry keeps its play history. An entry left with no
   plays and no present files is archived, never deleted.

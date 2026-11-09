@@ -239,10 +239,11 @@ def test_a_file_the_catalog_knows_is_linked_written_and_registered(
 
     assert summary.linked and summary.written == ["New/temple.mp3"]
     frames = _frames(drive.items[drive_id].data)
-    assert frames["TIT2"] == "Temple"
-    assert frames["TPE1"] == "Thomas Gold"
-    assert frames["TCON"] == "Dance/Electronic"
-    assert frames["TBPM"] == "125.5"  # one decimal, as the display rules round it
+    # Only the link is written; every owned field is the reconcile's.
+    assert frames["TIT2"] == "temple"
+    assert frames["TPE1"] == "thomas gold"
+    assert frames["TCON"] == "House"
+    assert frames["TBPM"] == "125"
     assert frames["TXXX:CATALOG_ID"] == str(_ENTRY)
     assert frames["COMM::eng"] == "cue: drop at 1:02"  # the comment is kept
     # Fill-up first, with the file's own values.
@@ -261,6 +262,23 @@ def test_a_file_the_catalog_knows_is_linked_written_and_registered(
     # Never renamed, moved or trashed.
     assert drive.items[drive_id].name == "temple.mp3"
     assert drive.items[drive_id].parents == [ROOT]
+
+
+def test_linking_writes_only_the_link_when_the_owned_fields_differ(
+    settings, wired, drive, api
+) -> None:
+    song = _song("temple", "thomas gold", genre="House", bpm="140")
+    before = _frames(song)
+    drive_id = _unidentified(drive, api, "temple.mp3", song)
+    api.displays[_ENTRY] = _display(artist="Thomas  GOLD", release_year=2021, bpm=125.5)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert summary.written == ["New/temple.mp3"]
+    after = _frames(drive.items[drive_id].data)
+    assert after.pop("TXXX:CATALOG_ID") == str(_ENTRY)
+    assert after == before
+    assert len(api.fills) == 1 and len(api.registrations) == 1
 
 
 def test_the_files_own_release_label_stays_in_its_title(
