@@ -203,7 +203,7 @@ def test_a_download_refused_at_the_deadline_is_redelivered_not_warned(
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
     assert api.bodies("/v1/live-plays") == []
-    assert api.severities() == ["ERROR"]
+    assert api.severities() == ["WARN"]  # a deadline stop is planned, not a crash
 
     google.drive.slow("list_files", 0)
     handler(_event("msg-late", receive_count=2))
