@@ -299,6 +299,9 @@ class IdentifySummary:
     problems: list[str] = field(default_factory=list)
     record_name: str = ""
     waiting: int = 0
+    #: Files sent to fingerprinting by an earlier run and still unidentified:
+    #: the fingerprint function left them for the owner, or has not run yet.
+    fingerprinted_unlinked: int = 0
     tried: int = 0
     linked: list[str] = field(default_factory=list)
     written: list[str] = field(default_factory=list)
@@ -455,10 +458,14 @@ def _identify(
         summary.problems.append(str(exc))
         return
     tried: dict[str, Any] = dict(tried_doc.get("files") or {})
-    waiting = [
-        r for r in _unidentified(api, settings.root) if r.drive_file_id not in tried
-    ]
+    unidentified = _unidentified(api, settings.root)
+    waiting = [r for r in unidentified if r.drive_file_id not in tried]
     summary.waiting = len(waiting)
+    summary.fingerprinted_unlinked = sum(
+        1
+        for r in unidentified
+        if (tried.get(r.drive_file_id) or {}).get("outcome") == "sent_to_fingerprint"
+    )
     chunk = waiting[:chunk_size]
     if not chunk:
         return
@@ -577,6 +584,7 @@ def _record(report: Any, summary: IdentifySummary, duration_sec: float) -> None:
             f"nothing was sent to fingerprinting; record {summary.record_name or '(none)'}",
         )
     report.count("waiting", summary.waiting)
+    report.count("fingerprinted_unlinked", summary.fingerprinted_unlinked)
     report.count("tried", summary.tried)
     report.count("linked", len(summary.linked))
     report.count("written", len(summary.written))

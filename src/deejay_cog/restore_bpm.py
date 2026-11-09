@@ -7,12 +7,12 @@ different tempo. Run locally:
 The catalog can hold one BPM for a song whose files are different
 versions at different tempos (a 90 BPM edit and the 102 BPM original), so
 writing its BPM over every file of the song was wrong. ``bpm_differs``
-(more than ``BPM_ROUNDING`` apart) is held for that reason; this undoes the
+(``BPM_ROUNDING`` or more apart) is held for that reason; this undoes the
 writes made before it was.
 
 It reads every library-reconcile and library-sync run record in
 ``MUSIC_TAGGING_STATE_FOLDER_ID``, finds each file whose BPM a write moved
-by more than ``BPM_ROUNDING``, and writes back the BPM the file had before
+by ``BPM_ROUNDING`` or more, and writes back the BPM the file had before
 its first such write: that one field, nothing else. A file whose BPM has
 changed since the last such write is left alone and said so. Rounding
 (``bpm_rounding``) is not undone.
@@ -73,8 +73,8 @@ class Restore:
 
 
 def tempo_writes(records: list[dict[str, Any]]) -> list[Restore]:
-    """The files whose BPM a done in-place write moved by more than
-    ``BPM_ROUNDING``, oldest write first: the BPM before the first, and the
+    """The files whose BPM a done in-place write moved by ``BPM_ROUNDING``
+    or more, oldest write first: the BPM before the first, and the
     BPM after the last."""
     found: dict[str, Restore] = {}
     ordered = sorted(records, key=lambda r: str(r.get("started_at", "")))
@@ -92,7 +92,7 @@ def tempo_writes(records: list[dict[str, Any]]) -> list[Restore]:
                 if new != old:
                     found[file_id].written = new
                 continue
-            if old_n is None or new_n is None or abs(old_n - new_n) <= BPM_ROUNDING:
+            if old_n is None or new_n is None or abs(old_n - new_n) < BPM_ROUNDING:
                 continue
             found[file_id] = Restore(
                 file_id=file_id,

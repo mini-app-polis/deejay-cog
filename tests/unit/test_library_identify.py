@@ -607,3 +607,40 @@ def test_the_library_flow_follows_the_stricter_mode(monkeypatch, drive, api) -> 
     )
 
     assert result is None and drive.calls == []
+
+
+def test_the_report_counts_fingerprinted_files_still_unidentified(
+    settings, wired, drive, api, jobs, monkeypatch
+) -> None:
+    linked = _unidentified(drive, api, "a.mp3", _no_tags())
+    _unidentified(drive, api, "b.mp3", _no_tags())
+    ident.library_identify(run_id="i-1")
+    assert len(jobs.sent) == 2
+    # The fingerprint function linked one of the two since: it is no longer
+    # among the unidentified rows.
+    api.rows = [r for r in api.rows if r.drive_file_id != linked]
+
+    summary = ident.library_identify(run_id="i-2")
+
+    assert summary.fingerprinted_unlinked == 1 and summary.waiting == 0
+
+
+def test_a_fingerprint_run_that_links_its_file_is_not_sent(
+    settings, drive, api, posted
+) -> None:
+    drive_id = drive.add("track01.mp3", ROOT, _no_tags())
+
+    result = fp.library_identify_by_fingerprint(
+        drive_id,
+        root=ROOT,
+        path="New/track01.mp3",
+        sender_mode=FlowMode.WRITE,
+        drive=drive,
+        api=api,
+        identifier=FakeIdentifier(),
+    )
+
+    assert result is not None and result.outcome == "linked"
+    kwargs = posted.call_args.kwargs
+    assert kwargs["notable"] is False
+    assert posted.call_args.args[1] == "SUCCESS"

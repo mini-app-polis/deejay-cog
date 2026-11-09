@@ -435,10 +435,14 @@ with an ERROR finding; that file is marked tried and not retried.
 catalog or registry, sends nothing to the fingerprint queue and records no
 file as tried. Its record is `library-identify-<run id>.dry-run.json`.
 
-**Report:** counts for `waiting`, `tried`, `linked`, `written`,
-`would_write`, `filled_up`, `to_fingerprint` and `failed`, with every file
-by its path. The fingerprint function's run for a library file is reported
-under `library-identify` too.
+**Report:** counts for `waiting`, `fingerprinted_unlinked` (files an
+earlier run sent to fingerprinting that are still unidentified: left for the
+owner, or not run yet), `tried`, `linked`, `written`, `would_write`,
+`filled_up`, `to_fingerprint` and `failed`, with every file by its path.
+The fingerprint function's run for a library file is reported under
+`library-identify` too, but sent only when it has an issue: a chunk sends
+one run per file, so a run that went as expected is logged and kept in its
+run record, not posted.
 
 ## library-reconcile
 
@@ -469,8 +473,8 @@ entry than the registry's link is listed under `other`.
 `version_brackets`, `genre_remapped`, `genre_filled`, `year_filled` (the
 file has none), `year_earlier` (the catalog's year is older), `year_later`
 (the file's year is older: left unapproved, the file keeps the older year),
-`year_differs` (a year that is not a number), `bpm_rounding` (0.5 BPM or
-less), `bpm_differs`, `label_differs`, `fill_up` (a file value for a field
+`year_differs` (a year that is not a number), `bpm_rounding` (less than
+1.5 BPM), `bpm_differs`, `label_differs`, `fill_up` (a file value for a field
 the catalog leaves empty) and `other`.
 
 **Record:** `library-reconcile-<run id>.dry-run.json` in the state folder,
@@ -646,12 +650,31 @@ doppler run -- uv run python -m deejay_cog.restore_bpm --apply  # do it
 ```
 
 A dry run unless `--apply`. It reads every library-reconcile and
-library-sync run record, finds each file whose BPM a write moved by more
-than 0.5 (bpm_differs; rounding is left), and writes back the BPM the file
+library-sync run record, finds each file whose BPM a write moved by 1.5
+or more (bpm_differs; rounding is left), and writes back the BPM the file
 had before: that field only, and only while the file still holds what
 the write left. Each restore is an in-place write recorded as a
 `library-bpm-restore` run, which the rollback below can undo. Why BPM
 differences are held: ADR-0008, decision 4.
+
+### Relinking files matched past a version
+
+```bash
+doppler run --config prd -- uv run python -m deejay_cog.relink          # what it would do
+doppler run --config prd -- uv run python -m deejay_cog.relink --apply  # do it
+```
+
+A dry run unless `--apply`. Before the API kept a version that follows an
+unbracketed feat. credit ("Starboy ft. Daft Punk (Alex Aiono Cover)"), its
+loose match read such a title as the plain song, and the backfill linked
+the file to the plain song's entry. This reads every library-backfill run
+record, takes each file whose recorded title has that shape, and looks it
+up again. A file the lookup now puts under another entry has its
+`TXXX:CATALOG_ID` rewritten (that frame only, an in-place write recorded as
+a `library-relink` run, which the rollback below can undo) and its registry
+row linked to it. A file the catalog has no entry for is made unidentified
+in the registry, so library-identify takes it; its link tag is left, since
+a tag is never emptied. Files already linked right are left alone.
 
 ### Restoring an artist's own styling
 
