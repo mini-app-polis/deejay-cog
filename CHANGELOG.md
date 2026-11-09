@@ -1,3 +1,10 @@
+## [2.41.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.41.0...v2.41.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **identify:** a failed Spotify search is no second opinion, not neither, and is tried again ([4fe125b](https://github.com/mini-app-polis/deejay-cog/commit/4fe125b263e8e3760031be593275084528f6bd2d))
+
 # [2.41.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.40.0...v2.41.0) (2026-11-09)
 
 
