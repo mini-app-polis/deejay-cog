@@ -417,9 +417,16 @@ it) to try again.
    recording MusicBrainz refuses (merged or deleted since AcoustID linked
    it), noted with the recording's id, and a file whose audio fpcalc
    cannot read (a damaged or mislabeled file); a MusicBrainz server or
-   network error raises instead, and the message is tried again. Tags alone never
-   make an entry: the fingerprint confirms them first.
-4. A file left unidentified is registered with its own tags and why
+   network error raises instead, and the message is tried again.
+4. No fingerprint match, or none confident → the file's own tags make its
+   entry when they name a song (an artist other than "Unknown" or
+   "Various", a title other than "Untitled" or a track number): linked to
+   the catalog's entry for them, or to a library entry made from its title,
+   artist and year. Its registry note says so (`identified by its own tags
+   (fingerprint: no match)`), marking the link as one no fingerprint
+   confirmed. A file the fingerprint names as another song is not linked
+   by its tags: the two disagree, and the owner decides.
+5. A file left unidentified is registered with its own tags and why
    (`identify_note`): first that its tags did not identify it, then the
    fingerprint's best guess and score. The owner's unidentified-files page
    on the WCS site shows both.
@@ -677,6 +684,21 @@ Madcon written as "Don't Worry"). This reads every library-identify run
 record, takes each fingerprint write whose old title and artist disagree
 with the new ones, rolls its run back (the rollback below) and makes its
 registry row unidentified, its link cleared, with a note.
+
+### Linking by their own tags the files the fingerprint found nothing for
+
+```bash
+doppler run --config prd -- uv run python -m deejay_cog.link_by_tags          # what it would do
+doppler run --config prd -- uv run python -m deejay_cog.link_by_tags --apply  # do it
+```
+
+Step 4 above, for the files already on the owner's page: every
+unidentified file whose note is the fingerprint's "no match" or "no
+confident match" is linked by its own tags, as step 4 does. The dry run
+reads the tags the registry holds and downloads nothing; `--apply` reads
+each file, links it the nightly run's way, and records a
+`library-link-by-tags` run that `music_rollback` can undo. A file whose
+tags name no song is left for the owner.
 
 ### Relinking files matched past a version
 

@@ -59,7 +59,9 @@ A song in the library that has never been played gets a catalog entry of its
 own, marked as coming from the library, with no plays. Play counts, stats and
 summaries count plays only, so these entries do not appear in them.
 
-A library entry is created only from a confident identification. A file
+A library entry is created only from a confident identification
+(amended 2026-11-09, below: a file the fingerprint finds nothing for is
+identified by its own tags). A file
 without usable tags is identified by fingerprint first (the fingerprint
 function of ADR-0007, which looks the recording up in MusicBrainz); if that
 is not confident either, the file is listed for the owner to identify in the
@@ -256,6 +258,22 @@ catalog (stats, summaries, the collection) uses the same rules.
 9. **Reviews run through `python -m deejay_cog.reconcile_admin`**, which
    groups the differences by kind and records the approvals in the state
    folder.
+
+## Decided with the owner, 2026-11-09 (files the fingerprint finds nothing for)
+
+1. **A file the fingerprint finds nothing for is identified by its own
+   tags.** AcoustID has no match for routine edits, covers and small
+   artists, so the fingerprint never confirms those files, and nothing
+   contradicts their tags. When AcoustID has no match, or none it is
+   confident of, and the file's title and artist name a song (not
+   "Unknown", "Various Artists", "Untitled" or a track number), the file is
+   linked to the catalog's entry for them or to a library entry made from
+   its tags.
+2. **The link stays marked as unconfirmed.** Its registry note reads
+   `identified by its own tags (<the fingerprint's note>)`, not the
+   comment: the comment is VirtualDJ's (decision 3).
+3. **A disagreement still goes to the owner.** A file the fingerprint names
+   as another song is not linked by its tags.
 
 ## Consequences
 

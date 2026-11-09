@@ -47,7 +47,9 @@ is identified the same way but **no MusicBrainz tags are written**: a
 confident match is looked up in the catalog, or made a library entry when
 the catalog has no song for it, and the file is then linked to that entry
 (fill-up, the catalog's values written in place, registered as identified).
-Below the score the file is left unchanged and stays unidentified. That run
+Below the score, or with no match, the file is linked by its own tags when
+they name a song (:func:`deejay_cog.library_identify.link_by_own_tags`), and
+otherwise left unchanged and unidentified. That run
 is reported under ``library-identify`` and follows the stricter of the
 message's mode and ``LIBRARY_IDENTIFY_MODE``.
 """
@@ -705,6 +707,10 @@ def intake_by_fingerprint(
 # ---------------------------------------------------------------------------
 
 
+#: A library file the fingerprint could not identify, linked by its own tags.
+LINKED_BY_TAGS = "linked_by_tags"
+
+
 @dataclass
 class LibraryIdentifyResult:
     """One library file's outcome."""
@@ -774,7 +780,33 @@ def identify_library_file(
             note = f"fingerprint: no confident match (best guess {guess}, score {score:.2f})"
         else:
             note = f"fingerprint: no confident match (score {score:.2f})"
-        return unidentified(Outcome.BELOW_CONFIDENCE.value, note)
+        # Nothing says the file's own tags are wrong, and the fingerprint
+        # never will: they make its entry when they name a song.
+        by_tags = library_identify.link_by_own_tags(
+            drive,
+            api,
+            record,
+            file_id=file_id,
+            name=name,
+            root=root,
+            path=path,
+            data=data,
+            why=note,
+        )
+        if by_tags is None:
+            return unidentified(Outcome.BELOW_CONFIDENCE.value, note)
+        if by_tags.linked is None:
+            return LibraryIdentifyResult(path, "would_create_entry_from_tags", score)
+        return LibraryIdentifyResult(
+            path,
+            LINKED_BY_TAGS,
+            score,
+            by_tags.catalog_id,
+            by_tags.entry_created,
+            by_tags.linked.written,
+            by_tags.linked.would_write,
+            tuple(by_tags.linked.filled),
+        )
     if metadata.get(NOT_SERVED):
         return unidentified(
             Outcome.RECORDING_NOT_SERVED.value,
@@ -939,6 +971,7 @@ def _record_library(
         item = f"{item} (score {result.score:.2f})"
     report.count("scanned", 1)
     report.count("linked", 1 if result.outcome == "linked" else 0)
+    report.count("linked_by_tags", 1 if result.outcome == LINKED_BY_TAGS else 0)
     report.count("entry_created", 1 if result.entry_created else 0)
     report.count("tags_written", 1 if result.written else 0)
     details = [result.outcome]
