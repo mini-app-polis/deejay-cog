@@ -170,7 +170,8 @@ def _agree_key(text: str) -> str:
     ignored."""
     folded = unicodedata.normalize("NFKD", text.replace("&", " and "))
     folded = "".join(c for c in folded if not unicodedata.combining(c))
-    return re.sub(r"[^a-z0-9]+", "", folded.lower())
+    key = re.sub(r"[^a-z0-9]+", "", folded.lower())
+    return key.replace("rmix", "remix")
 
 
 def _title_core(title: str) -> str:
@@ -183,21 +184,63 @@ def _main_artist(artist: str) -> str:
     return _agree_key(_AGREE_SPLIT.split(artist.strip(), maxsplit=1)[0])
 
 
+#: Bracketed or " - " parts of a title that name the release, not another
+#: recording: a credit, a release label, a remaster, a plain mix.
+_NOT_A_VERSION = re.compile(
+    r"^(?:feat\.?|ft\.?|featuring|with)\b"
+    r"|^(?:super clean|clean|explicit|dirty|edited|radio edit|radio version"
+    r"|no intro edit|intro edit|clean version|explicit version|album version"
+    r"|single version|lp version|original mix|original version|main|mono|stereo)$"
+    r"|remaster|^\d{4}$|official|lyric video|originally (?:by|performed)"
+    r"|promo only|clean edit|^part\b",
+    re.IGNORECASE,
+)
+_PARTS = re.compile(r"[\[(]([^\])]*)[\])]|\s+-\s+(.*)$")
+
+
+def _versions(title: str) -> set[str]:
+    """The versions a title names (a remix, an acoustic take, a cover),
+    folded: its bracketed or " - " parts that are not credits or labels."""
+    found = set()
+    for match in _PARTS.finditer(title):
+        if match.start() == 0:
+            continue  # a title that opens with a bracket: the bracket is its name
+        part = (match.group(1) or match.group(2) or "").strip()
+        if part and not _NOT_A_VERSION.search(part):
+            key = _agree_key(part)
+            if key:
+                found.add(key)
+    return found
+
+
 def tags_agree(
     file_title: str, file_artist: str, found_title: str, found_artist: str
 ) -> bool:
     """Whether a recording found for a file (by its fingerprint) is the song
-    the file's own title and artist name: the titles, without versions or
-    credits, contain one another, and so do the main artists. A cover found
-    under its original artist, or another song by the same artist, does not
-    agree."""
+    and version the file's own title and artist name: the titles, without
+    versions or credits, contain one another, so do the main artists, and a
+    version either title names (a remix, an acoustic take) is in the other
+    too. A cover found under its original artist, another song by the same
+    artist, or the original found for a remix, does not agree."""
     mine, found = _title_core(file_title), _title_core(found_title)
     if not mine or not found or (mine not in found and found not in mine):
         return False
     my_main, found_main = _main_artist(file_artist), _main_artist(found_artist)
     if not my_main or not found_main:
         return False
-    return my_main in _agree_key(found_artist) or found_main in _agree_key(file_artist)
+    if not (
+        my_main in _agree_key(found_artist) or found_main in _agree_key(file_artist)
+    ):
+        return False
+    mine_v, found_v = _versions(file_title), _versions(found_title)
+    found_key, file_key = _agree_key(found_title), _agree_key(file_title)
+
+    def covered(version: str, other_key: str, other_versions: set[str]) -> bool:
+        return version in other_key or any(o in version for o in other_versions)
+
+    return all(covered(v, found_key, found_v) for v in mine_v) and all(
+        covered(v, file_key, mine_v) for v in found_v
+    )
 
 
 #: Release labels a file's title may carry: copies with different labels are

@@ -87,6 +87,53 @@ def test_tags_agree_on_versions_credits_and_punctuation() -> None:
     assert not tags_agree("Fast Car", "Daniel Hanson", "Fast Car", "Tracy Chapman")
 
 
+def test_tags_agree_only_on_the_same_version() -> None:
+    # The original found for a remix, or a remix for the original, does not agree.
+    assert not tags_agree(
+        "go with u (Louis La Roche Remix)", "BAYNK", "go with u", "BAYNK"
+    )
+    assert not tags_agree(
+        "Temple", "Thomas Gold", "Temple (Niko The Kid Remix)", "Thomas Gold"
+    )
+    assert tags_agree(
+        "Temple - Niko The Kid Remix",
+        "Thomas Gold",
+        "Temple (Niko the Kid Remix)",
+        "Thomas Gold",
+    )
+    # Credits, release labels and remasters are not versions.
+    assert tags_agree("Temple (Radio Edit)", "Thomas Gold", "Temple", "Thomas Gold")
+    assert tags_agree("Temple (feat. X)", "Thomas Gold", "Temple", "Thomas Gold")
+    assert tags_agree("Drive (2017 Remaster)", "The Cars", "Drive", "The Cars")
+    # Not versions either: a video or "originally by" note, a part number,
+    # a title that opens with a bracket; and one version naming the other.
+    assert tags_agree("emiliana (Official Lyric Video)", "CKay", "Emiliana", "CKay")
+    assert tags_agree(
+        "Fourfiveseconds (Originally By Rihanna)",
+        "James Bay",
+        "FourFiveSeconds",
+        "James Bay",
+    )
+    assert tags_agree(
+        "(So Tired Of Standing Still We Got) Move On",
+        "James Brown",
+        "(So Tired of Standing Still We Got to) Move On",
+        "James Brown",
+    )
+    assert tags_agree(
+        "Holiday (Mad Mark 2K15 Radio Edit)",
+        "DJ Antoine",
+        "Holiday (DJ Antoine vs Mad Mark 2k15 radio edit)",
+        "DJ Antoine",
+    )
+    assert tags_agree(
+        "i'm so tired (MNEK Rmix)", "Lauv", "i'm so tired (MNEK remix)", "Lauv"
+    )
+    assert not tags_agree(
+        "I See Fire", "Ed Sheeran", "I See Fire (Kygo remix)", "Ed Sheeran"
+    )
+
+
 def _library(drive: FakeDrive, api: FakeApi) -> dict[str, str]:
     return {
         "wrong": _linked(
