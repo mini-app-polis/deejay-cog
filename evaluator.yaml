@@ -36,13 +36,16 @@ exemptions:
       the release, on main only, against AWS.
   - rule: CD-003
     reason: >
-      music_rollback.py, reconcile_admin.py, restore_bpm.py and
-      restore_styling.py are operator's command-line tools, run by hand as
+      music_rollback.py, reconcile_admin.py, restore_bpm.py,
+      restore_styling.py, relink.py and fingerprint_check.py are operator's
+      command-line tools, run by hand as
       `python -m deejay_cog.music_rollback <run-id>`,
       `python -m deejay_cog.reconcile_admin <command>`,
-      `python -m deejay_cog.restore_bpm [--apply]` and
-      `python -m deejay_cog.restore_styling [--apply]`. Their output is
+      `python -m deejay_cog.restore_bpm [--apply]`,
+      `python -m deejay_cog.restore_styling [--apply]`,
+      `python -m deejay_cog.relink [--path TEXT] [--apply]` and
+      `python -m deejay_cog.fingerprint_check [--keep RUN_ID] [--apply]`. Their output is
       the plan, the review or the result, written for the person at the
       terminal, so they print rather than log. Nothing in the deployed
       functions imports them.
-    paths: [src/deejay_cog/music_rollback.py, src/deejay_cog/reconcile_admin.py, src/deejay_cog/restore_bpm.py, src/deejay_cog/restore_styling.py]
+    paths: [src/deejay_cog/music_rollback.py, src/deejay_cog/reconcile_admin.py, src/deejay_cog/restore_bpm.py, src/deejay_cog/restore_styling.py, src/deejay_cog/relink.py, src/deejay_cog/fingerprint_check.py]

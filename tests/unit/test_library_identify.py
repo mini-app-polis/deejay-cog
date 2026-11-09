@@ -616,7 +616,7 @@ def test_the_report_counts_fingerprinted_files_still_unidentified(
     _unidentified(drive, api, "b.mp3", _no_tags())
     ident.library_identify(run_id="i-1")
     assert len(jobs.sent) == 2
-    # The fingerprint function linked one of the two since: it is no longer
+    # The fingerprint function linked one of the two: only the other is
     # among the unidentified rows.
     api.rows = [r for r in api.rows if r.drive_file_id != linked]
 
