@@ -433,10 +433,10 @@ it) to try again.
    on the WCS site shows both.
 
 **Linking** fills the entry's empty fields from the file
-(`POST /v1/catalog/{id}/fill-up`), writes the catalog's owned fields as the
-display rules render them (title with the file's own release label, artist,
-year, genre, BPM with one decimal, label, and `TXXX:CATALOG_ID`) over the
-same file, and registers it as identified with when it was synced. The
+(`POST /v1/catalog/{id}/fill-up`), writes only the link
+(`TXXX:CATALOG_ID`) to the same file, and registers it as identified with
+when it was synced. Every owned field is left to the reconcile, which
+writes the approved kinds when it reaches the file. The
 write follows the backfill's safety rules: never renamed, moved or deleted;
 head revision kept; audio checked before and after; every write in
 `library-identify-<run id>.json`, which `music_rollback` undoes. The comment
@@ -472,7 +472,10 @@ unless `LIBRARY_RECONCILE_MODE` is `dry-run` or `write` (see
 in the registry's order, the next `LIBRARY_RECONCILE_CHUNK_SIZE` after
 `library-reconcile-cursor.json` (its own, apart from the backfill's). A dry
 run moves this cursor, so repeated runs step through the library; after the
-last file the next run starts a new pass.
+last file the next run starts a new pass. The cursor names the last file
+compared, and the next run lists the files after it
+(`GET /v1/catalog/library/files?after=`), so a file linked, unlinked or gone
+earlier in the order between runs neither repeats nor skips one.
 
 **What is compared:** title (with its version), artist, year, genre, BPM and
 label in the file's ID3 tags, against `POST /v1/catalog/display`. The
@@ -551,7 +554,8 @@ The API's approvals hold the current choices.
   API, checked as a write run read it; sent only with `--apply`. Once the
   API holds approvals it sends nothing and says so.
 - `cursor` prints the cursor; `cursor --position <n> --apply` moves it
-  (0 starts the next run from the first identified file).
+  (0 starts the next run from the first identified file) and drops the
+  file it last compared, so the next run starts at that position.
 - `run [--mode dry-run|write] [--chunk <n>]` runs the reconcile once,
   locally, writing exactly as the scheduled run does. Turn the scheduled
   reconcile off (`LIBRARY_RECONCILE_MODE=off`) while a local run goes, so

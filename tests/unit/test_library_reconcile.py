@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from mini_app_polis import pipeline_status
+from mini_app_polis.api import KaianoApiError
 from mini_app_polis.api.contract import (
     CatalogDisplay,
     CatalogDisplayRequest,
@@ -30,6 +31,7 @@ from mutagen.id3 import COMM, TBPM, TCON, TDRC, TIT2, TPE1, TPUB, TXXX
 
 from deejay_cog import library_backfill as backfill
 from deejay_cog import library_reconcile as rec
+from deejay_cog.library_backfill import StateFile
 from deejay_cog.music_safety import FlowMode
 
 ROOT, STATE = "root", "state"
@@ -225,8 +227,18 @@ class FakeCatalog:
         self.pages.append(kwargs)
         assert kwargs["identification_status"] == "identified"
         assert kwargs["present"] is True
+        listed = [r for r in self.rows if r.present]
+        if "after" in kwargs:
+            ids = [r.id for r in self.rows]
+            if kwargs["after"] not in ids:
+                raise KaianoApiError(404, "Library file not found", "/files")
+            # The registry's own order: the rows after that one, wherever
+            # it now stands.
+            after = ids.index(kwargs["after"])
+            listed = [r for r in self.rows[after + 1 :] if r.present]
+            return listed[: kwargs["limit"]]
         start = kwargs["offset"]
-        return self.rows[start : start + kwargs["limit"]]
+        return listed[start : start + kwargs["limit"]]
 
     approvals: ReconcileApprovals = field(default_factory=ReconcileApprovals)
     reviews: list[ReconcileReport] = field(default_factory=list)
@@ -386,6 +398,63 @@ def test_the_comment_frame_is_never_compared(settings, wired, drive, catalog) ->
 
     assert summary.matching == 1
     assert all(d.field != "comment" for ds in summary.differences.values() for d in ds)
+
+
+def test_a_file_linked_earlier_in_the_order_does_not_repeat_one(
+    settings, wired, drive, catalog, monkeypatch
+) -> None:
+    monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "2")
+    _library(drive, catalog, [{}, {}, {}])
+    rec.library_reconcile(run_id="r-1")
+    # Linked between runs, but first seen before them all.
+    _library(drive, catalog, [{}])
+    catalog.rows.insert(0, catalog.rows.pop())
+
+    second = rec.library_reconcile(run_id="r-2")
+
+    assert second.reviewed == [catalog.rows[3].drive_file_id]
+    assert catalog.pages[-1]["after"] == catalog.rows[2].id
+    assert _state(drive, rec.CURSOR_NAME)["after"] == str(catalog.rows[3].id)
+
+
+def test_a_file_gone_earlier_in_the_order_does_not_skip_one(
+    settings, wired, drive, catalog, monkeypatch
+) -> None:
+    monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "2")
+    _library(drive, catalog, [{}, {}, {}])
+    rec.library_reconcile(run_id="r-1")
+    catalog.rows[0] = catalog.rows[0].model_copy(update={"present": False})
+
+    second = rec.library_reconcile(run_id="r-2")
+
+    assert second.reviewed == [catalog.rows[2].drive_file_id]
+
+
+def test_a_cursor_whose_file_is_gone_starts_the_next_pass(
+    settings, wired, drive, catalog
+) -> None:
+    _library(drive, catalog, [{}, {}])
+    rec.library_reconcile(run_id="r-1")
+    catalog.rows.pop()
+
+    second = rec.library_reconcile(run_id="r-2")
+
+    assert second.wrapped and second.start == 0
+    assert second.reviewed == [catalog.rows[0].drive_file_id]
+
+
+def test_a_cursor_moved_by_hand_starts_at_its_position(
+    settings, wired, drive, catalog, monkeypatch
+) -> None:
+    monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "1")
+    _library(drive, catalog, [{}, {}, {}])
+    StateFile(drive, STATE, rec.CURSOR_NAME).save({"position": 2})
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.start == 2
+    assert summary.reviewed == [catalog.rows[2].drive_file_id]
+    assert catalog.pages[-1]["offset"] == 2
 
 
 def test_each_run_takes_the_next_chunk_and_wraps_at_the_end(
