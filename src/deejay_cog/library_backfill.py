@@ -364,14 +364,18 @@ def list_one_folder(drive: Any, manifest: dict[str, Any], *, exclude: set[str]) 
             # A shortcut points elsewhere, maybe outside the library.
             manifest["shortcuts_skipped"] += 1
         else:
-            manifest["files"].append(
-                {
-                    "id": child_id,
-                    "name": str(child.name),
-                    "folder_id": folder_id,
-                    "mime_type": mime_type,
-                }
-            )
+            item = {
+                "id": child_id,
+                "name": str(child.name),
+                "folder_id": folder_id,
+                "mime_type": mime_type,
+            }
+            modified = getattr(child, "modified_time", None)
+            if modified:
+                # When Drive last saw it change: the sync reads a file
+                # changed after its last sync for edits made in it.
+                item["modified"] = str(modified)
+            manifest["files"].append(item)
     manifest["pending_folders"].pop(0)
     manifest["visited_folders"].append(folder_id)
 

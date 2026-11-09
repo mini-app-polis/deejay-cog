@@ -59,6 +59,7 @@ class DriveItem:
     app_properties: dict[str, str] = field(default_factory=dict)
     revisions: list[bytes] = field(default_factory=list)
     kept: set[str] = field(default_factory=set)
+    modified_time: str | None = None
 
 
 class _Request:
@@ -140,7 +141,14 @@ class FakeDrive:
                 continue
             if name_contains and name_contains not in i.name:
                 continue
-            out.append(SimpleNamespace(id=i.id, name=i.name, mime_type=i.mime_type))
+            out.append(
+                SimpleNamespace(
+                    id=i.id,
+                    name=i.name,
+                    mime_type=i.mime_type,
+                    modified_time=i.modified_time,
+                )
+            )
         return out
 
     def download_file_bytes(self, file_id: str) -> SimpleNamespace:

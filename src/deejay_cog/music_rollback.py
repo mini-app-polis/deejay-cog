@@ -19,7 +19,10 @@ Per file, last first:
   still where the run put it.
 - **Tags written in place** (library backfill) are undone by writing back
   the Drive revision the run kept, only while the file still holds what the
-  run wrote.
+  run wrote. The library registry then forgets the values the file was last
+  synced with (``POST /v1/catalog/library/files/synced`` with ``forget``),
+  so the library sync records them afresh instead of reading what the
+  rollback put back as an edit made in the file.
 
 An original moved back into the new-music input folder is taken in again by
 the next new-music run; set ``NEW_MUSIC_MODE`` to ``off`` first to stop that.
@@ -37,8 +40,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.api.contract import LIBRARY_ABSENT_MAX_FILES, LibraryFilesSynced
+from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 
+from deejay_cog.api_client import api_client
 from deejay_cog.music_safety import (
     RECORD_MIME_TYPE,
     SOURCE_PROPERTY,
@@ -63,6 +69,8 @@ class Step:
     action: Callable[[], None] | None = None
     skipped: str = ""
     result: str = ""
+    #: The Drive id of a file whose tags the step puts back in place.
+    restores: str = ""
 
     @property
     def line(self) -> str:
@@ -161,7 +169,7 @@ def _restore_revision_step(drive: Any, entry: dict[str, Any], name: str) -> Step
     def restore() -> None:
         update_contents(drive, file_id, name, revision_bytes(drive, file_id, revision))
 
-    return Step(name, what, action=restore)
+    return Step(name, what, action=restore, restores=file_id)
 
 
 def plan_rollback(drive: Any, record: dict[str, Any]) -> list[Step]:
@@ -203,11 +211,32 @@ def plan_rollback(drive: Any, record: dict[str, Any]) -> list[Step]:
     return steps
 
 
+def forget_synced_values(drive_file_ids: list[str]) -> None:
+    """Have the library registry forget the values these files were last
+    synced with: the next sync records them afresh."""
+    api = api_client(base_url=api_base_url().strip() or None)
+    when = datetime.now(UTC)
+    for start in range(0, len(drive_file_ids), LIBRARY_ABSENT_MAX_FILES):
+        api.mark_library_files_synced(
+            LibraryFilesSynced(
+                drive_file_ids=drive_file_ids[start : start + LIBRARY_ABSENT_MAX_FILES],
+                synced_at=when,
+                forget=True,
+            )
+        )
+
+
 def rollback(
-    drive: Any, state_folder: str, run_id: str, *, apply: bool
+    drive: Any,
+    state_folder: str,
+    run_id: str,
+    *,
+    apply: bool,
+    forget: Callable[[list[str]], None] = forget_synced_values,
 ) -> tuple[str, list[Step]]:
     """Plan, and with ``apply`` carry out, the undoing of one run. Returns
-    the record's name and the steps, each with its result."""
+    the record's name and the steps, each with its result. ``forget`` is
+    given the files whose tags were put back."""
     record_id, record_name = find_record(drive, state_folder, run_id)
     record = parse_record(drive.download_file_bytes(record_id).data)
     steps = plan_rollback(drive, record)
@@ -223,6 +252,19 @@ def rollback(
         except Exception as exc:  # noqa: BLE001 — one file must not stop the rest
             log.exception("music-rollback: %s failed", step.what)
             step.result = f"failed: {type(exc).__name__}: {exc}"
+    restored = [s.restores for s in steps if s.restores and s.result == "done"]
+    if restored:
+        step = Step(
+            "library registry",
+            f"forget the values {len(restored)} restored files were synced with",
+        )
+        try:
+            forget(restored)
+            step.result = "done"
+        except Exception as exc:  # noqa: BLE001 — the files are restored either way
+            log.exception("music-rollback: the registry did not forget the values")
+            step.result = f"failed: {type(exc).__name__}: {exc}"
+        steps.append(step)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     report = {
         "flow": ROLLBACK_FLOW,

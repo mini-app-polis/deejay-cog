@@ -602,16 +602,35 @@ recorded as synced with their values
 (`POST /v1/catalog/library/files/synced`), including those that already
 carried them.
 
+**Edits made in a file go up first**
+([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), 2026-11-09: an
+edit made in VirtualDJ goes up). Before the chunk above, each present,
+linked file with recorded values that Drive saw change after its last sync
+(the scan's listing, `library-scan-listing.json`, keeps when Drive last saw
+each file change) is read, and its owned fields are sent to the API
+(`POST /v1/catalog/library/files/edited`). A field the file changed and its
+entry did not goes up to the entry as a catalog revision, so the chunk then
+carries it to the entry's other files. A field the catalog changed too stays
+the catalog's and is written back. A BPM within 1.5 of the recorded one (or
+its double or half) is a re-measure and is left; a title or artist that does
+not split into parts cleanly, a genre the vocabulary does not place, or a
+one-character label is held: the file keeps it and the report names it. A
+dry run asks the API what would happen and changes nothing.
+
 The write follows the backfill's safety rules: never renamed, moved or
 deleted; head revision kept; audio checked before and after; every write
-in `library-sync-<run id>.json`, which `music_rollback` undoes. An audio
+in `library-sync-<run id>.json`, which `music_rollback` undoes (and then
+has the registry forget the restored files' recorded values, so what it put
+back is not read as an edit made in the file). An audio
 mismatch stops the run with an ERROR finding; that file is not marked
 synced and comes up first next time. A dry run writes no music and marks
 nothing synced.
 
 **Report:** counts for `waiting`, `written`, `would_write`,
-`already_in_step`, `nothing_moved`, `values_recorded`, `marked_synced` and
-`failed`, every file written by its path with the fields written, and how
+`already_in_step`, `nothing_moved`, `values_recorded`,
+`changed_in_drive_read`, `edits_<outcome>`, `marked_synced` and `failed`;
+every edit sent up, held or overwritten by the file's path and field; every
+file written by its path with the fields written; and how
 many files each entry's change reached.
 
 ## library-trash

@@ -146,11 +146,25 @@ def test_tags_written_in_place_are_undone_from_the_kept_revision(
     )
     record.finish("complete")
 
-    rb.rollback(drive, STATE, "r-2", apply=True)
+    forgotten: list[list[str]] = []
+
+    _, steps = rb.rollback(drive, STATE, "r-2", apply=True, forget=forgotten.append)
 
     assert drive.items[file_id].data == original
     assert drive.items[file_id].parents == ["library"]
     assert drive.items[file_id].name == "Song_Artist.mp3"
+    # What the rollback put back is not read as an edit made in the file.
+    assert forgotten == [[file_id]]
+    assert steps[-1].result == "done"
+
+
+def test_a_rollback_with_nothing_put_back_forgets_nothing(drive: FakeDrive) -> None:
+    _intake_run(drive)
+    forgotten: list[list[str]] = []
+
+    rb.rollback(drive, STATE, "r-1", apply=True, forget=forgotten.append)
+
+    assert forgotten == []
 
 
 def test_the_command_needs_the_state_folder(
