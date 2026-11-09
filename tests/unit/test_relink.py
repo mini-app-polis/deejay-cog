@@ -186,3 +186,21 @@ def test_a_file_gone_from_the_registry_is_left_alone() -> None:
     (cover,) = [r for r in planned if r.file_id == files["cover"]]
     assert cover.result.startswith("left alone")
     assert _link(drive, files["cover"]) == str(ORIGINAL)
+
+
+def test_path_takes_the_named_files_whatever_their_title() -> None:
+    drive, api = FakeDrive(), FakeApi()
+    files = _library(drive, api)
+    # "Starboy.mp3" has a plain title, so no backfill record names it.
+    api.answers["starboy ft. daft punk"] = None
+
+    _, planned = relink.relink(
+        drive, api, STATE, apply=True, run_id="p-1", path="starboy.mp3"
+    )
+
+    (only,) = planned
+    assert only.file_id == files["plain"]
+    assert only.title == "Starboy ft. Daft Punk"
+    assert only.result.startswith("unlinked in the registry")
+    (row,) = api.registrations
+    assert row.drive_file_id == files["plain"] and row.catalog_id is None
