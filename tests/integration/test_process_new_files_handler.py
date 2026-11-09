@@ -316,7 +316,7 @@ def test_a_run_stopped_mid_ingest_leaves_the_csv_for_the_redelivery(
     assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
     assert drive.names_in(SOURCE_FOLDER) == [f"{SET_NAME}.csv"]
     assert drive.sheets_in(drive.path("2025")) == []
-    assert api.severities() == ["ERROR"]
+    assert api.severities() == ["WARN"]  # a deadline stop is planned, not a crash
 
     # The redelivery, with time to spare, imports it.
     api.slow("/v1/ingest", 0)
@@ -503,7 +503,7 @@ def test_a_run_that_reaches_the_deadline_is_returned_to_the_queue(
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
     assert drive.names_in(SOURCE_FOLDER) == [f"{SET_NAME}.csv"]
-    assert api.severities() == ["ERROR"]
+    assert api.severities() == ["WARN"]  # a deadline stop is planned, not a crash
 
 
 def test_a_development_run_ingests_to_the_development_api(
@@ -555,7 +555,7 @@ def test_a_deadline_passed_during_the_upload_rolls_the_sheet_back(
     assert drive.sheets_in(drive.path("2025")) == []
     assert google.sheets.formatted == []
     assert api.bodies("/v1/ingest") == []
-    assert api.severities() == ["ERROR"]
+    assert api.severities() == ["WARN"]  # a deadline stop is planned, not a crash
 
     drive.slow("upload_csv_as_google_sheet", 0)
     handler(_event("msg-late", receive_count=2))
@@ -579,7 +579,7 @@ def test_a_deadline_swallowed_by_the_track_read_does_not_lose_the_set(
     assert drive.names_in(SOURCE_FOLDER) == [f"{SET_NAME}.csv"]
     assert drive.sheets_in(drive.path("2025")) == []
     assert api.bodies("/v1/ingest") == []
-    assert api.severities() == ["ERROR"]
+    assert api.severities() == ["WARN"]  # a deadline stop is planned, not a crash
 
     google.sheets.slow("apply_formatting_to_sheet", 0)
     handler(_event("msg-late", receive_count=2))
@@ -600,7 +600,7 @@ def test_a_refused_duplicate_check_stops_rather_than_flagging_the_csv(
     assert drive.names_in(SOURCE_FOLDER) == [f"{SET_NAME}.csv"]
     assert drive.calls.count("upload_csv_as_google_sheet") == 0
     assert "rename_file" not in drive.calls  # not flagged possible_duplicate_
-    assert api.severities() == ["ERROR"]
+    assert api.severities() == ["WARN"]  # a deadline stop is planned, not a crash
 
 
 def test_the_sweep_stops_between_files_at_the_deadline(
@@ -621,7 +621,7 @@ def test_the_sweep_stops_between_files_at_the_deadline(
     assert ingest["source_file"] == SET_NAME
     assert f"{OTHER_SET}.csv" in drive.names_in(SOURCE_FOLDER)
     assert drive.calls.count("download_file") == 1  # the second never started
-    assert api.severities() == ["ERROR"]
+    assert api.severities() == ["WARN"]  # a deadline stop is planned, not a crash
 
     # The redelivery imports the second set. The first, imported but not
     # archived (that move was refused), is flagged as before.
@@ -648,4 +648,4 @@ def test_a_refusal_on_the_last_file_is_not_reported_as_a_finished_sweep(
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "msg-late"}]}
     assert drive.names_in(SOURCE_FOLDER) == ["2025-10-04 notes.txt"]
-    assert api.severities() == ["ERROR"]
+    assert api.severities() == ["WARN"]  # a deadline stop is planned, not a crash

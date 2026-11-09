@@ -375,6 +375,9 @@ def test_a_refusal_past_the_shared_deadline_is_a_deadline_stop(
     assert result == {"batchItemFailures": [{"itemIdentifier": "m-0"}]}
     assert reported.called
     assert "stopped at the deadline" in caplog.text
+    # A planned stop, not a crash: WARN, and said as a stop.
+    assert reported.call_args.args[1] == "WARN"
+    assert "stopped at the deadline" in reported.call_args.args[2]
 
 
 def test_effective_settings_show_values_only_for_allowlisted_names(

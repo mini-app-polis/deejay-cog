@@ -36,7 +36,7 @@ from __future__ import annotations
 import os
 import resource
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from googleapiclient.http import DEFAULT_HTTP_TIMEOUT_SEC
 from mini_app_polis import load_secrets, timing
@@ -227,7 +227,15 @@ def process_message(body: str, *, run_id: str) -> None:
         )
 
 
-def _report_failure(flow_name: str, what: str, exc: BaseException, run_id: str) -> None:
+def _report_failure(
+    flow_name: str,
+    what: str,
+    exc: BaseException,
+    run_id: str,
+    *,
+    severity: Literal["WARN", "ERROR"] = "ERROR",
+    verb: str = "failed",
+) -> None:
     """Say a run died, in the one place someone is watching.
 
     A flow that raises never reaches its own report, so this sends it
@@ -237,8 +245,8 @@ def _report_failure(flow_name: str, what: str, exc: BaseException, run_id: str) 
     try:
         post_run_finding(
             flow_name,
-            "ERROR",
-            f"{what} failed: {type(exc).__name__}: {exc}",
+            severity,
+            f"{what} {verb}: {type(exc).__name__}: {exc}",
             source="queue_consumer",
             run_id=run_id,
         )
@@ -322,7 +330,14 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 # mid-way, and the redelivery picks up whatever it left in
                 # the drop zone.
                 log.error("worker: run stopped at the deadline (attempt %s)", attempt)
-                _report_failure(_flow_name_for(body), "a queued run", exc, message_id)
+                _report_failure(
+                    _flow_name_for(body),
+                    "a queued run",
+                    exc,
+                    message_id,
+                    severity="WARN",
+                    verb="stopped at the deadline (it is delivered again)",
+                )
                 raise
             except Exception as exc:
                 timed.label(outcome="failed")
