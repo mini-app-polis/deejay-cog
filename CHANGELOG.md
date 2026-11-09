@@ -1,3 +1,15 @@
+# [2.36.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.35.1...v2.36.0) (2026-11-09)
+
+
+### Bug Fixes
+
+* **identify:** add fingerprint_check --keep, which the last commit's test expects ([9988b2d](https://github.com/mini-app-polis/deejay-cog/commit/9988b2d6e881850e33ff53ac8a15a9dd793bd4b1))
+
+
+### Features
+
+* **identify:** fingerprint_check --keep leaves a run whose fingerprint was right ([4d989ad](https://github.com/mini-app-polis/deejay-cog/commit/4d989ad813a3755416e815bad170d36d9f5d8d94))
+
 ## [2.35.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.35.0...v2.35.1) (2026-11-09)
 
 
