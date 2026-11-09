@@ -415,8 +415,9 @@ it) to try again.
    No MusicBrainz tags are written. Below the score the file is unchanged
    and stays unidentified for the owner's page. So does a match whose
    recording MusicBrainz refuses (merged or deleted since AcoustID linked
-   it), noted with the recording's id; a MusicBrainz server or network
-   error raises instead, and the message is tried again. Tags alone never
+   it), noted with the recording's id, and a file whose audio fpcalc
+   cannot read (a damaged or mislabeled file); a MusicBrainz server or
+   network error raises instead, and the message is tried again. Tags alone never
    make an entry: the fingerprint confirms them first.
 4. A file left unidentified is registered with its own tags and why
    (`identify_note`): first that its tags did not identify it, then the

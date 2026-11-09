@@ -562,6 +562,35 @@ def test_a_recording_musicbrainz_does_not_serve_only_records_why(drive, api) -> 
     )
 
 
+def test_a_file_whose_audio_cannot_be_read_only_records_why(drive, api) -> None:
+    drive_id = drive.add("track01.mp3", ROOT, _no_tags())
+
+    class Unreadable:
+        def identify(self, path: str, *, fetch_metadata: bool = True):
+            del path, fetch_metadata
+            raise fp.AudioUnreadable("fpcalc exited with status 3: ERROR")
+
+    result = fp.identify_library_file(
+        drive,
+        api,
+        Unreadable(),
+        _record(drive),
+        file_id=drive_id,
+        root=ROOT,
+        path="New/track01.mp3",
+        threshold=0.9,
+    )
+
+    assert result.outcome == "audio_unreadable" and result.score is None
+    assert drive.writes(except_folder=STATE) == []
+    [note] = api.registrations
+    assert note.identification_status == "unidentified" and note.catalog_id is None
+    assert note.identify_note == (
+        "fingerprint: the audio could not be read (fpcalc exited with status 3: "
+        "ERROR); left for review"
+    )
+
+
 def test_a_dry_run_unconfident_fingerprint_records_nothing(drive, api) -> None:
     drive_id = drive.add("track01.mp3", ROOT, _no_tags())
 
