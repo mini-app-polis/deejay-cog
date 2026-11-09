@@ -1,3 +1,10 @@
+## [2.36.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.36.0...v2.36.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **worker:** report a run stopped at the deadline as WARN, not a failure ([5ccde87](https://github.com/mini-app-polis/deejay-cog/commit/5ccde87f36f9b430c6e721c6ad5a27d07921340a))
+
 # [2.36.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.35.1...v2.36.0) (2026-11-09)
 
 
