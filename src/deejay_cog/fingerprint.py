@@ -368,6 +368,8 @@ class MusicBrainzRecordings(MusicBrainzRecordingProvider):
     """
 
     def fetch(self, track_id: TrackId) -> dict[str, Any]:
+        """The recording's metadata, or metadata marked :data:`NOT_SERVED`
+        when MusicBrainz refuses it."""
         try:
             return super().fetch(track_id)
         except RuntimeError as exc:
