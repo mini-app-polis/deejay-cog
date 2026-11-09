@@ -883,11 +883,15 @@ def test_a_backfill_run_is_rolled_back_from_its_kept_revisions(
     assert drive.calls[before:] == []
     assert len(dry_steps) == 2
 
-    _, steps = rb.rollback(drive, STATE, "m-1", apply=True)
+    forgotten: list[list[str]] = []
+    _, steps = rb.rollback(drive, STATE, "m-1", apply=True, forget=forgotten.append)
 
     assert drive.items[ids[0]].data == originals[ids[0]]
     assert drive.items[ids[1]].data.endswith(b"edited since")  # left alone
-    assert sorted(bool(s.skipped) for s in steps) == [False, True]
+    *files, registry = steps
+    assert sorted(bool(s.skipped) for s in files) == [False, True]
+    # Only the file put back has its synced values forgotten.
+    assert forgotten == [[ids[0]]] and registry.result == "done"
     for file_id in ids:
         assert drive.items[file_id].parents == [ROOT]
     assert not any(m in ("move_file", "trash_file") for m, _ in drive.calls)
