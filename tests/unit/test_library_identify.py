@@ -591,6 +591,100 @@ def test_a_file_whose_audio_cannot_be_read_only_records_why(drive, api) -> None:
     )
 
 
+def _no_fingerprint(drive, api, data: bytes, mode: FlowMode = FlowMode.WRITE):
+    drive_id = drive.add("track01.mp3", ROOT, data)
+    result = fp.identify_library_file(
+        drive,
+        api,
+        FakeIdentifier(score=0.0, metadata={}),
+        _record(drive, mode),
+        file_id=drive_id,
+        root=ROOT,
+        path="New/track01.mp3",
+        threshold=0.9,
+    )
+    return drive_id, result
+
+
+def test_with_no_fingerprint_match_its_own_tags_make_its_entry(drive, api) -> None:
+    drive_id, result = _no_fingerprint(
+        drive, api, _song("Beast Mode", "Rokka", year="2023", bpm="120")
+    )
+
+    assert result.outcome == "linked_by_tags" and result.entry_created
+    [made] = api.created
+    assert (made.title, made.artist, made.release_year) == ("Beast Mode", "Rokka", 2023)
+    [row] = api.registrations
+    assert row.identification_status == "identified"
+    assert row.catalog_id == uuid.UUID(result.catalog_id)
+    assert row.identify_note == (
+        "identified by its own tags (fingerprint: no confident match (score 0.00))"
+    )
+    assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == result.catalog_id
+
+
+def test_with_no_fingerprint_match_tags_the_catalog_knows_link_to_it(
+    drive, api
+) -> None:
+    api.known["temple"] = _match()
+
+    _, result = _no_fingerprint(drive, api, _song())
+
+    assert result.outcome == "linked_by_tags" and not result.entry_created
+    assert result.catalog_id == str(_ENTRY)
+    assert api.created == []
+
+
+def test_tags_that_name_no_song_are_left_for_the_owner(drive, api) -> None:
+    _, result = _no_fingerprint(drive, api, _song("Beast Mode", "Unknown Artist"))
+
+    assert result.outcome == "below_confidence"
+    assert api.created == []
+    [note] = api.registrations
+    assert note.identification_status == "unidentified"
+
+
+def test_a_dry_run_names_the_entry_its_tags_would_make(drive, api) -> None:
+    _, result = _no_fingerprint(
+        drive, api, _song("Beast Mode", "Rokka"), FlowMode.DRY_RUN
+    )
+
+    assert result.outcome == "would_create_entry_from_tags"
+    assert api.created == [] and api.registrations == []
+
+
+@pytest.mark.parametrize(
+    ("title", "artist", "usable"),
+    [
+        ("Beast Mode", "Rokka", True),
+        ("Beast Mode", "Various Artists", False),
+        ("Beast Mode", "unknown", False),
+        ("Track 3", "Rokka", False),
+        ("Untitled", "Rokka", False),
+        ("", "Rokka", False),
+        ("7 Rings", "Ariana Grande", True),
+    ],
+)
+def test_usable_tags_name_a_song(title: str, artist: str, usable: bool) -> None:
+    tags = {"title": title, "artist": artist, "year": "", "bpm": "", "genre": ""}
+    assert (ident.usable_track(tags) is not None) is usable
+
+
+@pytest.mark.parametrize(
+    ("title", "name", "usable"),
+    [
+        ("FindAWayBayje112 Bayje 112", "Pop/FindAWayBayje112_Bayje_112.mp3", False),
+        ("Find A Way", "Pop/FindAWayBayje112_Bayje_112.mp3", True),
+        ("Happy", "Pop/Happy.mp3", True),
+    ],
+)
+def test_a_title_that_is_only_the_file_name_names_no_song(
+    title: str, name: str, usable: bool
+) -> None:
+    tags = {"title": title, "artist": "Bayje", "year": "", "bpm": "", "genre": ""}
+    assert (ident.usable_track(tags, name) is not None) is usable
+
+
 def test_a_dry_run_unconfident_fingerprint_records_nothing(drive, api) -> None:
     drive_id = drive.add("track01.mp3", ROOT, _no_tags())
 

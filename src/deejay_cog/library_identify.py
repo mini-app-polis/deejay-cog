@@ -16,11 +16,16 @@ this step takes the next ``LIBRARY_IDENTIFY_CHUNK_SIZE`` of them (default
    function's queue (flow ``library-identify``). There a confident
    AcoustID match is looked up in the catalog, or made a library entry
    (``POST /v1/catalog/library/entries``) when the catalog has no song for
-   it, and then linked as below. Unconfident, the file stays unidentified
-   for the owner's page. A file left unidentified is registered with its
-   own tags and why (``identify_note``: the tags' miss, then the
-   fingerprint's best guess and score), which that page shows. Tags the catalog does not know are not enough on
-   their own to make an entry: the fingerprint confirms them first.
+   it, and then linked as below. A file still unidentified is registered
+   with its own tags and why (``identify_note``: the tags' miss, then the
+   fingerprint's best guess and score), for the owner's page.
+3. **By its own tags** when the fingerprint finds nothing: a file
+   AcoustID has no match for, or none it is confident of, is made a library
+   entry from its own title, artist and year (:func:`link_by_own_tags`),
+   when they name a song (an artist that is not "Unknown" or "Various", a
+   title that is not "Untitled" or a track number). Nothing contradicts
+   them, and the fingerprint never will. A file the fingerprint names as
+   another song stays for the owner (ADR-0008, decided 2026-11-09).
 
 **Linking a file** (:func:`link_and_write`): the file's values go up to the
 catalog's empty fields (``POST /v1/catalog/{id}/fill-up``); the catalog's
@@ -47,6 +52,7 @@ files as tried, so the same files are looked at again.
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -61,6 +67,8 @@ from mini_app_polis.api.contract import (
     CatalogFillUpResult,
     CatalogLookupRequest,
     CatalogMatch,
+    IngestTrack,
+    LibraryEntryCreate,
     LibraryFile,
     LibraryFileRegister,
     LibraryFileTags,
@@ -194,6 +202,122 @@ class Linked:
     filled: list[str] = field(default_factory=list)
 
 
+#: How the registry marks a file linked by its own tags, no fingerprint
+#: having confirmed them.
+TAGS_NOTE = "identified by its own tags"
+
+#: An artist that names no one.
+_NO_ARTIST = re.compile(r"^(?:unknown(?: artist)?|various(?: artists)?|va|n/?a)$", re.I)
+
+#: A title that names no song.
+_NO_TITLE = re.compile(r"^(?:untitled|unknown|track\s*\d*|\d+)$", re.I)
+
+
+def _squashed(text: str) -> str:
+    return re.sub(r"[\W_]+", "", text).lower()
+
+
+def _title_is_file_name(title: str, name: str) -> bool:
+    """Whether ``title`` is only the file's name with its separators gone
+    ("FindAWayBayje112 Bayje 112" for ``FindAWayBayje112_Bayje_112.mp3``):
+    a tagger that copied the name, not the song's title. A one-part name
+    ("Happy.mp3") can be the title itself, so only a name of several parts
+    counts."""
+    stem = name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return "_" in stem and _squashed(title) == _squashed(stem)
+
+
+def usable_track(tags: dict[str, str], name: str = "") -> IngestTrack | None:
+    """The file's own tags as a track to make a library entry from, or None
+    when they do not name a song: no title or artist, an artist such as
+    "Unknown" or "Various Artists", a title such as "Untitled" or
+    "Track 3", or a title that is only the file's ``name``."""
+    track = ingest_track(tags)
+    if track is None:
+        return None
+    artist = str(tags.get("artist") or "").strip()
+    title = str(tags.get("title") or "").strip()
+    if _NO_ARTIST.match(artist) or _NO_TITLE.match(title):
+        return None
+    if name and _title_is_file_name(title, name):
+        return None
+    return track
+
+
+def _release_year(value: str | None) -> int | None:
+    year = str(value or "").strip()[:4]
+    return int(year) if len(year) == 4 and year.isdigit() else None
+
+
+@dataclass(frozen=True)
+class TagsLink:
+    """A file linked by its own tags; in a dry run, what would be done."""
+
+    #: The entry linked to; empty in a dry run that would make one.
+    catalog_id: str
+    entry_created: bool
+    linked: Linked | None
+
+
+def link_by_own_tags(
+    drive: Any,
+    api: Any,
+    record: RunRecord,
+    *,
+    file_id: str,
+    name: str,
+    root: str,
+    path: str,
+    data: bytes,
+    why: str,
+) -> TagsLink | None:
+    """Link a file the fingerprint could not identify by its own tags: to
+    the catalog's entry for them, or to a library entry made from its title,
+    artist and year. None when its tags do not name a song
+    (:func:`usable_track`); the file is then left as it is.
+
+    ``why`` is what the fingerprint found (its note). The registry row keeps
+    it as ``identified by its own tags (<why>)``, so a link no fingerprint
+    confirmed stays marked as one.
+
+    A dry run (``record.mode``) looks up but makes no entry and links
+    nothing; one that would make an entry returns an empty ``catalog_id``.
+    """
+    tags = read_tag_row(data)
+    track = usable_track(tags, name)
+    if track is None:
+        return None
+    match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+    created = False
+    if match is not None:
+        catalog_id = str(match.id)
+    elif record.mode.writes:
+        made = api.create_library_entry(
+            LibraryEntryCreate(
+                title=tags["title"].strip(),
+                artist=tags["artist"].strip(),
+                release_year=_release_year(tags.get("year")),
+            )
+        )
+        catalog_id, created = str(made.entry.id), made.created
+    else:
+        return TagsLink("", False, None)
+    linked = link_and_write(
+        drive,
+        api,
+        record,
+        file_id=file_id,
+        name=name,
+        root=root,
+        path=path,
+        data=data,
+        catalog_id=catalog_id,
+        identified_by=f"own tags ({why})",
+        note=f"{TAGS_NOTE} ({why})",
+    )
+    return TagsLink(catalog_id, created, linked)
+
+
 def record_unidentified(
     api: Any, *, file_id: str, root: str, path: str, data: bytes, note: str
 ) -> None:
@@ -228,10 +352,12 @@ def link_and_write(
     data: bytes,
     catalog_id: str,
     identified_by: str,
+    note: str | None = None,
 ) -> Linked:
     """Link one identified library file to ``catalog_id``: fill the entry's
     empty fields from the file, write the catalog's values to the file in
-    place, and register the file as identified.
+    place, and register the file as identified, with ``note`` as its
+    ``identify_note`` when one is given (otherwise the row keeps its own).
 
     A dry run (``record.mode``) reads the entry and plans the write, but
     calls nothing that changes the catalog, the registry or the file.
@@ -268,21 +394,23 @@ def link_and_write(
         if written:
             current = tagged
     if writes:
-        api.register_library_file(
-            LibraryFileRegister(
-                drive_file_id=file_id,
-                library_root_id=root,
-                path=path,
-                size_bytes=len(current),
-                md5=md5(current),
-                duration_secs=duration_secs(current),
-                identification_status="identified",
-                catalog_id=uuid.UUID(catalog_id),
-                edit_label=label,
-                comment_backup=comment_text(data) or None,
-                synced_at=datetime.now(UTC),
-            )
-        )
+        row: dict[str, Any] = {
+            "drive_file_id": file_id,
+            "library_root_id": root,
+            "path": path,
+            "size_bytes": len(current),
+            "md5": md5(current),
+            "duration_secs": duration_secs(current),
+            "identification_status": "identified",
+            "catalog_id": uuid.UUID(catalog_id),
+            "edit_label": label,
+            "comment_backup": comment_text(data) or None,
+            "synced_at": datetime.now(UTC),
+        }
+        # Sent only when given: the API keeps a field a registration leaves out.
+        if note is not None:
+            row["identify_note"] = note
+        api.register_library_file(LibraryFileRegister(**row))
     return Linked(catalog_id, written, would_write, filled)
 
 
