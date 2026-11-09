@@ -413,8 +413,11 @@ it) to try again.
    AcoustID match (`RETAG_MIN_CONFIDENCE`) is looked up in the catalog, or
    made a library entry when the catalog has no song for it, and linked.
    No MusicBrainz tags are written. Below the score the file is unchanged
-   and stays unidentified for the owner's page. Tags alone never make an
-   entry: the fingerprint confirms them first.
+   and stays unidentified for the owner's page. So does a match whose
+   recording MusicBrainz refuses (merged or deleted since AcoustID linked
+   it), noted with the recording's id; a MusicBrainz server or network
+   error raises instead, and the message is tried again. Tags alone never
+   make an entry: the fingerprint confirms them first.
 4. A file left unidentified is registered with its own tags and why
    (`identify_note`): first that its tags did not identify it, then the
    fingerprint's best guess and score. The owner's unidentified-files page
