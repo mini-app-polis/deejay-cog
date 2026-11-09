@@ -644,3 +644,50 @@ def test_a_fingerprint_run_that_links_its_file_is_not_sent(
     kwargs = posted.call_args.kwargs
     assert kwargs["notable"] is False
     assert posted.call_args.args[1] == "SUCCESS"
+
+
+def test_a_fingerprint_that_names_another_song_than_the_tags_is_held(
+    drive, api
+) -> None:
+    drive_id = drive.add("Beggin_Madcon.mp3", ROOT, _song("Beggin", "Madcon"))
+    api.known.clear()
+
+    result = fp.identify_library_file(
+        drive,
+        api,
+        FakeIdentifier(metadata={"title": "Don't Worry", "artist": "Madcon"}),
+        _record(drive),
+        file_id=drive_id,
+        root=ROOT,
+        path="Beggin_Madcon.mp3",
+        threshold=0.9,
+    )
+
+    assert result.outcome == fp.DISAGREES_WITH_TAGS
+    assert drive.writes(except_folder=STATE) == []
+    assert api.created == []
+    [note] = api.registrations
+    assert note.identification_status == "unidentified"
+    assert "disagrees with the file's own tags (Madcon - Beggin)" in (
+        note.identify_note or ""
+    )
+
+
+def test_a_fingerprint_that_agrees_with_the_tags_is_linked(drive, api) -> None:
+    drive_id = drive.add(
+        "temple.mp3", ROOT, _song("Temple (Radio Edit)", "Thomas Gold feat. X")
+    )
+    api.known["temple"] = _match()
+
+    result = fp.identify_library_file(
+        drive,
+        api,
+        FakeIdentifier(),
+        _record(drive),
+        file_id=drive_id,
+        root=ROOT,
+        path="temple.mp3",
+        threshold=0.9,
+    )
+
+    assert result.outcome == "linked"
