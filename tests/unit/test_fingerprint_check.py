@@ -87,6 +87,26 @@ def test_tags_agree_on_versions_credits_and_punctuation() -> None:
     assert not tags_agree("Fast Car", "Daniel Hanson", "Fast Car", "Tracy Chapman")
 
 
+def test_tags_agree_only_on_the_same_version() -> None:
+    # The original found for a remix, or a remix for the original, does not agree.
+    assert not tags_agree(
+        "go with u (Louis La Roche Remix)", "BAYNK", "go with u", "BAYNK"
+    )
+    assert not tags_agree(
+        "Temple", "Thomas Gold", "Temple (Niko The Kid Remix)", "Thomas Gold"
+    )
+    assert tags_agree(
+        "Temple - Niko The Kid Remix",
+        "Thomas Gold",
+        "Temple (Niko the Kid Remix)",
+        "Thomas Gold",
+    )
+    # Credits, release labels and remasters are not versions.
+    assert tags_agree("Temple (Radio Edit)", "Thomas Gold", "Temple", "Thomas Gold")
+    assert tags_agree("Temple (feat. X)", "Thomas Gold", "Temple", "Thomas Gold")
+    assert tags_agree("Drive (2017 Remaster)", "The Cars", "Drive", "The Cars")
+
+
 def _library(drive: FakeDrive, api: FakeApi) -> dict[str, str]:
     return {
         "wrong": _linked(
