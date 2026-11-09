@@ -467,7 +467,14 @@ def build_track_search() -> TrackSearch | None:
     from deejay_cog.spotify_sync import get_spotify_client
 
     spotify = get_spotify_client()
-    return None if spotify is None else SpotifyTrackSearch(spotify.client)
+    if spotify is None:
+        return None
+    try:
+        client = spotify.client
+    except Exception as exc:  # noqa: BLE001 — no second opinion, not a failed file
+        log.warning("second opinion: Spotify could not start: %s", exc)
+        return None
+    return SpotifyTrackSearch(client)
 
 
 # ---------------------------------------------------------------------------
