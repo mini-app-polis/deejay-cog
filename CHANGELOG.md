@@ -1,3 +1,15 @@
+# [2.40.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.39.1...v2.40.0) (2026-11-09)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 9.2.0 ([bab01d4](https://github.com/mini-app-polis/deejay-cog/commit/bab01d4fc69b07c501a3bcf1df6eca547ece50d5))
+
+
+### Features
+
+* **library-sync:** write only the owned fields whose catalog value moved since the last sync ([d17bbef](https://github.com/mini-app-polis/deejay-cog/commit/d17bbefb34e067c02481a727f36b4ebbe8a11563))
+
 ## [2.39.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.39.0...v2.39.1) (2026-11-09)
 
 
