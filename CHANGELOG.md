@@ -1,3 +1,10 @@
+## [2.35.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.35.0...v2.35.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **identify:** link a fingerprint match only when it agrees with the file's own tags, and undo the ones that did not ([03dc214](https://github.com/mini-app-polis/deejay-cog/commit/03dc2149f9b64270b50218a6b09f246331710267))
+
 # [2.35.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.34.0...v2.35.0) (2026-11-09)
 
 
