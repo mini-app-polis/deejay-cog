@@ -136,3 +136,14 @@ def test_apply_rolls_it_back_and_unlinks_it() -> None:
     assert row.identification_status == "unidentified" and row.catalog_id is None
     assert "the file says Madcon - Beggin" in (row.identify_note or "")
     assert _title(drive, files["right"]) == "Temple"
+
+
+def test_a_kept_run_is_listed_but_left_alone() -> None:
+    drive, api = FakeDrive(), FakeApi()
+    files = _library(drive, api)
+
+    [m] = check.check(drive, api, STATE, apply=True, keep=frozenset({"fp-1"}))
+
+    assert m.result == "kept: named in --keep"
+    assert api.registrations == []
+    assert _title(drive, files["wrong"]) == "Don't Worry"
