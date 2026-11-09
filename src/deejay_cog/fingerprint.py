@@ -25,7 +25,10 @@ a time (concurrency 1, one FIFO message group) and makes one lookup per
 file, through pyacoustid, which spaces its requests to that rate. A lookup
 AcoustID still refuses as over the limit is retried after a pause; one
 refused every time raises, so the message comes back to the queue rather
-than the file being reported as unidentified.
+than the file being reported as unidentified. MusicBrainz is the same: a
+server or network error raises, while a recording it refuses (not found,
+the same answer every time) leaves the file as it is, for review
+(:class:`MusicBrainzRecordings`).
 
 Each message is one run with its own report, under the message id, as the
 deejay worker's runs are.
@@ -64,6 +67,7 @@ from time import monotonic
 from typing import Any, Protocol
 
 import acoustid
+import musicbrainzngs
 from googleapiclient.http import DEFAULT_HTTP_TIMEOUT_SEC
 from mini_app_polis import load_secrets, timing
 from mini_app_polis import logger as logger_mod
@@ -197,13 +201,22 @@ class Outcome(enum.Enum):
     NO_RECORDING_TAGS = "no_recording_tags"
     """Matched, but MusicBrainz gave no title or artist. Not changed."""
 
+    RECORDING_NOT_SERVED = "recording_not_served"
+    """Matched, but MusicBrainz refuses the recording AcoustID named (not
+    found: merged or deleted since AcoustID linked it). Not changed."""
+
     NOT_MP3 = "not_mp3"
     """Not an MP3, so it has no ID3 tags to write. Not changed."""
 
 
 #: The outcomes that leave a file as it was, to be tagged by hand.
 UNTOUCHED = frozenset(
-    {Outcome.BELOW_CONFIDENCE, Outcome.NO_RECORDING_TAGS, Outcome.NOT_MP3}
+    {
+        Outcome.BELOW_CONFIDENCE,
+        Outcome.NO_RECORDING_TAGS,
+        Outcome.RECORDING_NOT_SERVED,
+        Outcome.NOT_MP3,
+    }
 )
 
 
@@ -339,6 +352,35 @@ def min_confidence() -> float:
     return float(raw) if raw else DEFAULT_MIN_CONFIDENCE
 
 
+#: Set in a match's metadata when MusicBrainz refuses its recording.
+NOT_SERVED = "_musicbrainz_not_served"
+
+
+class MusicBrainzRecordings(MusicBrainzRecordingProvider):
+    """The MusicBrainz provider, with a refused recording as an answer.
+
+    MusicBrainz answers a recording it does not have (404) or a request it
+    will not take (400) with ``musicbrainzngs.ResponseError``, the same way
+    every time, so asking again cannot help: that gives metadata marked
+    :data:`NOT_SERVED`, and the file is left as it is, for review. A server
+    or network error (``NetworkError``) still raises, so the message comes
+    back to the queue and is tried again.
+    """
+
+    def fetch(self, track_id: TrackId) -> dict[str, Any]:
+        try:
+            return super().fetch(track_id)
+        except RuntimeError as exc:
+            if not isinstance(exc.__cause__, musicbrainzngs.ResponseError):
+                raise
+            log.warning(
+                "deejay-fingerprint: MusicBrainz refuses recording %s: %r",
+                track_id.id,
+                exc.__cause__,
+            )
+            return {"_provider": "musicbrainz", "_mbid": track_id.id, NOT_SERVED: True}
+
+
 def build_identifier(*, threshold: float) -> Mp3Identifier:
     """An ``Mp3Identifier`` on fpcalc, AcoustID and MusicBrainz, with
     MusicBrainz asked only for a match that reaches ``threshold``."""
@@ -347,7 +389,7 @@ def build_identifier(*, threshold: float) -> Mp3Identifier:
         raise RuntimeError("ACOUSTID_API_KEY is not set")
     return Mp3Identifier(
         acoustid_identifier=AcoustIdLookup(api_key, fpcalc=find_fpcalc()),
-        musicbrainz_provider=MusicBrainzRecordingProvider(
+        musicbrainz_provider=MusicBrainzRecordings(
             app_name=REPO, app_version=__version__, contact=MUSICBRAINZ_CONTACT
         ),
         policy=IdentificationPolicy(
@@ -412,6 +454,8 @@ def identify_file(
         return FingerprintResult(file_id, name, Outcome.BELOW_CONFIDENCE, score)
 
     metadata = result.metadata or {}
+    if metadata.get(NOT_SERVED):
+        return FingerprintResult(file_id, name, Outcome.RECORDING_NOT_SERVED, score)
     title = str(metadata.get("title") or "").strip()
     artist = str(metadata.get("artist") or "").strip()
     year = _year(metadata.get("year"))
@@ -554,6 +598,14 @@ def intake_fingerprinted(
         return
 
     metadata = result.metadata or {}
+    if metadata.get(NOT_SERVED):
+        intake.review(
+            file_id,
+            name,
+            data,
+            f"MusicBrainz does not serve the matched recording {metadata.get('_mbid')}",
+        )
+        return
     title = str(metadata.get("title") or "").strip()
     artist = str(metadata.get("artist") or "").strip()
     year = _year(metadata.get("year"))
@@ -689,6 +741,12 @@ def identify_library_file(
         else:
             note = f"fingerprint: no confident match (score {score:.2f})"
         return unidentified(Outcome.BELOW_CONFIDENCE.value, note)
+    if metadata.get(NOT_SERVED):
+        return unidentified(
+            Outcome.RECORDING_NOT_SERVED.value,
+            f"fingerprint: matched recording {metadata.get('_mbid')} (score {score:.2f}), "
+            "which MusicBrainz does not serve; left for review",
+        )
     year = _year(metadata.get("year"))
     track = ingest_track({"title": title, "artist": artist, "year": year})
     if track is None:

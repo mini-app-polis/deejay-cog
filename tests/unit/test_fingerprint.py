@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import musicbrainzngs
 import pytest
 from mini_app_polis import pipeline_status
 from mini_app_polis.api.contract import CatalogLookupRequest, CatalogMatch
@@ -432,6 +433,48 @@ def test_a_recording_without_title_or_artist_leaves_the_file_unchanged(
     assert result.outcome is Outcome.NO_RECORDING_TAGS
     assert drive.updates == []
     assert api.requests == []
+
+
+def test_a_recording_musicbrainz_does_not_serve_leaves_the_file_unchanged(
+    fake_fpcalc: str,
+) -> None:
+    drive, api = FakeDrive(), FakeApi()
+    mb = FakeMusicBrainz(metadata={"_mbid": _MBID, fp.NOT_SERVED: True})
+    identifier = _identifier(fake_fpcalc, FakeAcoustId([_ok(0.99, _MBID)]), mb)
+
+    result = fp.identify_file(drive, api, identifier, "f1", threshold=0.9)
+
+    assert result.outcome is Outcome.RECORDING_NOT_SERVED
+    assert drive.updates == []
+    assert api.requests == []
+
+
+def _recordings(monkeypatch: pytest.MonkeyPatch, error: Exception):
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(musicbrainzngs, "get_recording_by_id", refuse)
+    return fp.MusicBrainzRecordings(throttle_s=0, retries=1, retry_sleep_s=0)
+
+
+def test_a_recording_musicbrainz_refuses_is_marked_not_served(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _recordings(monkeypatch, musicbrainzngs.ResponseError())
+
+    metadata = provider.fetch(TrackId(provider="musicbrainz", id=_MBID))
+
+    assert metadata[fp.NOT_SERVED] is True
+    assert metadata["_mbid"] == _MBID
+
+
+def test_a_musicbrainz_network_error_still_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _recordings(monkeypatch, musicbrainzngs.NetworkError())
+
+    with pytest.raises(RuntimeError, match="MusicBrainz fetch failed"):
+        provider.fetch(TrackId(provider="musicbrainz", id=_MBID))
 
 
 def test_a_file_that_is_not_an_mp3_is_not_fingerprinted() -> None:

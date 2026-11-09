@@ -536,6 +536,32 @@ def test_an_unconfident_fingerprint_only_records_why(drive, api) -> None:
     )
 
 
+def test_a_recording_musicbrainz_does_not_serve_only_records_why(drive, api) -> None:
+    drive_id = drive.add("track01.mp3", ROOT, _no_tags())
+    gone = {"_provider": "musicbrainz", "_mbid": "mbid-1", fp.NOT_SERVED: True}
+
+    result = fp.identify_library_file(
+        drive,
+        api,
+        FakeIdentifier(metadata=gone),
+        _record(drive),
+        file_id=drive_id,
+        root=ROOT,
+        path="New/track01.mp3",
+        threshold=0.9,
+    )
+
+    assert result.outcome == "recording_not_served"
+    assert drive.writes(except_folder=STATE) == []
+    assert api.created == []
+    [note] = api.registrations
+    assert note.identification_status == "unidentified" and note.catalog_id is None
+    assert note.identify_note == (
+        "fingerprint: matched recording mbid-1 (score 0.95), which MusicBrainz "
+        "does not serve; left for review"
+    )
+
+
 def test_a_dry_run_unconfident_fingerprint_records_nothing(drive, api) -> None:
     drive_id = drive.add("track01.mp3", ROOT, _no_tags())
 
