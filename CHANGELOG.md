@@ -1,3 +1,10 @@
+## [2.37.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.37.1...v2.37.2) (2026-11-09)
+
+
+### Bug Fixes
+
+* **fingerprint:** a recording MusicBrainz refuses leaves the file for review instead of failing the run ([1e13aa6](https://github.com/mini-app-polis/deejay-cog/commit/1e13aa6d74afc10d83b04f3a523e5e8733aef0b7))
+
 ## [2.37.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.37.0...v2.37.1) (2026-11-09)
 
 
