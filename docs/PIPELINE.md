@@ -433,10 +433,10 @@ it) to try again.
    on the WCS site shows both.
 
 **Linking** fills the entry's empty fields from the file
-(`POST /v1/catalog/{id}/fill-up`), writes the catalog's owned fields as the
-display rules render them (title with the file's own release label, artist,
-year, genre, BPM with one decimal, label, and `TXXX:CATALOG_ID`) over the
-same file, and registers it as identified with when it was synced. The
+(`POST /v1/catalog/{id}/fill-up`), writes only the link
+(`TXXX:CATALOG_ID`) to the same file, and registers it as identified with
+when it was synced. Every owned field is left to the reconcile, which
+writes the approved kinds when it reaches the file. The
 write follows the backfill's safety rules: never renamed, moved or deleted;
 head revision kept; audio checked before and after; every write in
 `library-identify-<run id>.json`, which `music_rollback` undoes. The comment
