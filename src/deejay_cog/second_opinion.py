@@ -18,7 +18,9 @@ the file goes one way only when a second source agrees with it:
    side wins.
 
 Anything else (both backed, neither, or no Spotify) stays for the owner,
-with what each source said in its note.
+with what each source said in its note. When Spotify could not be asked (no
+client, or a search that failed), the note says so rather than "neither", so
+a failed lookup is not mistaken for an answer, and the file is tried again.
 """
 
 from __future__ import annotations
@@ -42,6 +44,15 @@ LENGTH_TOLERANCE_SECS = 3.0
 SPOTIFY_RESULTS = 5
 
 Side = Literal["tags", "fingerprint"]
+
+#: How a note begins when Spotify was not asked (no client, or a search
+#: failed): the second opinion was not taken, so the file is tried again.
+NO_SPOTIFY = "no second opinion: Spotify"
+
+
+class SearchFailed(Exception):
+    """A track search could not be made (network, token, rate limit): no
+    answer, which is not the same as finding nothing."""
 
 
 @dataclass(frozen=True)
@@ -76,7 +87,8 @@ class TrackSearch(Protocol):
 
     def tracks(self, artist: str, title: str) -> list[Recording]:
         """Tracks matching ``artist`` and ``title``, best first; empty when
-        the search fails."""
+        there are none. Raises :class:`SearchFailed` when the search could
+        not be made."""
         ...
 
 
@@ -147,10 +159,13 @@ def decide(
     if heard is None or heard.duration is None:
         return Verdict(None, "no second opinion: the file's length is unknown")
     if search is None:
-        return Verdict(None, "no second opinion: Spotify is not available")
+        return Verdict(None, f"{NO_SPOTIFY} is not available")
     length = _minutes(heard.duration)
-    own = _backed(search, own_artist, own_title, heard.duration)
-    found = _backed(search, found_artist, found_title, heard.duration)
+    try:
+        own = _backed(search, own_artist, own_title, heard.duration)
+        found = _backed(search, found_artist, found_title, heard.duration)
+    except SearchFailed as exc:
+        return Verdict(None, f"{NO_SPOTIFY} search failed ({exc})")
     if own is not None and found is None:
         return Verdict(
             "tags",
@@ -194,7 +209,8 @@ class SpotifyTrackSearch:
         self._limit = limit
 
     def tracks(self, artist: str, title: str) -> list[Recording]:
-        """Spotify's tracks for ``artist`` and ``title``; empty on failure."""
+        """Spotify's tracks for ``artist`` and ``title``; empty when it has
+        none. Raises :class:`SearchFailed` when a search cannot be made."""
         main, song = search_terms(artist, title)
         # The whole credit first ("Royal & the Serpent" is one name), then
         # the first artist alone ("Rihanna & Calvin Harris" is two).
@@ -211,7 +227,7 @@ class SpotifyTrackSearch:
             )
         except Exception as exc:  # noqa: BLE001 — no opinion, not a failed run
             log.warning("second opinion: Spotify search failed: %s", exc)
-            return []
+            raise SearchFailed(type(exc).__name__) from exc
         out = []
         for item in (answer or {}).get("tracks", {}).get("items") or []:
             name = str(item.get("name") or "").strip()

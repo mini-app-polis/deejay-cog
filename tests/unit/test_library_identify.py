@@ -419,6 +419,64 @@ def test_a_file_held_before_the_second_opinion_is_tried_once_more(
     assert second.tried == 0
 
 
+def test_a_file_whose_second_opinion_could_not_ask_spotify_is_tried_again(
+    settings, wired, drive, api, jobs
+) -> None:
+    drive_id = _unidentified(drive, api, "Demons.mp3", _song("Demons", "Alonzo Holt"))
+    api.known.clear()
+    api.rows[0] = api.rows[0].model_copy(
+        update={
+            "identify_note": "fingerprint: Kurt Hugo Schneider - Demons (score 0.98) "
+            "disagrees with the file's own tags (Alonzo Holt - Demons); "
+            "no second opinion: Spotify is not available; left for review"
+        }
+    )
+    state = {
+        "flow": ident.FLOW_NAME,
+        "files": {
+            drive_id: {
+                "outcome": "sent_to_fingerprint",
+                "at": "2026-11-09",
+                "second_opinion": True,
+            },
+        },
+    }
+    backfill.StateFile(drive, STATE, ident.TRIED_NAME).save(state)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert summary.tried == 1 and [j["file_id"] for j in jobs.sent] == [drive_id]
+
+
+def test_a_file_whose_second_opinion_backed_neither_is_not_tried_again(
+    settings, wired, drive, api, jobs
+) -> None:
+    drive_id = _unidentified(drive, api, "Waves.mp3", _song("Waves", "Dean Lewis"))
+    api.known.clear()
+    api.rows[0] = api.rows[0].model_copy(
+        update={
+            "identify_note": "fingerprint: Dean Lewis - Waves (acoustic) (score 0.97) "
+            "disagrees with the file's own tags (Dean Lewis - Waves); "
+            "Spotify has neither song at the file's length (4:08); left for review"
+        }
+    )
+    state = {
+        "flow": ident.FLOW_NAME,
+        "files": {
+            drive_id: {
+                "outcome": "sent_to_fingerprint",
+                "at": "2026-11-09",
+                "second_opinion": True,
+            },
+        },
+    }
+    backfill.StateFile(drive, STATE, ident.TRIED_NAME).save(state)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert summary.tried == 0 and jobs.sent == []
+
+
 def test_each_run_takes_the_next_chunk(
     settings, wired, drive, api, jobs, monkeypatch
 ) -> None:
