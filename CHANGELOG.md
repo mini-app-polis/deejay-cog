@@ -1,3 +1,11 @@
+## [2.37.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.37.0...v2.37.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **identify:** a fingerprint match agrees only when it names the same version as the file ([8a2219d](https://github.com/mini-app-polis/deejay-cog/commit/8a2219dc220b6f09a8d1d36506376bda1755a28d))
+* **identify:** version agreement ignores lyric-video, originally-by, clean-edit and part labels ([aff7cb5](https://github.com/mini-app-polis/deejay-cog/commit/aff7cb5158b6edf393f0a51838daa78079684863))
+
 # [2.37.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.36.1...v2.37.0) (2026-11-09)
 
 
