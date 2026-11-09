@@ -13,8 +13,10 @@ Worry". This reads every library-identify run record in
 fingerprint (``identified_by`` "fingerprint ...") whose old title and artist
 do not agree with the new ones (:func:`deejay_cog.music_tags.tags_agree`).
 
-Without ``--apply`` it is a dry run that lists them. With it, each one's run
-is rolled back (:func:`deejay_cog.music_rollback.rollback`: the Drive
+Without ``--apply`` it is a dry run that lists them. ``--keep RUN_ID``
+(repeatable) leaves a listed run as it is, where the fingerprint was right
+and the file's own tags were not (a misread encoding, a wrong artist). With
+``--apply``, each other run is rolled back (:func:`deejay_cog.music_rollback.rollback`: the Drive
 revision the run kept is written back, only while the file still holds what
 the run wrote), and its registry row is made unidentified, its link
 cleared, with a note saying why, for the owner's unidentified-files page.
@@ -152,15 +154,29 @@ def registry_rows(api: Api) -> dict[str, LibraryFile]:
         offset += PAGE
 
 
-def check(drive: Any, api: Api, state_folder: str, *, apply: bool) -> list[Mismatch]:
-    """List, and with ``apply`` undo, each mismatched fingerprint write."""
+def check(
+    drive: Any,
+    api: Api,
+    state_folder: str,
+    *,
+    apply: bool,
+    keep: frozenset[str] = frozenset(),
+) -> list[Mismatch]:
+    """List, and with ``apply`` undo, each mismatched fingerprint write.
+    The runs named in ``keep`` were right after all (the fingerprint
+    corrected the file's tags) and are listed but left as they are."""
     found = mismatches(read_run_records(drive, state_folder))
+    for m in found:
+        if m.run_id in keep:
+            m.result = "kept: named in --keep"
     if not apply:
         for m in found:
-            m.result = "would roll back and unlink"
+            m.result = m.result or "would roll back and unlink"
         return found
     rows = registry_rows(api) if found else {}
     for m in found:
+        if m.result:
+            continue
         try:
             _, steps = rollback(drive, state_folder, m.run_id, apply=True)
             results = [s.result or s.skipped or "" for s in steps]
@@ -204,6 +220,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="roll them back and unlink them (without this, only list them)",
     )
+    parser.add_argument(
+        "--keep",
+        action="append",
+        default=[],
+        metavar="RUN_ID",
+        help="a listed run whose fingerprint was right; leave it (repeatable)",
+    )
     args = parser.parse_args(argv)
     state_folder = os.getenv(STATE_FOLDER_VAR, "").strip()
     if not state_folder:
@@ -211,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     drive = GoogleAPI.from_env().drive
     api = api_client(base_url=api_base_url().strip() or None)
-    found = check(drive, api, state_folder, apply=args.apply)
+    found = check(drive, api, state_folder, apply=args.apply, keep=frozenset(args.keep))
     print(
         f"{'Undoing' if args.apply else 'Dry run:'} {len(found)} fingerprint "
         "links that retitled a file to another song"
