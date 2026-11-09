@@ -434,9 +434,13 @@ it) to try again.
    side's song and version within 3 seconds of the file's length backs it.
    Exactly one side backed → linked by that side, with the reason in its
    registry note. Both, neither, or no Spotify → left for the owner, the
-   note saying what each source found. A file held for a disagreement
-   before the second opinion existed is tried once more, after the untried
-   files (marked `second_opinion` in `library-identify-tried.json`).
+   note saying what each source found. A search that fails (network, token,
+   rate limit) is not read as finding nothing: the note says `no second
+   opinion: Spotify search failed`, not "neither". A file held for a
+   disagreement before the second opinion existed is tried once more, after
+   the untried files (marked `second_opinion` in
+   `library-identify-tried.json`); so is a file whose note says Spotify
+   could not be asked, on each later run until a second opinion is taken.
 6. A file left unidentified is registered with its own tags and why
    (`identify_note`): first that its tags did not identify it, then the
    fingerprint's best guess and score. The owner's unidentified-files page

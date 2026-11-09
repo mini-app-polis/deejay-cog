@@ -224,5 +224,23 @@ def test_a_credit_that_finds_nothing_is_searched_by_its_first_artist() -> None:
     ]
 
 
-def test_a_failed_spotify_search_is_no_opinion_not_a_failure() -> None:
-    assert so.SpotifyTrackSearch(_Spotipy(fails=True)).tracks("A", "B") == []
+def test_a_failed_spotify_search_raises_search_failed() -> None:
+    try:
+        so.SpotifyTrackSearch(_Spotipy(fails=True)).tracks("A", "B")
+    except so.SearchFailed:
+        return
+    raise AssertionError("a failed search must not read as finding nothing")
+
+
+def test_a_failed_search_is_no_second_opinion_not_neither() -> None:
+    @dataclass
+    class _Failing:
+        def tracks(self, artist: str, title: str) -> list[Recording]:
+            del artist, title
+            raise so.SearchFailed("HTTPError")
+
+    verdict = so.decide(*_BOOM_CLAP, *_SUNNY, Heard(169.0), _Failing())
+
+    assert verdict.side is None
+    assert verdict.why.startswith(so.NO_SPOTIFY)
+    assert "neither" not in verdict.why

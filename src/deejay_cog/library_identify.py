@@ -45,7 +45,9 @@ sent to fingerprinting and left for review because its fingerprint
 disagreed with its tags, and not marked ``second_opinion``, is tried once
 more, after the untried files, so the fingerprint function's second opinion
 (:mod:`deejay_cog.second_opinion`) is taken on it; it is then marked, and
-not tried again.
+not tried again, unless its note says Spotify could not be asked (no client,
+or a failed search): the second opinion was not taken, so it is tried again
+on later runs, after the untried files, until it is.
 
 **Safety:** ``LIBRARY_IDENTIFY_MODE`` is ``off`` unless ``dry-run`` or
 ``write``. A dry run reads and looks up, and names what it would link,
@@ -108,6 +110,7 @@ from deejay_cog.music_tags import (
     read_tag_row,
     write_owned_fields,
 )
+from deejay_cog.second_opinion import NO_SPOTIFY
 
 log = logger_mod.get_logger()
 
@@ -664,13 +667,14 @@ def _identify(
 
 def _second_opinion_due(row: LibraryFile, tried: dict[str, Any]) -> bool:
     """Whether a file left for review because its fingerprint disagreed
-    with its tags has yet to be tried with a second opinion."""
+    with its tags has yet to be tried with a second opinion: never tried
+    for one, or tried when Spotify could not be asked."""
     entry = tried.get(row.drive_file_id) or {}
     note = row.identify_note or ""
     return (
         entry.get("outcome") == "sent_to_fingerprint"
-        and not entry.get(SECOND_OPINION)
         and any(phrase in note for phrase in _DISAGREED)
+        and (not entry.get(SECOND_OPINION) or NO_SPOTIFY in note)
     )
 
 
