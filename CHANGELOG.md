@@ -1,3 +1,15 @@
+# [2.38.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.37.3...v2.38.0) (2026-11-09)
+
+
+### Bug Fixes
+
+* **identify:** a title that is only the file name does not name a song ([ed32d91](https://github.com/mini-app-polis/deejay-cog/commit/ed32d918e7ca86c17b78ca31bba18779db663b70))
+
+
+### Features
+
+* **identify:** link a file the fingerprint finds nothing for by its own tags ([444d563](https://github.com/mini-app-polis/deejay-cog/commit/444d56372db3398bb59503b00d275914b7d2cdf6))
+
 ## [2.37.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.37.2...v2.37.3) (2026-11-09)
 
 
