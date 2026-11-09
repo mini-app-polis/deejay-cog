@@ -41,10 +41,11 @@ every write in the run record (``library-identify-<run id>.json``), which
 ``library-identify-tried.json`` in the state folder, so a file is not
 fingerprinted again every night. To try a file again, remove its id from
 that file (or trash the file to try them all). The one exception: a file
-left for review because its fingerprint disagreed with its tags, before the
-fingerprint function took a second opinion (:mod:`deejay_cog.second_opinion`),
-is tried once more, after the untried files, and then marked so it is not
-tried again.
+sent to fingerprinting and left for review because its fingerprint
+disagreed with its tags, and not marked ``second_opinion``, is tried once
+more, after the untried files, so the fingerprint function's second opinion
+(:mod:`deejay_cog.second_opinion`) is taken on it; it is then marked, and
+not tried again.
 
 **Safety:** ``LIBRARY_IDENTIFY_MODE`` is ``off`` unless ``dry-run`` or
 ``write``. A dry run reads and looks up, and names what it would link,
@@ -124,8 +125,8 @@ TRIED_NAME = f"{FLOW_NAME}-tried.json"
 #: The tried entry's mark for a file sent again for a second opinion.
 SECOND_OPINION = "second_opinion"
 
-#: What a file's note says when its fingerprint disagreed with its tags
-#: (the current wording, and the rolled-back links' of 2026-11-07).
+#: What a file's note says when its fingerprint disagreed with its tags:
+#: the fingerprint function's wording, and a rolled-back link's.
 _DISAGREED = ("disagrees with the file's own tags", "the file says")
 
 #: Registry rows asked for per page.

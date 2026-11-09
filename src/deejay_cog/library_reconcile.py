@@ -22,8 +22,8 @@ the next run asks for the files after that one. So a file linked, unlinked
 or marked not present between runs, earlier in the order, neither repeats
 nor skips a file; ``position`` only counts the files compared this pass,
 for the report. A cursor with no ``after`` (moved by hand) starts at its
-``position`` once; one whose file the registry no longer has starts the
-next pass.
+``position`` once; one naming a file the registry does not have starts
+the next pass.
 Past the run's deadline the run stops between files and saves where it got
 to.
 
@@ -634,7 +634,7 @@ def _resume(
     api: Catalog, root: str, limit: int, cursor: dict[str, Any]
 ) -> tuple[list[LibraryFile], bool]:
     """The next chunk after the cursor, and whether it wrapped to the first
-    file: past the last file, or after a file the registry no longer has."""
+    file: past the last file, or after a file the registry does not have."""
     after = str(cursor.get("after") or "")
     position = int(cursor.get("position", 0))
     try:
