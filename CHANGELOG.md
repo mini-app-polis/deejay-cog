@@ -1,3 +1,10 @@
+# [2.41.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.40.0...v2.41.0) (2026-11-09)
+
+
+### Features
+
+* **library-sync:** send up tag edits made in a file before writing the catalog's changes ([5d8a451](https://github.com/mini-app-polis/deejay-cog/commit/5d8a451edafd2528f36de5f4c9c918c7aa82dd63))
+
 # [2.40.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.39.1...v2.40.0) (2026-11-09)
 
 
