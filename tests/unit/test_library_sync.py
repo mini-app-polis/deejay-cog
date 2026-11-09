@@ -19,7 +19,10 @@ from mini_app_polis import pipeline_status
 from mini_app_polis.api.contract import (
     CatalogDisplay,
     CatalogDisplayRequest,
+    LibraryFieldEdit,
     LibraryFile,
+    LibraryFileEdited,
+    LibraryFileEditResult,
     LibraryFilesSynced,
     LibraryFilesSyncedResult,
     LibraryFileTags,
@@ -28,6 +31,7 @@ from music_fakes import DriveItem, FakeDrive, mp3
 from mutagen.id3 import COMM, ID3, TBPM, TCON, TIT2, TPE1, TXXX
 
 from deejay_cog import library_backfill as backfill
+from deejay_cog import library_scan as scan
 from deejay_cog import library_sync as sync
 from deejay_cog.music_safety import FlowMode
 
@@ -92,6 +96,9 @@ class FakeCatalog:
     rows: list[LibraryFile] = field(default_factory=list)
     displays: dict[uuid.UUID, CatalogDisplay] = field(default_factory=dict)
     marked: list[LibraryFilesSynced] = field(default_factory=list)
+    edited: list[LibraryFileEdited] = field(default_factory=list)
+    #: What the API answers for a file's edits, by Drive id.
+    edit_answers: dict[str, list[LibraryFieldEdit]] = field(default_factory=dict)
 
     def list_library_files_needing_sync(self, **kwargs: Any) -> list[LibraryFile]:
         assert kwargs["library_root_id"] == ROOT
@@ -105,6 +112,20 @@ class FakeCatalog:
     def mark_library_files_synced(self, payload: LibraryFilesSynced):
         self.marked.append(payload)
         return LibraryFilesSyncedResult(marked=len(payload.drive_file_ids))
+
+    def list_library_files(self, **kwargs: Any) -> list[LibraryFile]:
+        assert kwargs["present"] is True
+        start = kwargs["offset"]
+        return self.rows[start : start + kwargs["limit"]]
+
+    def report_library_file_edited(self, payload: LibraryFileEdited):
+        self.edited.append(payload)
+        row = next(r for r in self.rows if r.drive_file_id == payload.drive_file_id)
+        return LibraryFileEditResult(
+            drive_file_id=row.drive_file_id,
+            catalog_id=row.catalog_id,
+            fields=self.edit_answers.get(row.drive_file_id, []),
+        )
 
 
 @pytest.fixture
@@ -169,10 +190,31 @@ def _linked(
             trash_requested=False,
             first_seen=_NOW,
             last_seen=_NOW,
+            last_synced=_NOW if synced is not None else None,
             synced=synced,
         )
     )
     return drive_id
+
+
+def _listed(drive: FakeDrive, changed: dict[str, str]) -> None:
+    """The scan's listing, with when Drive last saw each file change."""
+    files = [
+        {
+            "id": drive_id,
+            "name": drive.items[drive_id].name,
+            "folder_id": ROOT,
+            "mime_type": "audio/mpeg",
+            "modified": when,
+        }
+        for drive_id, when in changed.items()
+    ]
+    drive.add(
+        scan.LISTING_NAME,
+        STATE,
+        json.dumps({"files": files}).encode(),
+        mime_type="application/json",
+    )
 
 
 def _state(drive: FakeDrive, name: str) -> dict | None:
@@ -484,3 +526,106 @@ def test_a_bad_chunk_size_does_nothing(
 
     assert summary.problems and catalog.marked == []
     assert sync.CHUNK_SIZE_VAR in _text(posted)
+
+
+def test_a_file_changed_in_drive_after_its_last_sync_has_its_edits_sent_up(
+    settings, wired, drive, catalog, posted
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    # Edited in VirtualDJ the day after its last sync.
+    drive_id = _linked(
+        drive,
+        catalog,
+        "honesty.mp3",
+        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", "Neo Soul", bpm="95.5"),
+        entry,
+    )
+    _listed(drive, {drive_id: "2026-11-08T09:30:00.000Z"})
+    catalog.edit_answers[drive_id] = [
+        LibraryFieldEdit(
+            field="genre",
+            synced="R&B/Soul",
+            file="Neo Soul",
+            catalog="R&B/Soul",
+            outcome="sent_up",
+        )
+    ]
+
+    summary = sync.library_sync(run_id="y-1")
+
+    [edited] = catalog.edited
+    assert edited.drive_file_id == drive_id and edited.preview is False
+    assert edited.tags.genre == "Neo Soul" and edited.tags.bpm == "95.5"
+    assert edited.tags.label is None  # a frame the file lacks is not sent
+    assert summary.edits == {
+        "sent_up": ["RnB/honesty.mp3: genre 'R&B/Soul' -> 'Neo Soul'"]
+    }
+    assert "sent up to the catalog" in _text(posted)
+
+
+def test_a_file_not_changed_since_its_last_sync_is_not_read_for_edits(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    # Last changed by the sync that wrote it, before it was marked synced.
+    drive_id = _linked(
+        drive, catalog, "honesty.mp3", _song(entry, "Honesty", "Pink Sweat$"), entry
+    )
+    _listed(drive, {drive_id: "2026-11-06T23:59:00.000Z"})
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert catalog.edited == [] and summary.edits_read == 0
+
+
+def test_a_file_with_no_recorded_values_is_not_read_for_edits(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    drive_id = _linked(
+        drive,
+        catalog,
+        "honesty.mp3",
+        _song(entry, "Honesty", "Pink Sweat$"),
+        entry,
+        synced=None,
+    )
+    _listed(drive, {drive_id: "2026-11-08T09:30:00.000Z"})
+
+    sync.library_sync(run_id="y-1")
+
+    assert catalog.edited == []
+
+
+def test_a_dry_run_only_asks_what_would_become_of_the_edits(
+    settings, wired, drive, catalog, posted, monkeypatch
+) -> None:
+    monkeypatch.setenv(sync.MODE_VAR, "dry-run")
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    drive_id = _linked(
+        drive,
+        catalog,
+        "honesty.mp3",
+        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", "Neo Soul"),
+        entry,
+    )
+    _listed(drive, {drive_id: "2026-11-08T09:30:00.000Z"})
+    catalog.edit_answers[drive_id] = [
+        LibraryFieldEdit(field="genre", file="Neo Soul", outcome="sent_up"),
+        LibraryFieldEdit(
+            field="artist",
+            file="Pink Sweat$ & Kehlani",
+            outcome="held",
+            why="not split into parts cleanly",
+        ),
+    ]
+
+    sync.library_sync(run_id="y-1")
+
+    assert catalog.edited[0].preview is True
+    text = _text(posted)
+    assert "would_send_up" in text and "not split into parts cleanly" in text

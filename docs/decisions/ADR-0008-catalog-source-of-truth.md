@@ -105,9 +105,8 @@ catalog (stats, summaries, the collection) uses the same rules.
   reconciled. Sync runs nightly: edits made during the day reach the files
   overnight. A sync writes only the fields whose catalog value moved since
   the file's last sync (2026-11-09, the sync writes only what moved). A tag
-  edited in a file by another tool (VirtualDJ can write tags back) is not
-  read back; the next sync that moves that field writes the catalog's value
-  over it, and the reconcile finds it before then.
+  edited in a file in VirtualDJ goes up to the catalog (2026-11-09, an edit
+  made in VirtualDJ goes up) and from there to the song's other files.
 - **Fill up.** When a file has a value for a field the catalog leaves empty,
   the value goes up to the catalog. A value the catalog already has is kept,
   as the set import already does.
@@ -315,6 +314,30 @@ catalog (stats, summaries, the collection) uses the same rules.
    approvals, is what brings a file in step with its entry.
 3. **`LIBRARY_SYNC_MODE` stays off until the library is reconciled**, as
    before.
+
+## Decided with the owner, 2026-11-09 (an edit made in VirtualDJ goes up)
+
+1. **An edit made in a file reaches the catalog with no review.** The owner
+   edits tags in VirtualDJ and wants that to cost him nothing more. Each
+   night, before the catalog's changes come down, a file Drive saw change
+   after its last sync is read. A field it holds differently from the value
+   recorded at that sync, while its entry still shows the recorded value,
+   goes up to the entry as a catalog revision, and the sync carries it to
+   the entry's other files.
+2. **When both changed, the catalog wins**, and the report names the edit
+   it wrote over.
+3. **What is not an edit, or cannot be taken as one, stays in the file and
+   is named in the report:** a BPM within 1.5 of the recorded one, or of
+   its double or half (a player re-measuring the track); a title or artist
+   that does not split into the catalog's parts cleanly (an "&" between
+   artists, a "with" credit); a genre the vocabulary does not place; a
+   one-character label (an explicit or clean marker). A field the file
+   empties is not an edit either.
+4. **A rollback is not an edit.** Undoing a write puts back the file's
+   earlier tags, so the rollback has the registry forget the values the
+   file was synced with, and the next sync records them afresh.
+5. **It runs with the sync**, under `LIBRARY_SYNC_MODE`, and only for files
+   whose values a sync has recorded: off until the library is reconciled.
 
 ## Consequences
 

@@ -3,7 +3,8 @@ edits and display-rule changes to the library files they affect (ADR-0008,
 step 4 and decision 5, edit).
 
 Once the library is reconciled, the catalog is where a song's owned fields
-change: an edit on the WCS site, or a change to the display rules. The API
+change: an edit on the WCS site, an edit made in a file (below), or a
+change to the display rules. The API
 lists the present, linked files whose entry or rules changed after the
 catalog's values were last written to them, or that never had them written
 (``GET /v1/catalog/library/files/needing-sync``). Each night this step takes
@@ -29,14 +30,23 @@ entry's current values recorded and nothing written: the reconcile, not the
 sync, is what brings a file in step with its entry. Neither that nor a file
 whose fields did not move reads the file from Drive.
 
+**Edits made in a file go up first.** Before the catalog's changes come
+down, a file changed in Drive after its last sync (the scan's listing has
+when Drive last saw each file change) is read, and its owned fields are sent
+to the API (``POST /v1/catalog/library/files/edited``; ADR-0008, 2026-11-09:
+an edit made in VirtualDJ goes up). A field the file changed and the catalog
+did not goes up to its entry, and the sync below then carries it to the
+entry's other files; one the catalog changed too stays the catalog's and is
+written back; a BPM a player re-measured is left; a title or artist that
+does not split into the catalog's parts cleanly, and the like, is held and
+named in the report. A file with no recorded values is not read.
+
 The write follows ADR-0007: never renamed, moved or deleted, the head
 revision kept, the audio checked before and after, and every write in the
 run record (``library-sync-<run id>.json``), which
 ``python -m deejay_cog.music_rollback <run id>`` undoes. The comment and
 every frame VirtualDJ owns are never written. Genre is written; subgenre
-is not, until a frame for it is decided. A tag another tool changed in the
-file (VirtualDJ can write tags back) is not put back until its catalog value
-moves; the reconcile is what finds it.
+is not, until a frame for it is decided.
 
 **The report** says how many files each entry's change reached, so an edit
 or a rule change can be followed to the files it touched.
@@ -66,6 +76,8 @@ from mini_app_polis.api.contract import (
     CatalogDisplay,
     CatalogDisplayRequest,
     LibraryFile,
+    LibraryFileEdited,
+    LibraryFileEditResult,
     LibraryFilesSynced,
     LibraryFilesSyncedResult,
     LibraryFileTags,
@@ -79,7 +91,8 @@ from deejay_cog._pipeline_eval import REPO, post_run_finding
 from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
-from deejay_cog.library_backfill import BackfillSettings
+from deejay_cog.library_backfill import BackfillSettings, StateFile, StateProblem
+from deejay_cog.library_scan import LISTING_NAME as SCAN_LISTING_NAME
 from deejay_cog.music_safety import (
     AudioChanged,
     FlowMode,
@@ -90,7 +103,7 @@ from deejay_cog.music_safety import (
     local_run_id,
     write_in_place,
 )
-from deejay_cog.music_tags import display_fields, write_owned_fields
+from deejay_cog.music_tags import display_fields, read_tag_row, write_owned_fields
 
 log = logger_mod.get_logger()
 
@@ -102,6 +115,9 @@ MODE_VAR = "LIBRARY_SYNC_MODE"
 #: Files written per run; a whole number of at least 1.
 CHUNK_SIZE_VAR = "LIBRARY_SYNC_CHUNK_SIZE"
 DEFAULT_CHUNK_SIZE = 50
+
+#: Registry rows asked for per page when looking for files changed in Drive.
+REGISTRY_PAGE = 500
 
 
 class Catalog(Protocol):
@@ -121,6 +137,16 @@ class Catalog(Protocol):
         self, payload: LibraryFilesSynced
     ) -> LibraryFilesSyncedResult:
         """Record that files now carry the catalog's values."""
+        ...
+
+    def list_library_files(self, **kwargs: Any) -> list[LibraryFile]:
+        """One page of registered files."""
+        ...
+
+    def report_library_file_edited(
+        self, payload: LibraryFileEdited
+    ) -> LibraryFileEditResult:
+        """Send up the fields a file changed outside the pipeline."""
         ...
 
 
@@ -151,6 +177,10 @@ class SyncSummary:
     recorded: list[str] = field(default_factory=list)
     #: Files whose entry changed but none of whose fields moved.
     unmoved: list[str] = field(default_factory=list)
+    #: Files read because they changed in Drive after their last sync.
+    edits_read: int = 0
+    #: Each field a file changed, by outcome: "path: field 'a' -> 'b'".
+    edits: dict[str, list[str]] = field(default_factory=dict)
     synced: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     #: Files written (or that would be) per entry, as the entry is shown.
@@ -253,6 +283,82 @@ def _mark(api: Catalog, done: dict[str, LibraryFileTags]) -> None:
         )
 
 
+def _changed_since_sync(drive: Any, settings: BackfillSettings) -> dict[str, datetime]:
+    """When Drive last saw each listed file change, from the scan's listing."""
+    listing = StateFile(drive, settings.state, SCAN_LISTING_NAME).load() or {}
+    changed: dict[str, datetime] = {}
+    for item in listing.get("files") or []:
+        when = item.get("modified")
+        if when:
+            changed[str(item["id"])] = datetime.fromisoformat(str(when))
+    return changed
+
+
+def _present_files(api: Catalog) -> list[LibraryFile]:
+    """Every present registry row."""
+    rows: list[LibraryFile] = []
+    while True:
+        page = api.list_library_files(
+            present=True, limit=REGISTRY_PAGE, offset=len(rows)
+        )
+        rows.extend(page)
+        if len(page) < REGISTRY_PAGE:
+            return rows
+
+
+def _edit_line(row: LibraryFile, edit: Any) -> str:
+    why = f" ({edit.why})" if edit.why else ""
+    return f"{row.path}: {edit.field} {edit.synced!r} -> {edit.file!r}{why}"
+
+
+def _edits(
+    drive: Any, api: Catalog, settings: BackfillSettings, summary: SyncSummary
+) -> None:
+    """Send up what files changed outside the pipeline since their last sync."""
+    try:
+        changed = _changed_since_sync(drive, settings)
+    except StateProblem as exc:
+        summary.failed.append(f"edits made in files not read: {exc}")
+        return
+    if not changed:
+        return
+    for row in _present_files(api):
+        when = changed.get(row.drive_file_id)
+        if (
+            when is None
+            or row.synced is None
+            or row.last_synced is None
+            or row.identification_status != "identified"
+            or when <= row.last_synced
+        ):
+            continue
+        if shared_deadline_passed():
+            summary.stopped = f"run deadline reached before reading {row.path}"
+            return
+        summary.edits_read += 1
+        try:
+            data: bytes = drive.download_file_bytes(row.drive_file_id).data
+            tags = {k: v or None for k, v in read_tag_row(data).items()}
+            result = api.report_library_file_edited(
+                LibraryFileEdited(
+                    drive_file_id=row.drive_file_id,
+                    tags=LibraryFileTags(**tags),
+                    preview=not summary.mode.writes,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — one file must not end the run
+            if shared_deadline_passed():
+                summary.stopped = f"run deadline reached reading {row.path}"
+                return
+            log.exception("library-sync: reading edits in %s failed", row.path)
+            summary.failed.append(
+                f"{row.path} (edits not read: {type(exc).__name__}: {exc})"
+            )
+            continue
+        for edit in result.fields:
+            summary.edits.setdefault(edit.outcome, []).append(_edit_line(row, edit))
+
+
 def _sync(
     drive: Any,
     api: Catalog,
@@ -261,6 +367,9 @@ def _sync(
     run_id: str,
     summary: SyncSummary,
 ) -> None:
+    _edits(drive, api, settings, summary)
+    if summary.stopped:
+        return
     rows = api.list_library_files_needing_sync(
         library_root_id=settings.root, limit=chunk_size, offset=0
     )
@@ -394,6 +503,18 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
     report.count("already_in_step", len(summary.already))
     report.count("nothing_moved", len(summary.unmoved))
     report.count("values_recorded", len(summary.recorded))
+    report.count("changed_in_drive_read", summary.edits_read)
+    for outcome, lines in sorted(summary.edits.items()):
+        report.count(f"edits_{outcome}", len(lines))
+    for line in summary.edits.get("sent_up", []):
+        if summary.mode.writes:
+            report.updated("edit made in a file sent up to the catalog", line)
+        else:
+            report.notice("would_send_up", line)
+    for line in summary.edits.get("overwritten", []):
+        report.notice("edit_overwritten_by_the_catalog", line)
+    for line in summary.edits.get("held", []):
+        report.notice("edit_held", line)
     report.count("marked_synced", len(summary.synced))
     report.count("failed", len(summary.failed))
     for shown, files in sorted(summary.reached.items()):
