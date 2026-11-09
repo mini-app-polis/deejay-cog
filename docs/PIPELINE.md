@@ -653,6 +653,25 @@ the write left. Each restore is an in-place write recorded as a
 `library-bpm-restore` run, which the rollback below can undo. Why BPM
 differences are held: ADR-0008, decision 4.
 
+### Relinking files matched past a version
+
+```bash
+doppler run --config prd -- uv run python -m deejay_cog.relink          # what it would do
+doppler run --config prd -- uv run python -m deejay_cog.relink --apply  # do it
+```
+
+A dry run unless `--apply`. Before the API kept a version that follows an
+unbracketed feat. credit ("Starboy ft. Daft Punk (Alex Aiono Cover)"), its
+loose match read such a title as the plain song, and the backfill linked
+the file to the plain song's entry. This reads every library-backfill run
+record, takes each file whose recorded title has that shape, and looks it
+up again. A file the lookup now puts under another entry has its
+`TXXX:CATALOG_ID` rewritten (that frame only, an in-place write recorded as
+a `library-relink` run, which the rollback below can undo) and its registry
+row linked to it. A file the catalog has no entry for is made unidentified
+in the registry, so library-identify takes it; its link tag is left, since
+a tag is never emptied. Files already linked right are left alone.
+
 ### Restoring an artist's own styling
 
 ```bash
