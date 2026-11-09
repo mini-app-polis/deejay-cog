@@ -105,8 +105,9 @@ def test_tags_agree_only_on_the_same_version() -> None:
     assert tags_agree("Temple (Radio Edit)", "Thomas Gold", "Temple", "Thomas Gold")
     assert tags_agree("Temple (feat. X)", "Thomas Gold", "Temple", "Thomas Gold")
     assert tags_agree("Drive (2017 Remaster)", "The Cars", "Drive", "The Cars")
-    # Not versions either: a video or "originally by" note, a part number,
-    # a title that opens with a bracket; and one version naming the other.
+    # Not versions either: a video label, a credit naming the first artist,
+    # a part number, a title that opens with a bracket; and one version naming
+    # the other.
     assert tags_agree("emiliana (Official Lyric Video)", "CKay", "Emiliana", "CKay")
     assert tags_agree(
         "Fourfiveseconds (Originally By Rihanna)",
