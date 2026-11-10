@@ -88,14 +88,15 @@ jobs:
       region: ${{ vars.AWS_REGION }}
       function-name: ${{ vars.AWS_FINGERPRINT_FUNCTION_NAME }}
 
-  # Conformance is graded on each release, after that release is running.
-  # Sequential with deploy, as in every Lambda cog: a release that did not
-  # deploy is not graded as though it had, and a push that cut no release
-  # has nothing new to grade. The evaluation runs after this job ends, so
-  # what the job reports is whether the request landed — never what was
-  # found.
+  # Conformance is graded on every change once CI passes, before it is
+  # released (CD-031), so a docs or chore commit that cuts no release is
+  # graded too. Nothing waits for the answer: the job reports whether the
+  # request landed, never what was found.
   evaluate:
-    needs: deploy
+    needs: [test, security]
+    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
     uses: mini-app-polis/.github/.github/workflows/evaluate.yml@v3
+    with:
+      ref: dev
     secrets:
       api-key: ${{ secrets.CI_VALIDATOR_API_KEY }}
