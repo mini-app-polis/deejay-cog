@@ -34,6 +34,7 @@ from deejay_cog import library_backfill as backfill
 from deejay_cog import library_scan as scan
 from deejay_cog import library_sync as sync
 from deejay_cog.music_safety import FlowMode
+from flag_fakes import FLAGS
 
 ROOT, STATE = "root", "state"
 _NOW = dt.datetime(2026, 11, 7, tzinfo=dt.UTC)
@@ -144,7 +145,7 @@ def catalog() -> FakeCatalog:
 def settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(backfill.ROOT_FOLDER_VAR, ROOT)
     monkeypatch.setenv(backfill.STATE_FOLDER_VAR, STATE)
-    monkeypatch.setenv(sync.MODE_VAR, "write")
+    monkeypatch.setitem(FLAGS, sync.MODE_FLAG, "write")
     monkeypatch.delenv(sync.CHUNK_SIZE_VAR, raising=False)
     monkeypatch.delenv(backfill.CHUNK_SIZE_VAR, raising=False)
 
@@ -229,7 +230,7 @@ def _text(posted: MagicMock) -> str:
 def test_off_reads_nothing(
     settings, wired, drive, catalog, posted, monkeypatch
 ) -> None:
-    monkeypatch.delenv(sync.MODE_VAR)
+    monkeypatch.delitem(FLAGS, sync.MODE_FLAG, raising=False)
 
     summary = sync.library_sync(run_id="y-1")
 
@@ -425,7 +426,7 @@ def test_a_file_already_in_step_is_marked_synced_without_a_write(
 def test_a_dry_run_writes_nothing_and_marks_nothing(
     settings, wired, drive, catalog, posted, monkeypatch
 ) -> None:
-    monkeypatch.setenv(sync.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, sync.MODE_FLAG, "dry-run")
     entry = uuid.uuid4()
     catalog.displays[entry] = _display(entry)
     drive_id = _linked(
@@ -603,7 +604,7 @@ def test_a_file_with_no_recorded_values_is_not_read_for_edits(
 def test_a_dry_run_only_asks_what_would_become_of_the_edits(
     settings, wired, drive, catalog, posted, monkeypatch
 ) -> None:
-    monkeypatch.setenv(sync.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, sync.MODE_FLAG, "dry-run")
     entry = uuid.uuid4()
     catalog.displays[entry] = _display(entry)
     drive_id = _linked(
@@ -696,7 +697,7 @@ def test_edits_under_the_bulk_limit_still_go_up(
 def test_a_bulk_change_in_a_dry_run_writes_nothing(
     settings, wired, drive, catalog, monkeypatch
 ) -> None:
-    monkeypatch.setenv(sync.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, sync.MODE_FLAG, "dry-run")
     monkeypatch.setenv(sync.EDIT_FLOOD_VAR, "2")
     ids = _flooded(drive, catalog, 3)
 

@@ -51,7 +51,7 @@ is not, until a frame for it is decided.
 **The report** says how many files each entry's change reached, so an edit
 or a rule change can be followed to the files it touched.
 
-**Safety:** ``LIBRARY_SYNC_MODE`` is ``off`` unless ``dry-run`` or
+**Safety:** ``flags.deejay_cog.library_sync`` is ``off`` unless ``dry-run`` or
 ``write``, and stays off until the library is reconciled: before then the
 reconcile, with the owner's approvals, decides what is written. A dry run
 reads and plans, writes no music, and records nothing as synced, so the
@@ -113,8 +113,9 @@ log = logger_mod.get_logger()
 
 FLOW_NAME = "library-sync"
 
-#: off | dry-run | write; unset or unknown is off.
-MODE_VAR = "LIBRARY_SYNC_MODE"
+#: The feature flag holding this step's mode: off | dry-run | write; a
+#: missing flag or an unknown value is off.
+MODE_FLAG = "flags.deejay_cog.library_sync"
 
 #: Files written per run; a whole number of at least 1.
 CHUNK_SIZE_VAR = "LIBRARY_SYNC_CHUNK_SIZE"
@@ -549,7 +550,7 @@ def run_sync(
 
 def library_sync(*, run_id: str | None = None) -> SyncSummary:
     """Write catalog changes to the next chunk of linked files and report."""
-    return run_sync(run_id=run_id, mode=flow_mode(MODE_VAR))
+    return run_sync(run_id=run_id, mode=flow_mode(MODE_FLAG))
 
 
 def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
@@ -561,7 +562,7 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
     if summary.mode is FlowMode.DRY_RUN:
         report.notice(
             "dry_run",
-            f"{MODE_VAR} is dry-run: no music was written and nothing was "
+            f"{MODE_FLAG} is dry-run: no music was written and nothing was "
             f"marked synced; record {summary.record_name or '(none)'}",
         )
     if summary.stopped:

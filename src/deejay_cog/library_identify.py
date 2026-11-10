@@ -49,7 +49,7 @@ not tried again, unless its note says Spotify could not be asked (no client,
 or a failed search): the second opinion was not taken, so it is tried again
 on later runs, after the untried files, until it is.
 
-**Safety:** ``LIBRARY_IDENTIFY_MODE`` is ``off`` unless ``dry-run`` or
+**Safety:** ``flags.deejay_cog.library_identify`` is ``off`` unless ``dry-run`` or
 ``write``. A dry run reads and looks up, and names what it would link,
 write and send, but writes no music, changes nothing in the catalog or
 registry, sends nothing to the fingerprint queue, and does not record the
@@ -116,8 +116,9 @@ log = logger_mod.get_logger()
 
 FLOW_NAME = "library-identify"
 
-#: off | dry-run | write; unset or unknown is off.
-MODE_VAR = "LIBRARY_IDENTIFY_MODE"
+#: The feature flag holding this step's mode: off | dry-run | write; a
+#: missing flag or an unknown value is off.
+MODE_FLAG = "flags.deejay_cog.library_identify"
 
 #: Unidentified files tried per run; a whole number of at least 1.
 CHUNK_SIZE_VAR = "LIBRARY_IDENTIFY_CHUNK_SIZE"
@@ -734,7 +735,7 @@ def run_identify(
 
 def library_identify(*, run_id: str | None = None) -> IdentifySummary:
     """Identify the next chunk of unidentified library files and report."""
-    return run_identify(run_id=run_id, mode=flow_mode(MODE_VAR))
+    return run_identify(run_id=run_id, mode=flow_mode(MODE_FLAG))
 
 
 def _record(report: Any, summary: IdentifySummary, duration_sec: float) -> None:
@@ -746,7 +747,7 @@ def _record(report: Any, summary: IdentifySummary, duration_sec: float) -> None:
     if summary.mode is FlowMode.DRY_RUN:
         report.notice(
             "dry_run",
-            f"{MODE_VAR} is dry-run: no music, catalog or registry value changed, "
+            f"{MODE_FLAG} is dry-run: no music, catalog or registry value changed, "
             f"nothing was sent to fingerprinting; record {summary.record_name or '(none)'}",
         )
     report.count("waiting", summary.waiting)

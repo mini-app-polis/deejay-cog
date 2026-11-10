@@ -7,11 +7,18 @@ import io
 import json
 
 import pytest
+from mini_app_polis.api import ApiUnavailable, KaianoApiError
+from mini_app_polis.api.contract import FeatureFlagItem
 from music_fakes import AUDIO, FakeDrive, mp3
 from mutagen.id3 import ID3, TCON, TIT2, TPE1
 
 from deejay_cog import music_safety as safety
 from deejay_cog.music_safety import FlowMode
+
+#: The real reader: tests/conftest.py swaps in the fake flags for every test.
+REAL_READ_FLAGS = safety._read_flags
+
+FLAG = "flags.deejay_cog.library_scan"
 
 
 @pytest.mark.parametrize(
@@ -34,8 +41,107 @@ def test_modes_default_to_off(raw, mode) -> None:
 
 
 def test_an_unknown_mode_is_logged(caplog: pytest.LogCaptureFixture) -> None:
-    safety.parse_mode("yes", setting="NEW_MUSIC_MODE")
-    assert "NEW_MUSIC_MODE" in caplog.text
+    safety.parse_mode("yes", setting="flags.deejay_cog.new_music")
+    assert "flags.deejay_cog.new_music" in caplog.text
+
+
+class _Flags:
+    """A client whose ``list_flags`` answers ``flags``, or raises them."""
+
+    def __init__(self, flags):
+        self.flags = flags
+        self.reads = 0
+
+    def list_flags(self):
+        self.reads += 1
+        if isinstance(self.flags, Exception):
+            raise self.flags
+        return self.flags
+
+
+@pytest.fixture
+def api(monkeypatch: pytest.MonkeyPatch):
+    """Read the flags through the real reader, from a fake client."""
+    clients: list[_Flags] = []
+
+    def answer(flags):
+        client = _Flags(flags)
+        clients.append(client)
+        monkeypatch.setattr(safety, "_read_flags", REAL_READ_FLAGS)
+        monkeypatch.setattr(safety, "api_client", lambda **_: client)
+        return client
+
+    return answer
+
+
+def _flag(value, *, name=FLAG, enabled=True) -> FeatureFlagItem:
+    return FeatureFlagItem(name=name, enabled=enabled, value=value)
+
+
+@pytest.mark.parametrize(
+    ("value", "mode"),
+    [("off", FlowMode.OFF), ("dry-run", FlowMode.DRY_RUN), ("write", FlowMode.WRITE)],
+)
+def test_a_step_reads_its_mode_from_its_flag(api, value, mode) -> None:
+    api([_flag(value)])
+
+    assert safety.flow_mode(FLAG) is mode
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ApiUnavailable(status_code=0, message="connection refused", path="/v1/flags"),
+        KaianoApiError(status_code=500, message="boom", path="/v1/flags"),
+    ],
+    ids=["unreachable", "refused"],
+)
+def test_flags_that_cannot_be_read_are_off(
+    api, error, caplog: pytest.LogCaptureFixture
+) -> None:
+    api(error)
+
+    assert safety.flow_mode(FLAG) is FlowMode.OFF
+    assert "could not read the feature flags" in caplog.text
+
+
+def test_a_missing_flag_is_off(api, caplog: pytest.LogCaptureFixture) -> None:
+    api([_flag("write", name="flags.deejay_cog.library_sync")])
+
+    assert safety.flow_mode(FLAG) is FlowMode.OFF
+    assert FLAG in caplog.text
+
+
+@pytest.mark.parametrize("value", [None, "", "on", "yes"])
+def test_an_empty_or_unknown_value_is_off(api, value) -> None:
+    api([_flag(value)])
+
+    assert safety.flow_mode(FLAG) is FlowMode.OFF
+
+
+def test_an_unknown_value_is_logged(api, caplog: pytest.LogCaptureFixture) -> None:
+    api([_flag("yes")])
+
+    safety.flow_mode(FLAG)
+
+    assert FLAG in caplog.text
+
+
+def test_a_switched_off_flag_is_off_whatever_its_value(api) -> None:
+    api([_flag("write", enabled=False)])
+
+    assert safety.flow_mode(FLAG) is FlowMode.OFF
+
+
+def test_several_modes_are_read_in_one_call(api) -> None:
+    other = "flags.deejay_cog.new_music"
+    client = api([_flag("write"), _flag("dry-run", name=other)])
+
+    assert safety.flow_modes(FLAG, other) == {
+        FLAG: FlowMode.WRITE,
+        other: FlowMode.DRY_RUN,
+    }
+    assert client.reads == 1
 
 
 def test_the_stricter_mode_wins() -> None:

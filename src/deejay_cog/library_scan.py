@@ -28,7 +28,7 @@ backfill's chunk still fits in the run, and the next night carries on where
 it stopped. Once a listing is complete it is compared, and the next night
 starts a new one.
 
-**Safety:** ``LIBRARY_SCAN_MODE`` is ``off`` unless ``dry-run`` or
+**Safety:** ``flags.deejay_cog.library_scan`` is ``off`` unless ``dry-run`` or
 ``write``. A dry run lists and compares, and reports what it would add and
 remove, but changes nothing in the registry. A listing with no MP3s, or one
 that would mark more than half of the present files not present, changes
@@ -78,8 +78,9 @@ log = logger_mod.get_logger()
 
 FLOW_NAME = "library-scan"
 
-#: off | dry-run | write; unset or unknown is off.
-MODE_VAR = "LIBRARY_SCAN_MODE"
+#: The feature flag holding this step's mode: off | dry-run | write; a
+#: missing flag or an unknown value is off.
+MODE_FLAG = "flags.deejay_cog.library_scan"
 
 #: The most seconds one run spends listing; a whole number of at least 1.
 LISTING_SECONDS_VAR = "LIBRARY_SCAN_LISTING_SECONDS"
@@ -417,7 +418,7 @@ def run_scan(
 
 def library_scan(*, run_id: str | None = None) -> ScanSummary:
     """Scan the library for added and removed files and report the run."""
-    return run_scan(run_id=run_id, mode=flow_mode(MODE_VAR))
+    return run_scan(run_id=run_id, mode=flow_mode(MODE_FLAG))
 
 
 def _record(report: Any, summary: ScanSummary, duration_sec: float) -> None:
@@ -427,7 +428,9 @@ def _record(report: Any, summary: ScanSummary, duration_sec: float) -> None:
     if summary.problems:
         return
     if summary.mode is FlowMode.DRY_RUN:
-        report.notice("dry_run", f"{MODE_VAR} is dry-run: the registry was not changed")
+        report.notice(
+            "dry_run", f"{MODE_FLAG} is dry-run: the registry was not changed"
+        )
     if not summary.listing_complete:
         report.notice(
             "listing_in_progress",

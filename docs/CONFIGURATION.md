@@ -64,15 +64,35 @@ run report names those files instead.
 
 ## Music tagging safety and new-music
 
-Every flow that writes to the music folders reads a mode of its own, at the
-start of each run (so a change in Doppler applies to the next run):
-`off` (the default; unset or any unknown value is `off`, and an unknown one
-is logged), `dry-run` (read, identify and report, write nothing but the
-would-be run record) or `write`.
+Every flow that writes to the music folders reads a mode of its own from
+the API's feature flags (`GET /v1/flags`), at the start of each run, so a
+change made in the API applies to the next run with no settings sync. The
+modes are not configuration: no environment variable sets one.
 
-The **new-music** worker mode reads:
+Each step has one flag, `flags.deejay_cog.STEP`, whose value is the mode:
+`off`, `dry-run` (read, identify and report, write nothing but the would-be
+run record) or `write`. It fails closed: an API the run cannot read, a flag
+the API does not have, a flag switched off, and an empty or unknown value
+(which is logged) are all `off` for that run.
 
-- `NEW_MUSIC_MODE` — `off` | `dry-run` | `write`; default `off`.
+| Flag | Step | Notes |
+|------|------|-------|
+| `flags.deejay_cog.new_music` | new-music | The fingerprint function uses the stricter of it and the message's mode. |
+| `flags.deejay_cog.library_scan` | library-scan | Off, the step reads nothing and sends no report. |
+| `flags.deejay_cog.library_trash` | library-trash | `write` moves the files the owner sent to the trash on the WCS duplicates page to Drive's trash (never deleted) and marks them not present. |
+| `flags.deejay_cog.library_identify` | library-identify | Off, the step reads nothing and sends no report. The fingerprint function reads it too, and uses the stricter of it and the sender's mode. |
+| `flags.deejay_cog.library_backfill` | library-backfill | |
+| `flags.deejay_cog.library_sync` | library-sync | Off, the step reads nothing and sends no report. Keep it off until the library is reconciled. |
+| `flags.deejay_cog.library_duplicates` | library-duplicates | Groups files that look like copies of one song. `dry-run` lists the groups in the run report; `write` also sends them to the API for the duplicates page. Never writes a music file. |
+| `flags.deejay_cog.library_reconcile` | library-reconcile | Off, the step reads nothing and sends no report. `write` applies only what the owner approved on the review page (read from the API), and writes nothing until any approvals are set. Every run sends its differences to the review. |
+
+A flag is changed through the API's protected `PATCH /v1/flags/{name}`
+(body `{"enabled": true, "value": "dry-run"}`). Numeric settings (chunk
+sizes, time budgets) and folder ids stay as configuration, below.
+
+The **new-music** worker mode reads its mode from
+`flags.deejay_cog.new_music`, and:
+
 - `NEW_MUSIC_INPUT_FOLDER_ID` — where new music is dropped.
 - `NEW_MUSIC_DESTINATION_FOLDER_ID` — where tagged, renamed copies go.
 - `NEW_MUSIC_REVIEW_FOLDER_ID` — where files not identified with
@@ -100,7 +120,6 @@ The **library-backfill** worker mode reads:
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_BACKFILL_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. |
 | `LIBRARY_ROOT_FOLDER_ID` | none | The music library's root folder, listed recursively. |
 | `MUSIC_TAGGING_STATE_FOLDER_ID` | none | Holds the manifest, the cursor and the run records (shared with new-music). |
 | `LIBRARY_BACKFILL_CHUNK_SIZE` | `10` | Files per run at most; a whole number of at least 1. A written file takes about 20 s (download, upload, audio check, record and cursor saved). |
@@ -128,7 +147,6 @@ library registry in step with what is in the library. It reads
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_SCAN_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Off, the step reads nothing and sends no report. |
 | `LIBRARY_SCAN_LISTING_SECONDS` | `90` | The most seconds one run spends listing the library, so the backfill's chunk still fits in the run; a whole number of at least 1. |
 
 A problem with a setting is a WARN in the scan's report; the backfill runs
@@ -145,7 +163,6 @@ written with its values. It reads `LIBRARY_ROOT_FOLDER_ID` and
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_IDENTIFY_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Off, the step reads nothing and sends no report. The fingerprint function reads it too, and uses the stricter of it and the sender's mode. |
 | `LIBRARY_IDENTIFY_CHUNK_SIZE` | `20` | Unidentified files tried per run; a whole number of at least 1. Each is downloaded to read its tags. |
 
 The fingerprint function's confidence threshold is `RETAG_MIN_CONFIDENCE`
@@ -160,7 +177,6 @@ catalog; a dry run reads only, a write run applies what the owner approved. It r
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_RECONCILE_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Off, the step reads nothing and sends no report. `write` applies only what the owner approved on the review page (read from the API), and writes nothing until any approvals are set. Every run sends its differences to the review. |
 | `LIBRARY_RECONCILE_CHUNK_SIZE` | `50` | Linked files compared per run; a whole number of at least 1. Each is downloaded to read its tags. |
 
 See [PIPELINE.md](PIPELINE.md#library-reconcile).
@@ -174,7 +190,6 @@ backfill does, and:
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_SYNC_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Off, the step reads nothing and sends no report. Keep it off until the library is reconciled. |
 | `LIBRARY_SYNC_CHUNK_SIZE` | `50` | Files written per run; a whole number of at least 1. Each is downloaded to write its tags. |
 | `LIBRARY_SYNC_EDIT_FLOOD` | `25` | More files changed outside the pipeline than this in one run is a bulk change: nothing goes up to the catalog and nothing is written; the files keep what they hold, and the run reports it. A whole number of at least 1. |
 
@@ -184,12 +199,9 @@ See [PIPELINE.md](PIPELINE.md#library-sync).
 
 Two more steps of the nightly job handle duplicate files. Both read
 `LIBRARY_ROOT_FOLDER_ID` and `MUSIC_TAGGING_STATE_FOLDER_ID` as the
-backfill does.
-
-| Setting | Default | What it does |
-|---------|---------|--------------|
-| `LIBRARY_TRASH_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. `write` moves the files the owner sent to the trash on the WCS duplicates page to Drive's trash (never deleted) and marks them not present. |
-| `LIBRARY_DUPLICATES_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Groups files that look like copies of one song. `dry-run` lists the groups in the run report; `write` also sends them to the API for the duplicates page. Never writes a music file. |
+backfill does, and have no settings of their own: their modes are the
+`flags.deejay_cog.library_trash` and `flags.deejay_cog.library_duplicates`
+flags (above).
 
 See [PIPELINE.md](PIPELINE.md#library-trash) and
 [PIPELINE.md](PIPELINE.md#library-duplicates).
@@ -214,7 +226,7 @@ project like the worker, and:
   them the second opinion rests on AcoustID alone, and a file it does not
   settle is left for the owner.
 - For a new-music message: the new-music settings above, in the stricter
-  of the message's mode and its own `NEW_MUSIC_MODE`. The new-music mode
+  of the message's mode and `flags.deejay_cog.new_music`. The new-music mode
   sends none at present (ADR-0007, amended 2026-11-07).
 
 `fpcalc` comes from the function's Lambda layer, found on `PATH` or at

@@ -1,5 +1,7 @@
 import pytest
 
+from flag_fakes import FLAGS
+
 
 @pytest.fixture(autouse=True)
 def _production_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -14,6 +16,16 @@ def _production_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.delenv("HEALTHCHECKS_ENABLED", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _flags_from_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read the steps' feature flags from ``flag_fakes.FLAGS``, emptied for
+    each test, never from the API."""
+    from deejay_cog import music_safety
+
+    FLAGS.clear()
+    monkeypatch.setattr(music_safety, "_read_flags", lambda: dict(FLAGS))
 
 
 @pytest.fixture

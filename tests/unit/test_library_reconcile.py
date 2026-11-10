@@ -33,6 +33,7 @@ from deejay_cog import library_backfill as backfill
 from deejay_cog import library_reconcile as rec
 from deejay_cog.library_backfill import StateFile
 from deejay_cog.music_safety import FlowMode
+from flag_fakes import FLAGS
 
 ROOT, STATE = "root", "state"
 _NOW = dt.datetime(2026, 11, 6, tzinfo=dt.UTC)
@@ -297,7 +298,7 @@ def catalog() -> FakeCatalog:
 def settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(backfill.ROOT_FOLDER_VAR, ROOT)
     monkeypatch.setenv(backfill.STATE_FOLDER_VAR, STATE)
-    monkeypatch.setenv(rec.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "dry-run")
     monkeypatch.delenv(rec.CHUNK_SIZE_VAR, raising=False)
     monkeypatch.delenv(backfill.CHUNK_SIZE_VAR, raising=False)
 
@@ -344,7 +345,7 @@ def _text(posted: MagicMock) -> str:
 def test_off_reads_nothing(
     settings, wired, drive, catalog, posted, monkeypatch
 ) -> None:
-    monkeypatch.delenv(rec.MODE_VAR)
+    monkeypatch.delitem(FLAGS, rec.MODE_FLAG, raising=False)
     _library(drive, catalog, [{}])
 
     summary = rec.library_reconcile(run_id="r-1")
@@ -538,7 +539,7 @@ def writing(monkeypatch: pytest.MonkeyPatch, drive: FakeDrive) -> WritingCatalog
     monkeypatch.setattr(rec, "GoogleAPI", google)
     monkeypatch.setattr(rec, "api_client", lambda **_: api)
     monkeypatch.setattr(rec, "shared_deadline_passed", lambda: False)
-    monkeypatch.setenv(rec.MODE_VAR, "write")
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "write")
     return api
 
 
@@ -588,7 +589,7 @@ def test_after_a_write_a_dry_run_shows_no_approved_difference_left(
     _approve(writing, kinds=["genre_remapped", "case_punctuation"])
     rec.library_reconcile(run_id="r-1")
 
-    monkeypatch.setenv(rec.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "dry-run")
     again = rec.run_reconcile(run_id="r-2", mode=FlowMode.DRY_RUN, api=writing)
 
     # The cursor wrapped to the same file: compared again, nothing left.

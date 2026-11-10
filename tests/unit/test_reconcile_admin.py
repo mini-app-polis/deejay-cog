@@ -15,6 +15,7 @@ from music_fakes import DriveItem, FakeDrive
 from deejay_cog import library_reconcile as rec
 from deejay_cog import reconcile_admin as admin
 from deejay_cog.music_safety import STATE_FOLDER_VAR
+from flag_fakes import FLAGS
 
 STATE = "state"
 
@@ -255,7 +256,7 @@ def test_without_a_state_folder_nothing_is_done(monkeypatch, capsys) -> None:
 def test_run_with_the_mode_off_runs_nothing_and_says_so(monkeypatch, capsys) -> None:
     called = MagicMock()
     monkeypatch.setattr(admin, "library_reconcile", called)
-    monkeypatch.setenv(rec.MODE_VAR, "off")
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "off")
 
     assert admin.main(["run", "--chunk", "5"]) == 2
 
@@ -266,8 +267,8 @@ def test_run_with_the_mode_off_runs_nothing_and_says_so(monkeypatch, capsys) -> 
 def test_run_sets_the_mode_and_chunk_it_is_given(monkeypatch, capsys) -> None:
     seen = {}
 
-    def fake_reconcile():
-        seen["mode"] = rec.os.environ.get(rec.MODE_VAR)
+    def fake_reconcile(*, mode=None):
+        seen["mode"] = mode.value
         seen["chunk"] = rec.os.environ.get(rec.CHUNK_SIZE_VAR)
         summary = rec.ReconcileSummary(rec.FlowMode.DRY_RUN)
         summary.record_name = "library-reconcile-local.dry-run.json"
@@ -275,10 +276,39 @@ def test_run_sets_the_mode_and_chunk_it_is_given(monkeypatch, capsys) -> None:
         return summary
 
     monkeypatch.setattr(admin, "library_reconcile", fake_reconcile)
-    monkeypatch.delenv(rec.MODE_VAR, raising=False)
+    monkeypatch.delitem(FLAGS, rec.MODE_FLAG, raising=False)
     monkeypatch.delenv(rec.CHUNK_SIZE_VAR, raising=False)
 
     assert admin.main(["run", "--mode", "dry-run", "--chunk", "5"]) == 0
 
     assert seen == {"mode": "dry-run", "chunk": "5"}
     assert "files 1-5, 5 compared" in capsys.readouterr().out
+
+
+def test_run_without_a_mode_uses_the_flags(monkeypatch, capsys) -> None:
+    seen = {}
+
+    def fake_reconcile(*, mode=None):
+        seen["mode"] = mode
+        summary = rec.ReconcileSummary(mode)
+        summary.record_name = "library-reconcile-local.json"
+        return summary
+
+    monkeypatch.setattr(admin, "library_reconcile", fake_reconcile)
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "write")
+
+    assert admin.main(["run"]) == 0
+
+    assert seen == {"mode": rec.FlowMode.WRITE}
+
+
+def test_a_mode_given_does_not_change_the_flag(monkeypatch, capsys) -> None:
+    def fake_reconcile(*, mode=None):
+        return rec.ReconcileSummary(mode)
+
+    monkeypatch.setattr(admin, "library_reconcile", fake_reconcile)
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "off")
+
+    admin.main(["run", "--mode", "dry-run"])
+
+    assert FLAGS[rec.MODE_FLAG] == "off"

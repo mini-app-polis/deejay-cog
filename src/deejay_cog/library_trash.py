@@ -18,7 +18,7 @@ A file already in the trash, or gone from Drive, is only marked not
 present. No other file is touched: the step trashes nothing the registry
 does not mark, and the registry is marked only through the owner's choice.
 
-**Safety:** ``LIBRARY_TRASH_MODE`` is ``off`` unless ``dry-run`` or
+**Safety:** ``flags.deejay_cog.library_trash`` is ``off`` unless ``dry-run`` or
 ``write``. A dry run lists the files it would trash and changes nothing.
 """
 
@@ -51,8 +51,9 @@ log = logger_mod.get_logger()
 
 FLOW_NAME = "library-trash"
 
-#: off | dry-run | write; unset or unknown is off.
-MODE_VAR = "LIBRARY_TRASH_MODE"
+#: The feature flag holding this step's mode: off | dry-run | write; a
+#: missing flag or an unknown value is off.
+MODE_FLAG = "flags.deejay_cog.library_trash"
 
 #: Registry rows read per page.
 PAGE_SIZE = 500
@@ -192,7 +193,7 @@ def run_trash(
 
 def library_trash(*, run_id: str | None = None) -> TrashSummary:
     """Move the trash-requested library files to Drive's trash and report."""
-    return run_trash(run_id=run_id, mode=flow_mode(MODE_VAR))
+    return run_trash(run_id=run_id, mode=flow_mode(MODE_FLAG))
 
 
 def _record(report: Any, summary: TrashSummary, duration_sec: float) -> None:
@@ -203,7 +204,7 @@ def _record(report: Any, summary: TrashSummary, duration_sec: float) -> None:
         return
     if summary.mode is FlowMode.DRY_RUN:
         report.notice(
-            "dry_run", f"{MODE_VAR} is dry-run: nothing was trashed or marked"
+            "dry_run", f"{MODE_FLAG} is dry-run: nothing was trashed or marked"
         )
     if summary.stopped:
         report.notice("stopped", summary.stopped)

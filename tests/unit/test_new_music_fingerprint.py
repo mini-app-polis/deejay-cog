@@ -20,6 +20,7 @@ from deejay_cog import fingerprint as fp
 from deejay_cog import new_music
 from deejay_cog.fingerprint_jobs import FingerprintJobMessage, FingerprintJobPayload
 from deejay_cog.music_safety import FlowMode, audio_payload, tag_snapshot
+from flag_fakes import FLAGS
 
 IN, DEST, REVIEW, ORIG, STATE = "in", "dest", "review", "orig", "state"
 
@@ -66,7 +67,7 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> None:
         "state": STATE,
     }.items():
         monkeypatch.setenv(new_music.FOLDER_VARS[role], value)
-    monkeypatch.setenv(new_music.MODE_VAR, "write")
+    monkeypatch.setitem(FLAGS, new_music.MODE_FLAG, "write")
     monkeypatch.setenv("RETAG_MIN_CONFIDENCE", "0.9")
     monkeypatch.setattr(pipeline_status, "post_run_finding", MagicMock())
 
@@ -153,7 +154,7 @@ def test_a_file_no_longer_in_the_input_folder_is_left_alone(drive: FakeDrive) ->
 def test_the_stricter_mode_applies(
     drive: FakeDrive, monkeypatch: pytest.MonkeyPatch, sender, env, writes
 ) -> None:
-    monkeypatch.setenv(new_music.MODE_VAR, env)
+    monkeypatch.setitem(FLAGS, new_music.MODE_FLAG, env)
     file_id = drive.add("x.mp3", IN, _untagged())
 
     _run(drive, file_id, sender=sender)

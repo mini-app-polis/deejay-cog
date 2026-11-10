@@ -162,7 +162,7 @@ file whose tags already match is not written again.
 
 New music intake ([ADR-0007](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-03-owner-two-flows-and-the-safety-rules),
 amended [2026-11-07](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-07-owner-new-music-trusts-its-own-tags-standardized-by-the-catalog)).
-It does nothing unless `NEW_MUSIC_MODE` is `dry-run` or `write`, and nothing
+It does nothing unless the `flags.deejay_cog.new_music` flag is `dry-run` or `write`, and nothing
 unless all five of its folders are set and different (see
 [CONFIGURATION.md](CONFIGURATION.md#music-tagging-safety-and-new-music)).
 
@@ -235,7 +235,7 @@ is a WARN naming it.
 Retags the files already in the music library from the catalog, in place
 ([ADR-0007](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-03-owner-two-flows-and-the-safety-rules)).
 A library file is **never renamed, moved or deleted**: VirtualDJ finds it by
-its path. It does nothing unless `LIBRARY_BACKFILL_MODE` is `dry-run` or
+its path. It does nothing unless the `flags.deejay_cog.library_backfill` flag is `dry-run` or
 `write`, and nothing unless `LIBRARY_ROOT_FOLDER_ID` and
 `MUSIC_TAGGING_STATE_FOLDER_ID` are set and different (see
 [CONFIGURATION.md](CONFIGURATION.md#library-backfill)).
@@ -351,7 +351,7 @@ The first step of the nightly `library-backfill` job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decisions 5 and
 16): files added to and removed from the library reach the API's library
 registry. It reads metadata only and **never renames, moves, deletes or
-downloads a file**. Off unless `LIBRARY_SCAN_MODE` is `dry-run` or `write`
+downloads a file**. Off unless the `flags.deejay_cog.library_scan` flag is `dry-run` or `write`
 (see [CONFIGURATION.md](CONFIGURATION.md#library-scan)). A scan that fails is
 reported as an ERROR finding and the backfill's chunk runs anyway.
 
@@ -394,7 +394,7 @@ The third step of the nightly `library-backfill` job
 5): the library files the registry holds as `unidentified` (new to the
 library, or ones the backfill could not match) are identified, linked to
 their catalog entry and written with its values. Off unless
-`LIBRARY_IDENTIFY_MODE` is `dry-run` or `write` (see
+the `flags.deejay_cog.library_identify` flag is `dry-run` or `write` (see
 [CONFIGURATION.md](CONFIGURATION.md#library-identify)).
 
 **Each run** takes the next `LIBRARY_IDENTIFY_CHUNK_SIZE` present,
@@ -479,7 +479,7 @@ catalog entry says they should be, and every difference is filed under a
 kind for the owner to approve. **A dry run reads only**: no music file,
 catalog entry or registry row changes, only its cursor and record in the
 state folder. A **write** run applies what the owner approved (below). Off
-unless `LIBRARY_RECONCILE_MODE` is `dry-run` or `write` (see
+unless the `flags.deejay_cog.library_reconcile` flag is `dry-run` or `write` (see
 [CONFIGURATION.md](CONFIGURATION.md#library-reconcile)).
 
 **Which files:** present, identified registry rows under the library root,
@@ -571,16 +571,18 @@ The API's approvals hold the current choices.
   (0 starts the next run from the first identified file) and drops the
   file it last compared, so the next run starts at that position.
 - `run [--mode dry-run|write] [--chunk <n>]` runs the reconcile once,
-  locally, writing exactly as the scheduled run does. Turn the scheduled
-  reconcile off (`LIBRARY_RECONCILE_MODE=off`) while a local run goes, so
-  the two do not move the cursor at once.
+  locally, writing exactly as the scheduled run does. Without `--mode` it
+  runs in the mode `flags.deejay_cog.library_reconcile` sets; `--mode`
+  applies to the local run only and leaves the flag as it is. Turn the
+  flag off while a local run goes, so the two do not move the cursor at
+  once.
 
 ## library-sync
 
 The fifth step of the nightly `library-backfill` job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), step 4 and
 decision 5, edit): catalog edits and display-rule changes reach the files
-they affect. Off unless `LIBRARY_SYNC_MODE` is `dry-run` or `write`, and
+they affect. Off unless the `flags.deejay_cog.library_sync` flag is `dry-run` or `write`, and
 meant to stay off until the library is reconciled (see
 [CONFIGURATION.md](CONFIGURATION.md#library-sync)).
 
@@ -654,7 +656,7 @@ many files each entry's change reached.
 
 The second step of the nightly `library-backfill` job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decision 7).
-Off unless `LIBRARY_TRASH_MODE` is `dry-run` or `write`.
+Off unless the `flags.deejay_cog.library_trash` flag is `dry-run` or `write`.
 
 When the owner resolves a duplicate group on the WCS duplicates page, the
 API marks the group's other copies trash-requested in the library registry.
@@ -673,7 +675,7 @@ and changes nothing.
 
 The last step of the nightly `library-backfill` job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decision 7).
-Off unless `LIBRARY_DUPLICATES_MODE` is `dry-run` or `write`. Read-only: it
+Off unless the `flags.deejay_cog.library_duplicates` flag is `dry-run` or `write`. Read-only: it
 never writes, renames, moves or deletes a music file.
 
 **Each run** reads the registry's present files under the root (leaving out
@@ -812,8 +814,8 @@ run kept, only while the file still holds what the run wrote. Anything moved
 or changed since is left alone and listed. With `--apply` it saves what it
 did as `music-rollback-<run id>-<time>.json` beside the record. A dry run's
 record is refused (it wrote nothing). An original moved back into the input
-folder is taken in again by the next new-music run: set `NEW_MUSIC_MODE` to
-`off` first if that is not wanted.
+folder is taken in again by the next new-music run: set the
+`flags.deejay_cog.new_music` flag to `off` first if that is not wanted.
 
 ---
 
