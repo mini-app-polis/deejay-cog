@@ -1,3 +1,10 @@
+# [2.47.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.46.0...v2.47.0) (2026-11-10)
+
+
+### Features
+
+* **library-sync:** tell a stale write-back from a real edit by its value ([dbb9dfc](https://github.com/mini-app-polis/deejay-cog/commit/dbb9dfc70eaf05ee91f5631f5066535db9cb4062))
+
 # [2.46.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.45.0...v2.46.0) (2026-11-10)
 
 
