@@ -25,9 +25,8 @@ Per file, last first:
   rollback put back as an edit made in the file.
 
 ``--catalog-put-backs`` in place of a run id finds and undoes every
-library-sync run that wrote the catalog's values over files it judged a
-bulk change (what the sync did before it was made to undo such a change
-from each file's own revision instead):
+library-sync run whose records mark writes of the catalog's values over
+files in a bulk change (``CATALOG_PUT_BACK``):
 
     doppler run -- uv run python -m deejay_cog.music_rollback --catalog-put-backs --apply
 
@@ -114,8 +113,8 @@ def find_record(drive: Any, state_folder: str, run_id: str) -> tuple[str, str]:
     return str(matches[0].id), str(matches[0].name)
 
 
-#: How the sync marked a write of the catalog's values over a file in a
-#: bulk change, before it was made to undo the change instead.
+#: How a run record marks a write of the catalog's values over a file in a
+#: bulk change.
 CATALOG_PUT_BACK = "sync (bulk change outside the pipeline put back)"
 
 
