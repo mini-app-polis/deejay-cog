@@ -568,6 +568,14 @@ shows no approved difference left.
 **Report** (write run): counts for `written`, `filled_up`,
 `kept_from_file` and `not_approved`, with every file by its path.
 
+**Long-open differences:** `library-reconcile-open.json` in the state folder
+keeps when each open difference was first seen; a difference whose values
+change starts again. Every run counts those open more than 7 days
+(`long_open`). A full pass has had the chance to settle each of them, so it
+has no decision, or one that cannot apply. The first run to find any warns
+once (`long_open`, with the count by kind), and again only after the count
+has been back to zero.
+
 **Approval rules:** what is approved, and why some kinds are held, is in
 [ADR-0008, decided 2026-11-07](decisions/ADR-0008-catalog-source-of-truth.md#decided-with-the-owner-2026-11-07-the-first-reconcile-review).
 The API's approvals hold the current choices.
