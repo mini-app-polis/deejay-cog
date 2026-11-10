@@ -1,3 +1,10 @@
+# [2.45.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.44.0...v2.45.0) (2026-11-10)
+
+
+### Features
+
+* **modes:** read each step's mode from its feature flag in the API ([c8478f3](https://github.com/mini-app-polis/deejay-cog/commit/c8478f30533da66fc6bf76c4e75055a9d2450aa4))
+
 # [2.44.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.43.1...v2.44.0) (2026-11-10)
 
 
