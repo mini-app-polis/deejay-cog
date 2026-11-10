@@ -1,3 +1,10 @@
+# [2.48.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.47.0...v2.48.0) (2026-11-10)
+
+
+### Features
+
+* **library-reconcile:** warn once when differences stay open over a week ([34128be](https://github.com/mini-app-polis/deejay-cog/commit/34128be3284c79a8d187524f93eced82d1d64ed2))
+
 # [2.47.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.46.0...v2.47.0) (2026-11-10)
 
 
