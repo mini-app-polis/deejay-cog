@@ -685,6 +685,12 @@ tags back to its last Drive revision before that time. A run record that
 marks writes of the catalog's values over files in a bulk change is undone
 with `python -m deejay_cog.music_rollback --catalog-put-backs --apply`.
 
+**The edits step leaves the sync step half the run.** Reading files changed
+in Drive stops once `EDITS_SHARE` (half) of the run's time is spent; the
+files not read are counted as `changed_in_drive_left`, with a notice, and a
+later run reads them. The sync step runs on the rest of the time but skips
+those files: writing one and marking it synced would hide its unread edit.
+
 The write follows the backfill's safety rules: never renamed, moved or
 deleted; head revision kept; audio checked before and after; every write
 in `library-sync-<run id>.json`, which `music_rollback` undoes (and then
@@ -696,7 +702,7 @@ nothing synced.
 
 **Report:** counts for `waiting`, `written`, `would_write`,
 `already_in_step`, `nothing_moved`, `values_recorded`,
-`changed_in_drive_read`, `edits_<outcome>`, `marked_synced` and `failed`;
+`changed_in_drive_read`, `changed_in_drive_left`, `edits_<outcome>`, `marked_synced` and `failed`;
 every edit sent up, held or overwritten by the file's path and field; every
 file written by its path with the fields written; and how
 many files each entry's change reached.
