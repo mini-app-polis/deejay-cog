@@ -101,12 +101,9 @@ from deejay_cog.music_safety import (
     file_meta,
     flow_mode,
     local_run_id,
-    revision_at,
-    revision_bytes,
     write_in_place,
 )
 from deejay_cog.music_tags import (
-    OWNED_FRAMES,
     display_fields,
     read_tag_row,
     write_owned_fields,
@@ -125,8 +122,8 @@ DEFAULT_CHUNK_SIZE = 50
 
 #: More files changed outside the pipeline than this, in one run, is not an
 #: editing session but a bulk write (a tagger writing its own stored tags
-#: back over the library): nothing goes up, and each file's own values from
-#: its last sync are put back instead.
+#: back over the library): nothing goes up and nothing is written; the files
+#: keep what they hold and the report says so.
 EDIT_FLOOD_VAR = "LIBRARY_SYNC_EDIT_FLOOD"
 DEFAULT_EDIT_FLOOD = 25
 
@@ -212,11 +209,6 @@ class SyncSummary:
     edits: dict[str, list[str]] = field(default_factory=dict)
     #: Files changed outside the pipeline when that was a bulk change.
     flood: int = 0
-    #: Each field put back over a file in a bulk change: "path: field ...".
-    put_back: list[str] = field(default_factory=list)
-    #: Files in a bulk change Drive keeps no revision of from their last
-    #: sync: nothing to put back to, so left as they are.
-    left_as_is: list[str] = field(default_factory=list)
     synced: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     #: Files written (or that would be) per entry, as the entry is shown.
@@ -360,102 +352,16 @@ def _bpm_close(a: str | None, b: str | None) -> bool:
         return False
 
 
-def _put_back(
-    drive: Any,
-    api: Catalog,
-    settings: BackfillSettings,
-    rows: list[LibraryFile],
-    run_id: str,
-    summary: SyncSummary,
-) -> None:
-    """A bulk change: undo it. Each file gets back, field by field, what it
-    held at its last sync (Drive's revision from then), where it now differs.
-    The catalog's values are never written here: a file the pipeline never
-    brought in step keeps what it had, and the reconcile, with the owner's
-    approvals, stays what brings it in step. Nothing goes up; each file is
-    recorded as synced with the values it already had recorded."""
-    record = RunRecord(
-        FLOW_NAME,
-        run_id,
-        summary.mode,
-        stage=f"{len(rows)} files changed outside the pipeline at once: put back",
-        folders={"root": settings.root, "state": settings.state},
-    ).attach(drive, settings.state)
-    summary.record_name = record.file_name
-    done: dict[str, LibraryFileTags] = {}
-    status = "complete"
-    try:
-        for row in rows:
-            if shared_deadline_passed():
-                summary.stopped = f"run deadline reached before putting back {row.path}"
-                status = "stopped"
-                break
-            if row.synced is None or row.last_synced is None:
-                continue
-            summary.edits_read += 1
-            try:
-                meta = file_meta(drive, row.drive_file_id)
-                if meta.get("trashed"):
-                    continue
-                before_id = revision_at(drive, row.drive_file_id, row.last_synced)
-                if before_id is None:
-                    summary.left_as_is.append(row.path)
-                    done[row.drive_file_id] = row.synced
-                    continue
-                before = read_tag_row(
-                    revision_bytes(drive, row.drive_file_id, before_id)
-                )
-                data: bytes = drive.download_file_bytes(row.drive_file_id).data
-                have = read_tag_row(data)
-                back = {
-                    name: value
-                    for name in OWNED_FRAMES
-                    if (value := before.get(name) or "")
-                    and (have.get(name) or "") != value
-                    and not (name == "bpm" and _bpm_close(have.get(name), value))
-                }
-                tagged = write_owned_fields(data, back) if back else None
-                if tagged is None:
-                    done[row.drive_file_id] = row.synced
-                    continue
-                name = str(meta.get("name") or row.path.rsplit("/", 1)[-1])
-                entry = write_in_place(
-                    drive,
-                    record,
-                    file_id=row.drive_file_id,
-                    name=name,
-                    original=data,
-                    tagged=tagged,
-                    identified_by="sync (bulk change outside the pipeline undone)",
-                    head_revision=meta.get("headRevisionId"),
-                )
-                for field_name in sorted(back):
-                    summary.put_back.append(
-                        f"{row.path}: {field_name} {have.get(field_name)!r} -> "
-                        f"{back[field_name]!r}"
-                    )
-                if entry.state == "done":
-                    done[row.drive_file_id] = row.synced
-            except AudioChanged as exc:
-                summary.aborted = f"{row.path}: {exc}"
-                status = "aborted"
-                break
-            except TagEmptied as exc:
-                summary.failed.append(f"{row.path} ({exc})")
-            except Exception as exc:  # noqa: BLE001 — one file must not end the run
-                if shared_deadline_passed():
-                    summary.stopped = f"run deadline reached putting back {row.path}"
-                    status = "stopped"
-                    break
-                log.exception("library-sync: putting back %s failed", row.path)
-                summary.failed.append(f"{row.path} ({type(exc).__name__}: {exc})")
-    finally:
-        with without_run_deadline():
-            if record.entries:
-                record.finish(status)
-            if summary.mode.writes and done:
-                _mark(api, done)
-                summary.synced = list(done)
+def _hold(api: Catalog, rows: list[LibraryFile], summary: SyncSummary) -> None:
+    """A bulk change: hold it. Nothing goes up to the catalog and nothing is
+    written to the files — no automatic answer can tell a stale write-back
+    from the state a repair should restore, so the files keep what they hold
+    and the report says so. Each is recorded as synced with the values it
+    already had recorded, so the same change is reported once."""
+    done = {row.drive_file_id: row.synced for row in rows if row.synced is not None}
+    if summary.mode.writes and done:
+        _mark(api, done)
+        summary.synced = list(done)
 
 
 def _edits(
@@ -467,7 +373,7 @@ def _edits(
     summary: SyncSummary,
 ) -> None:
     """Send up what files changed outside the pipeline since their last
-    sync; a bulk change (more than ``flood`` files) is put back instead."""
+    sync; a bulk change (more than ``flood`` files) is held instead."""
     try:
         changed = _changed_since_sync(drive, settings)
     except StateProblem as exc:
@@ -489,7 +395,7 @@ def _edits(
         rows.append(row)
     if len(rows) > flood:
         summary.flood = len(rows)
-        _put_back(drive, api, settings, rows, run_id, summary)
+        _hold(api, rows, summary)
         return
     for row in rows:
         if shared_deadline_passed():
@@ -668,20 +574,14 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
     report.count("values_recorded", len(summary.recorded))
     report.count("changed_in_drive_read", summary.edits_read)
     if summary.flood:
-        report.notice(
-            "bulk_change_put_back",
+        report.issue(
+            "bulk_change_held",
             f"{summary.flood} files changed outside the pipeline since their last "
             f"sync, more than {EDIT_FLOOD_VAR} allows: nothing was sent up to the "
-            "catalog, and each file got back what it held at its last sync",
+            "catalog and nothing was written; the files keep what they hold. "
+            "If the change was a stale write-back, repair it with "
+            "deejay_cog.library_restore.",
         )
-        report.count("fields_put_back", len(summary.put_back))
-        for path in summary.left_as_is:
-            report.notice("no_revision_from_last_sync_left_as_is", path)
-        for line in summary.put_back:
-            if summary.mode.writes:
-                report.updated("put back over a file (bulk change)", line)
-            else:
-                report.notice("would_put_back", line)
     for outcome, lines in sorted(summary.edits.items()):
         report.count(f"edits_{outcome}", len(lines))
     for line in summary.edits.get("sent_up", []):

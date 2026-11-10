@@ -292,3 +292,10 @@ def test_a_catalog_put_back_forgets_every_file_it_wrote(drive: FakeDrive) -> Non
     )
 
     assert forgotten == [[file_id]]
+
+
+def test_a_run_is_found_by_the_start_of_its_id(drive: FakeDrive) -> None:
+    """A run report shows the first eight characters of a run id."""
+    _sync_run(drive, "47bafb95-1111-2222-3333-444455556666", "sync")
+    _, name = rb.find_record(drive, STATE, "47bafb95")
+    assert name == "library-sync-47bafb95-1111-2222-3333-444455556666.json"
