@@ -244,6 +244,34 @@ def revision_bytes(drive: Any, file_id: str, revision_id: str) -> bytes:
     return bytes(data)
 
 
+def revision_at(drive: Any, file_id: str, when: datetime) -> str | None:
+    """The id of the file's last revision Drive saved at or before ``when``:
+    what the file held then. None when Drive no longer has one that old."""
+    found: tuple[datetime, str] | None = None
+    token: str | None = None
+    while True:
+        page: dict[str, Any] = (
+            drive.service.revisions()
+            .list(
+                fileId=file_id,
+                fields="nextPageToken,revisions(id,modifiedTime)",
+                pageSize=1000,
+                pageToken=token,
+            )
+            .execute()
+        )
+        for rev in page.get("revisions") or []:
+            stamp = rev.get("modifiedTime")
+            if not stamp:
+                continue
+            at = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+            if at <= when and (found is None or at >= found[0]):
+                found = (at, str(rev["id"]))
+        token = page.get("nextPageToken")
+        if not token:
+            return found[1] if found else None
+
+
 def update_contents(drive: Any, file_id: str, name: str, data: bytes) -> None:
     """Write ``data`` over the file's contents; name, folder and id stay."""
     suffix = os.path.splitext(name)[1] or ".mp3"

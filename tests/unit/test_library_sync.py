@@ -631,21 +631,33 @@ def test_a_dry_run_only_asks_what_would_become_of_the_edits(
     assert "would_send_up" in text and "not split into parts cleanly" in text
 
 
-def _flooded(drive: FakeDrive, catalog: FakeCatalog, count: int) -> list[str]:
-    """``count`` files a tagger rewrote at once with its own stale tags."""
+#: Before the last sync (``_NOW``), and after it.
+_BEFORE_SYNC = "2026-11-06T00:00:00.000Z"
+_AFTER_SYNC = "2026-11-08T09:30:00.000Z"
+
+
+def _flooded(
+    drive: FakeDrive,
+    catalog: FakeCatalog,
+    count: int,
+    *,
+    held: bytes | None = None,
+    now: bytes | None = None,
+) -> list[str]:
+    """``count`` files a tagger rewrote at once after their last sync: each
+    held ``held`` then (Drive's revision from before the sync) and holds
+    ``now`` (its stale tags) since."""
     entry = uuid.uuid4()
     catalog.displays[entry] = _display(entry)
-    ids = [
-        _linked(
-            drive,
-            catalog,
-            f"honesty{n}.mp3",
-            _song(entry, "honesty", "Pink Sweat$", "Contemporary R&b", bpm="95"),
-            entry,
-        )
-        for n in range(count)
-    ]
-    _listed(drive, dict.fromkeys(ids, "2026-11-08T09:30:00.000Z"))
+    held = held or _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", bpm="95.5")
+    now = now or _song(entry, "honesty", "Pink Sweat$", "Contemporary R&b", bpm="95")
+    ids = []
+    for n in range(count):
+        drive_id = _linked(drive, catalog, f"honesty{n}.mp3", held, entry)
+        drive.items[drive_id].revision_times[0] = _BEFORE_SYNC
+        drive.rewrite(drive_id, now, _AFTER_SYNC)
+        ids.append(drive_id)
+    _listed(drive, dict.fromkeys(ids, _AFTER_SYNC))
     return ids
 
 
@@ -666,8 +678,47 @@ def test_a_bulk_change_is_put_back_and_nothing_goes_up(
         assert frames["TCON"] == "R&B/Soul"
         assert frames["TBPM"] == "95"  # a re-measure, left
         assert drive.items[drive_id].kept
-    assert {i for m in catalog.marked for i in m.drive_file_ids} >= set(ids)
+    marked = {i: v for m in catalog.marked for i, v in m.values.items()}
+    assert set(marked) >= set(ids)
+    assert all(marked[i] == SYNCED for i in ids)
     assert "bulk_change_put_back" in str(posted.call_args_list)
+
+
+def test_a_bulk_change_never_writes_the_catalogs_values(
+    settings, wired, drive, catalog, monkeypatch
+) -> None:
+    """A file the pipeline never brought in step keeps what it held: the
+    reconcile, with its approvals, is what writes the catalog's values."""
+    monkeypatch.setenv(sync.EDIT_FLOOD_VAR, "2")
+    legacy = _song(uuid.uuid4(), "Honesty (Feat. Kehlani)", "Pink Sweat$", "R&B")
+    ids = _flooded(drive, catalog, 3, held=legacy, now=legacy)
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.flood == 3 and summary.put_back == [] and catalog.edited == []
+    for drive_id in ids:
+        frames = _frames(drive.items[drive_id].data)
+        assert frames["TIT2"] == "Honesty (Feat. Kehlani)"
+        assert frames["TCON"] == "R&B"
+        assert not drive.items[drive_id].kept
+    assert {i for m in catalog.marked for i in m.drive_file_ids} >= set(ids)
+
+
+def test_a_bulk_changed_file_with_no_revision_from_its_last_sync_is_left(
+    settings, wired, drive, catalog, posted, monkeypatch
+) -> None:
+    monkeypatch.setenv(sync.EDIT_FLOOD_VAR, "2")
+    ids = _flooded(drive, catalog, 3)
+    for drive_id in ids:
+        drive.items[drive_id].revision_times[0] = None  # pruned by Drive
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.put_back == [] and len(summary.left_as_is) == 3
+    for drive_id in ids:
+        assert _frames(drive.items[drive_id].data)["TIT2"] == "honesty"
+    assert {i for m in catalog.marked for i in m.drive_file_ids} >= set(ids)
+    assert "no_revision_from_last_sync_left_as_is" in str(posted.call_args_list)
 
 
 def test_edits_under_the_bulk_limit_still_go_up(

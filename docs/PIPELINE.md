@@ -625,11 +625,17 @@ dry run asks the API what would happen and changes nothing.
 outside the pipeline since their last sync than `LIBRARY_SYNC_EDIT_FLOOD`
 allows, that is not an editing session but a tagger writing its own stored
 tags back over the library (VirtualDJ writing an old copy of every file's
-tags, say). Then nothing goes up to the catalog: each of those files gets
-the catalog's values written back where it now differs (a BPM within 1.5 is
-a re-measure and is left), with the same safety rules as every other write,
-and is recorded as synced. The report says how many files changed and lists
-every field put back; a dry run lists what it would put back.
+tags, say). Then nothing goes up to the catalog, and the change is undone:
+each of those files gets back, field by field, what it held at its last
+sync (Drive's revision from then), where it now differs (a BPM within 1.5
+is a re-measure and is left), with the same safety rules as every other
+write. The catalog's values are never written here: the values a sync
+records are the catalog's, and a file the pipeline never brought in step
+does not hold them, so writing them would be a retag past the reconcile's
+approvals. A file Drive keeps no revision of from its last sync is left as
+it is and named in the report. Each file is then recorded as synced with
+the values it already had recorded. The report says how many files changed
+and lists every field put back; a dry run lists what it would put back.
 
 The write follows the backfill's safety rules: never renamed, moved or
 deleted; head revision kept; audio checked before and after; every write
