@@ -621,6 +621,16 @@ not split into parts cleanly, a genre the vocabulary does not place, or a
 one-character label is held: the file keeps it and the report names it. A
 dry run asks the API what would happen and changes nothing.
 
+**A bulk change is put back, not sent up.** When more files changed
+outside the pipeline since their last sync than `LIBRARY_SYNC_EDIT_FLOOD`
+allows, that is not an editing session but a tagger writing its own stored
+tags back over the library (VirtualDJ writing an old copy of every file's
+tags, say). Then nothing goes up to the catalog: each of those files gets
+the catalog's values written back where it now differs (a BPM within 1.5 is
+a re-measure and is left), with the same safety rules as every other write,
+and is recorded as synced. The report says how many files changed and lists
+every field put back; a dry run lists what it would put back.
+
 The write follows the backfill's safety rules: never renamed, moved or
 deleted; head revision kept; audio checked before and after; every write
 in `library-sync-<run id>.json`, which `music_rollback` undoes (and then

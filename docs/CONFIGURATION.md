@@ -176,6 +176,7 @@ backfill does, and:
 |---------|---------|--------------|
 | `LIBRARY_SYNC_MODE` | `off` | `off` \| `dry-run` \| `write`; unset or unknown is `off`. Off, the step reads nothing and sends no report. Keep it off until the library is reconciled. |
 | `LIBRARY_SYNC_CHUNK_SIZE` | `50` | Files written per run; a whole number of at least 1. Each is downloaded to write its tags. |
+| `LIBRARY_SYNC_EDIT_FLOOD` | `25` | More files changed outside the pipeline than this in one run is a bulk change: nothing goes up to the catalog, and its values are put back over those files. A whole number of at least 1. |
 
 See [PIPELINE.md](PIPELINE.md#library-sync).
 
