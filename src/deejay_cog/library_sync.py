@@ -116,6 +116,16 @@ MODE_VAR = "LIBRARY_SYNC_MODE"
 CHUNK_SIZE_VAR = "LIBRARY_SYNC_CHUNK_SIZE"
 DEFAULT_CHUNK_SIZE = 50
 
+#: More files changed outside the pipeline than this, in one run, is not an
+#: editing session but a bulk write (a tagger writing its own stored tags
+#: back over the library): nothing goes up, and the catalog's values are put
+#: back over those files instead.
+EDIT_FLOOD_VAR = "LIBRARY_SYNC_EDIT_FLOOD"
+DEFAULT_EDIT_FLOOD = 25
+
+#: A BPM this close to the catalog's is a re-measure, not a change: left.
+BPM_REMEASURE = 1.5
+
 #: Registry rows asked for per page when looking for files changed in Drive.
 REGISTRY_PAGE = 500
 
@@ -162,6 +172,18 @@ def chunk_size_setting() -> int | str:
         return raw
 
 
+def edit_flood_setting() -> int | str:
+    """The bulk-change limit as the worker logs it: the number, or the raw
+    text when it will not parse."""
+    raw = os.getenv(EDIT_FLOOD_VAR, "").strip()
+    if not raw:
+        return DEFAULT_EDIT_FLOOD
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
+
+
 @dataclass
 class SyncSummary:
     """What one run wrote, or in a dry run would write, file by file."""
@@ -181,6 +203,10 @@ class SyncSummary:
     edits_read: int = 0
     #: Each field a file changed, by outcome: "path: field 'a' -> 'b'".
     edits: dict[str, list[str]] = field(default_factory=dict)
+    #: Files changed outside the pipeline when that was a bulk change.
+    flood: int = 0
+    #: Each field put back over a file in a bulk change: "path: field ...".
+    put_back: list[str] = field(default_factory=list)
     synced: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     #: Files written (or that would be) per entry, as the entry is shown.
@@ -189,7 +215,7 @@ class SyncSummary:
     stopped: str = ""
 
 
-def _settings() -> tuple[BackfillSettings | None, int, list[str]]:
+def _settings() -> tuple[BackfillSettings | None, int, int, list[str]]:
     settings, problems = BackfillSettings.from_env()
     size = chunk_size_setting()
     if not isinstance(size, int) or size < 1:
@@ -197,7 +223,13 @@ def _settings() -> tuple[BackfillSettings | None, int, list[str]]:
             f"{CHUNK_SIZE_VAR}={size!r} is not a whole number of at least 1"
         )
         size = 0
-    return settings, size, problems
+    flood = edit_flood_setting()
+    if not isinstance(flood, int) or flood < 1:
+        problems.append(
+            f"{EDIT_FLOOD_VAR}={flood!r} is not a whole number of at least 1"
+        )
+        flood = 0
+    return settings, size, flood, problems
 
 
 def _displays(api: Catalog, rows: list[LibraryFile]) -> dict[uuid.UUID, CatalogDisplay]:
@@ -311,10 +343,116 @@ def _edit_line(row: LibraryFile, edit: Any) -> str:
     return f"{row.path}: {edit.field} {edit.synced!r} -> {edit.file!r}{why}"
 
 
-def _edits(
-    drive: Any, api: Catalog, settings: BackfillSettings, summary: SyncSummary
+def _bpm_close(a: str | None, b: str | None) -> bool:
+    try:
+        return abs(float(a or "") - float(b or "")) < BPM_REMEASURE
+    except ValueError:
+        return False
+
+
+def _put_back(
+    drive: Any,
+    api: Catalog,
+    settings: BackfillSettings,
+    rows: list[LibraryFile],
+    run_id: str,
+    summary: SyncSummary,
 ) -> None:
-    """Send up what files changed outside the pipeline since their last sync."""
+    """A bulk change: write the catalog's values back over each file where
+    the file now differs, and record the files as synced. Nothing goes up."""
+    displays = _displays(api, rows)
+    record = RunRecord(
+        FLOW_NAME,
+        run_id,
+        summary.mode,
+        stage=f"{len(rows)} files changed outside the pipeline at once: put back",
+        folders={"root": settings.root, "state": settings.state},
+    ).attach(drive, settings.state)
+    summary.record_name = record.file_name
+    done: dict[str, LibraryFileTags] = {}
+    status = "complete"
+    try:
+        for row in rows:
+            if shared_deadline_passed():
+                summary.stopped = f"run deadline reached before putting back {row.path}"
+                status = "stopped"
+                break
+            display = displays.get(row.catalog_id) if row.catalog_id else None
+            if display is None:
+                summary.failed.append(
+                    f"{row.path} (its catalog entry {row.catalog_id} is gone)"
+                )
+                continue
+            summary.edits_read += 1
+            try:
+                want = display_fields(display, label=row.edit_label)
+                meta = file_meta(drive, row.drive_file_id)
+                if meta.get("trashed"):
+                    continue
+                data: bytes = drive.download_file_bytes(row.drive_file_id).data
+                have = read_tag_row(data)
+                back = {
+                    name: value
+                    for name, value in want.items()
+                    if value
+                    and (have.get(name) or "") != value
+                    and not (name == "bpm" and _bpm_close(have.get(name), value))
+                }
+                values = LibraryFileTags(**want)
+                tagged = write_owned_fields(data, back) if back else None
+                if tagged is None:
+                    done[row.drive_file_id] = values
+                    continue
+                name = str(meta.get("name") or row.path.rsplit("/", 1)[-1])
+                entry = write_in_place(
+                    drive,
+                    record,
+                    file_id=row.drive_file_id,
+                    name=name,
+                    original=data,
+                    tagged=tagged,
+                    identified_by="sync (bulk change outside the pipeline put back)",
+                    head_revision=meta.get("headRevisionId"),
+                )
+                for field_name in sorted(back):
+                    summary.put_back.append(
+                        f"{row.path}: {field_name} {have.get(field_name)!r} -> "
+                        f"{back[field_name]!r}"
+                    )
+                if entry.state == "done":
+                    done[row.drive_file_id] = values
+            except AudioChanged as exc:
+                summary.aborted = f"{row.path}: {exc}"
+                status = "aborted"
+                break
+            except TagEmptied as exc:
+                summary.failed.append(f"{row.path} ({exc})")
+            except Exception as exc:  # noqa: BLE001 — one file must not end the run
+                if shared_deadline_passed():
+                    summary.stopped = f"run deadline reached putting back {row.path}"
+                    status = "stopped"
+                    break
+                log.exception("library-sync: putting back %s failed", row.path)
+                summary.failed.append(f"{row.path} ({type(exc).__name__}: {exc})")
+    finally:
+        with without_run_deadline():
+            if record.entries:
+                record.finish(status)
+            if summary.mode.writes and done:
+                _mark(api, done)
+                summary.synced = list(done)
+
+
+def _edits(
+    drive: Any,
+    api: Catalog,
+    settings: BackfillSettings,
+    flood: int,
+    run_id: str,
+    summary: SyncSummary,
+) -> None:
+    """Send up what files changed outside the pipeline since their last
+    sync; a bulk change (more than ``flood`` files) is put back instead."""
     try:
         changed = _changed_since_sync(drive, settings)
     except StateProblem as exc:
@@ -322,6 +460,7 @@ def _edits(
         return
     if not changed:
         return
+    rows: list[LibraryFile] = []
     for row in _present_files(api):
         when = changed.get(row.drive_file_id)
         if (
@@ -332,6 +471,12 @@ def _edits(
             or when <= row.last_synced
         ):
             continue
+        rows.append(row)
+    if len(rows) > flood:
+        summary.flood = len(rows)
+        _put_back(drive, api, settings, rows, run_id, summary)
+        return
+    for row in rows:
         if shared_deadline_passed():
             summary.stopped = f"run deadline reached before reading {row.path}"
             return
@@ -364,11 +509,14 @@ def _sync(
     api: Catalog,
     settings: BackfillSettings,
     chunk_size: int,
+    flood: int,
     run_id: str,
     summary: SyncSummary,
 ) -> None:
-    _edits(drive, api, settings, summary)
-    if summary.stopped:
+    _edits(drive, api, settings, flood, run_id, summary)
+    if summary.stopped or summary.aborted:
+        if summary.aborted:
+            _report_abort(run_id, summary)
         return
     rows = api.list_library_files_needing_sync(
         library_root_id=settings.root, limit=chunk_size, offset=0
@@ -463,7 +611,7 @@ def run_sync(
         list_all=True,
     ) as report:
         try:
-            settings, chunk_size, problems = _settings()
+            settings, chunk_size, flood, problems = _settings()
             if settings is None or problems:
                 summary.problems.extend(problems)
                 return summary
@@ -472,7 +620,7 @@ def run_sync(
             client = api or cast(
                 Catalog, api_client(base_url=api_base_url().strip() or None)
             )
-            _sync(drive, client, settings, chunk_size, run_id, summary)
+            _sync(drive, client, settings, chunk_size, flood, run_id, summary)
         finally:
             _record(report, summary, monotonic() - started_at)
     return summary
@@ -504,6 +652,19 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
     report.count("nothing_moved", len(summary.unmoved))
     report.count("values_recorded", len(summary.recorded))
     report.count("changed_in_drive_read", summary.edits_read)
+    if summary.flood:
+        report.notice(
+            "bulk_change_put_back",
+            f"{summary.flood} files changed outside the pipeline since their last "
+            f"sync, more than {EDIT_FLOOD_VAR} allows: nothing was sent up to the "
+            "catalog, and its values were put back over the files",
+        )
+        report.count("fields_put_back", len(summary.put_back))
+        for line in summary.put_back:
+            if summary.mode.writes:
+                report.updated("put back over a file (bulk change)", line)
+            else:
+                report.notice("would_put_back", line)
     for outcome, lines in sorted(summary.edits.items()):
         report.count(f"edits_{outcome}", len(lines))
     for line in summary.edits.get("sent_up", []):

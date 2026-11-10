@@ -629,3 +629,78 @@ def test_a_dry_run_only_asks_what_would_become_of_the_edits(
     assert catalog.edited[0].preview is True
     text = _text(posted)
     assert "would_send_up" in text and "not split into parts cleanly" in text
+
+
+def _flooded(drive: FakeDrive, catalog: FakeCatalog, count: int) -> list[str]:
+    """``count`` files a tagger rewrote at once with its own stale tags."""
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    ids = [
+        _linked(
+            drive,
+            catalog,
+            f"honesty{n}.mp3",
+            _song(entry, "honesty", "Pink Sweat$", "Contemporary R&b", bpm="95"),
+            entry,
+        )
+        for n in range(count)
+    ]
+    _listed(drive, dict.fromkeys(ids, "2026-11-08T09:30:00.000Z"))
+    return ids
+
+
+def test_a_bulk_change_is_put_back_and_nothing_goes_up(
+    settings, wired, drive, catalog, posted, monkeypatch
+) -> None:
+    monkeypatch.setenv(sync.EDIT_FLOOD_VAR, "2")
+    ids = _flooded(drive, catalog, 3)
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert catalog.edited == []
+    assert summary.flood == 3
+    for drive_id in ids:
+        frames = _frames(drive.items[drive_id].data)
+        assert frames["TIT2"] == "Honesty"
+        assert frames["TPE1"] == "Pink Sweat$ feat. Kehlani"
+        assert frames["TCON"] == "R&B/Soul"
+        assert frames["TBPM"] == "95"  # a re-measure, left
+        assert drive.items[drive_id].kept
+    assert {i for m in catalog.marked for i in m.drive_file_ids} >= set(ids)
+    assert "bulk_change_put_back" in str(posted.call_args_list)
+
+
+def test_edits_under_the_bulk_limit_still_go_up(
+    settings, wired, drive, catalog, monkeypatch
+) -> None:
+    monkeypatch.setenv(sync.EDIT_FLOOD_VAR, "3")
+    _flooded(drive, catalog, 3)
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.flood == 0 and len(catalog.edited) == 3
+
+
+def test_a_bulk_change_in_a_dry_run_writes_nothing(
+    settings, wired, drive, catalog, monkeypatch
+) -> None:
+    monkeypatch.setenv(sync.MODE_VAR, "dry-run")
+    monkeypatch.setenv(sync.EDIT_FLOOD_VAR, "2")
+    ids = _flooded(drive, catalog, 3)
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.flood == 3 and catalog.edited == [] and catalog.marked == []
+    for drive_id in ids:
+        assert _frames(drive.items[drive_id].data)["TIT2"] == "honesty"
+
+
+def test_a_bad_bulk_limit_does_nothing(
+    settings, wired, catalog, posted, monkeypatch
+) -> None:
+    monkeypatch.setenv(sync.EDIT_FLOOD_VAR, "lots")
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.problems and catalog.marked == []
+    assert sync.EDIT_FLOOD_VAR in _text(posted)
