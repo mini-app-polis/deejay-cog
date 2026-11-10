@@ -24,6 +24,13 @@ Per file, last first:
   so the library sync records them afresh instead of reading what the
   rollback put back as an edit made in the file.
 
+``--catalog-put-backs`` in place of a run id finds and undoes every
+library-sync run that wrote the catalog's values over files it judged a
+bulk change (what the sync did before it was made to undo such a change
+from each file's own revision instead):
+
+    doppler run -- uv run python -m deejay_cog.music_rollback --catalog-put-backs --apply
+
 An original moved back into the new-music input folder is taken in again by
 the next new-music run; set ``NEW_MUSIC_MODE`` to ``off`` first to stop that.
 """
@@ -105,6 +112,34 @@ def find_record(drive: Any, state_folder: str, run_id: str) -> tuple[str, str]:
         names = ", ".join(sorted(str(f.name) for f in matches))
         raise RollbackError(f"more than one record for {run_id}: {names}")
     return str(matches[0].id), str(matches[0].name)
+
+
+#: How the sync marked a write of the catalog's values over a file in a
+#: bulk change, before it was made to undo the change instead.
+CATALOG_PUT_BACK = "sync (bulk change outside the pipeline put back)"
+
+
+def catalog_put_back_runs(drive: Any, state_folder: str) -> list[str]:
+    """The run ids of the library-sync runs that wrote the catalog's values
+    over files in a bulk change, oldest first."""
+    files = drive.list_files(
+        parent_id=state_folder, name_contains="library-sync-", include_folders=False
+    )
+    found: list[tuple[str, str]] = []
+    for f in files:
+        name = str(f.name)
+        if not name.startswith("library-sync-") or name.endswith(".dry-run.json"):
+            continue
+        if not name.endswith(".json"):
+            continue
+        try:
+            record = parse_record(drive.download_file_bytes(str(f.id)).data)
+        except ValueError:
+            continue
+        entries = record.get("entries") or []
+        if any(e.get("identified_by") == CATALOG_PUT_BACK for e in entries):
+            found.append((str(record.get("started_at") or ""), str(record["run_id"])))
+    return [run_id for _, run_id in sorted(found)]
 
 
 def _parents(meta: dict[str, Any]) -> list[str]:
@@ -297,7 +332,17 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m deejay_cog.music_rollback",
         description="Undo a music-tagging run from its run record.",
     )
-    parser.add_argument("run_id", help="the run id the record is named by")
+    parser.add_argument(
+        "run_id", nargs="?", default="", help="the run id the record is named by"
+    )
+    parser.add_argument(
+        "--catalog-put-backs",
+        action="store_true",
+        help=(
+            "in place of a run id: every library-sync run that wrote the "
+            "catalog's values over files in a bulk change"
+        ),
+    )
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -309,22 +354,36 @@ def main(argv: list[str] | None = None) -> int:
     if not state_folder:
         print(f"{STATE_FOLDER_VAR} is not set; nothing done.", file=sys.stderr)
         return 2
+    if bool(args.run_id) == args.catalog_put_backs:
+        print("give a run id or --catalog-put-backs, not both", file=sys.stderr)
+        return 2
     drive = GoogleAPI.from_env().drive
+    run_ids = (
+        catalog_put_back_runs(drive, state_folder)
+        if args.catalog_put_backs
+        else [args.run_id]
+    )
+    if not run_ids:
+        print("No library-sync run wrote the catalog's values in a bulk change.")
+        return 0
+    status = 0
+    for run_id in run_ids:
+        status = max(status, _rollback_one(drive, state_folder, run_id, args.apply))
+    return status
+
+
+def _rollback_one(drive: Any, state_folder: str, run_id: str, apply: bool) -> int:
     try:
-        record_name, steps = rollback(
-            drive, state_folder, args.run_id, apply=args.apply
-        )
+        record_name, steps = rollback(drive, state_folder, run_id, apply=apply)
     except RollbackError as exc:
         print(f"{exc}; nothing done.", file=sys.stderr)
         return 2
-    print(
-        f"{'Rolling back' if args.apply else 'Dry run of rolling back'} {record_name}"
-    )
+    print(f"{'Rolling back' if apply else 'Dry run of rolling back'} {record_name}")
     for step in steps:
         print(step.line + (f"  [{step.result}]" if step.result else ""))
     if not steps:
         print("Nothing to undo.")
-    if not args.apply:
+    if not apply:
         print("Nothing was changed. Run again with --apply to carry it out.")
     return 1 if any(s.result.startswith("failed") for s in steps) else 0
 

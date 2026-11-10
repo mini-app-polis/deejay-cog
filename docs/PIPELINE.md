@@ -635,7 +635,9 @@ does not hold them, so writing them would be a retag past the reconcile's
 approvals. A file Drive keeps no revision of from its last sync is left as
 it is and named in the report. Each file is then recorded as synced with
 the values it already had recorded. The report says how many files changed
-and lists every field put back; a dry run lists what it would put back.
+and lists every field put back; a dry run lists what it would put back. Before this, the sync wrote the catalog's values
+over those files instead; `python -m deejay_cog.music_rollback
+--catalog-put-backs --apply` finds every run that did and undoes it.
 
 The write follows the backfill's safety rules: never renamed, moved or
 deleted; head revision kept; audio checked before and after; every write
