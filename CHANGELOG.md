@@ -1,3 +1,15 @@
+# [2.44.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.43.1...v2.44.0) (2026-11-10)
+
+
+### Bug Fixes
+
+* **library-sync:** hold a bulk change instead of writing any revision back over the files ([f286e3f](https://github.com/mini-app-polis/deejay-cog/commit/f286e3f158efb8717c425b9199e123fde500f093))
+
+
+### Features
+
+* **library-restore:** put the library's tags back to what each file held at a time ([d5290a6](https://github.com/mini-app-polis/deejay-cog/commit/d5290a60a78a1ef2367b5ca45eb1b18cbd27d381))
+
 ## [2.43.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.43.0...v2.43.1) (2026-11-10)
 
 
