@@ -1,3 +1,10 @@
+## [2.48.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.48.0...v2.48.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **library-sync:** leave the sync step half the run ([ceaf6ae](https://github.com/mini-app-polis/deejay-cog/commit/ceaf6ae10ae1f0f6dfdcbedc03986688a7b08bb7))
+
 # [2.48.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.47.0...v2.48.0) (2026-11-10)
 
 
