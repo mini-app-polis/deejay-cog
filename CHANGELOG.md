@@ -1,3 +1,10 @@
+## [2.48.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.48.1...v2.48.2) (2026-11-10)
+
+
+### Bug Fixes
+
+* **library-sync:** read each run record once, keeping progress across runs ([fbfa31e](https://github.com/mini-app-polis/deejay-cog/commit/fbfa31eddbc8e8e1ebcc1164b08444fa2ef220ef))
+
 ## [2.48.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.48.0...v2.48.1) (2026-11-10)
 
 
