@@ -1,3 +1,11 @@
+## [2.43.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.43.0...v2.43.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **rollback:** a catalog put-back's rollback forgets the synced values of every file it wrote ([c641066](https://github.com/mini-app-polis/deejay-cog/commit/c641066d597bf90731d7e80cd38174e1ccc57721))
+* **rollback:** a file changed since the run gets back the fields the run wrote that are still there ([d8856f9](https://github.com/mini-app-polis/deejay-cog/commit/d8856f9af847561745d62cc9e70f9b7e87a1ff2f))
+
 # [2.43.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.42.1...v2.43.0) (2026-11-10)
 
 
