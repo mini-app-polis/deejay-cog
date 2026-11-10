@@ -56,10 +56,13 @@ from deejay_cog.music_safety import (
     SOURCE_PROPERTY,
     STATE_FOLDER_VAR,
     file_meta,
+    md5,
     parse_record,
     revision_bytes,
+    tag_snapshot,
     update_contents,
 )
+from deejay_cog.music_tags import write_owned_fields
 
 log = logger_mod.get_logger()
 
@@ -120,7 +123,7 @@ CATALOG_PUT_BACK = "sync (bulk change outside the pipeline put back)"
 
 def catalog_put_back_runs(drive: Any, state_folder: str) -> list[str]:
     """The run ids of the library-sync runs that wrote the catalog's values
-    over files in a bulk change, oldest first."""
+    over files in a bulk change, newest first."""
     files = drive.list_files(
         parent_id=state_folder, name_contains="library-sync-", include_folders=False
     )
@@ -138,7 +141,8 @@ def catalog_put_back_runs(drive: Any, state_folder: str) -> list[str]:
         entries = record.get("entries") or []
         if any(e.get("identified_by") == CATALOG_PUT_BACK for e in entries):
             found.append((str(record.get("started_at") or ""), str(record["run_id"])))
-    return [run_id for _, run_id in sorted(found)]
+    # Newest first: each run is undone over the file as the next run left it.
+    return [run_id for _, run_id in sorted(found, reverse=True)]
 
 
 def _parents(meta: dict[str, Any]) -> list[str]:
@@ -198,10 +202,52 @@ def _restore_revision_step(drive: Any, entry: dict[str, Any], name: str) -> Step
     if not written:
         return Step(name, what, skipped="the run had not written the file")
     if meta.get("md5Checksum") != written:
-        return Step(name, what, skipped="changed since the run; left alone")
+        return _restore_fields_step(drive, entry, name)
 
     def restore() -> None:
         update_contents(drive, file_id, name, revision_bytes(drive, file_id, revision))
+
+    return Step(name, what, action=restore, restores=file_id)
+
+
+#: Tag fields a field-by-field undo writes back (never the catalog link).
+_UNDONE_FIELDS = ("title", "artist", "year", "genre", "bpm", "label")
+
+
+def _fields_still_written(entry: dict[str, Any], now: dict[str, str]) -> dict[str, str]:
+    """The fields the run changed that still hold what it wrote, each with
+    the value it replaced. A field changed again since, or one the run
+    emptied, is left."""
+    old = entry.get("old_tags") or {}
+    new = entry.get("new_tags") or {}
+    return {
+        f: str(old[f])
+        for f in _UNDONE_FIELDS
+        if old.get(f) and old.get(f) != new.get(f) and now.get(f) == new.get(f)
+    }
+
+
+def _restore_fields_step(drive: Any, entry: dict[str, Any], name: str) -> Step:
+    """A file changed since the run: put back, field by field, only what
+    the run wrote that is still there; whatever changed it since is kept."""
+    file_id = str(entry["file_id"])
+    data: bytes = drive.download_file_bytes(file_id).data
+    fields = _fields_still_written(entry, tag_snapshot(data))
+    what = "put back the fields the run wrote that are still there"
+    if not fields:
+        return Step(
+            name, what, skipped="changed since the run, none of its values left"
+        )
+    what = f"put back {', '.join(sorted(fields))} (changed since the run)"
+    seen = md5(data)
+
+    def restore() -> None:
+        now: bytes = drive.download_file_bytes(file_id).data
+        if md5(now) != seen:
+            raise RuntimeError("the file changed again while planning")
+        tagged = write_owned_fields(now, fields)
+        if tagged is not None:
+            update_contents(drive, file_id, name, tagged)
 
     return Step(name, what, action=restore, restores=file_id)
 
@@ -267,10 +313,13 @@ def rollback(
     *,
     apply: bool,
     forget: Callable[[list[str]], None] = forget_synced_values,
+    forget_every_file: bool = False,
 ) -> tuple[str, list[Step]]:
     """Plan, and with ``apply`` carry out, the undoing of one run. Returns
     the record's name and the steps, each with its result. ``forget`` is
-    given the files whose tags were put back."""
+    given the files whose tags were put back; with ``forget_every_file``,
+    every file the run wrote in place, put back now or not (a catalog
+    put-back recorded values its files no longer hold)."""
     record_id, record_name = find_record(drive, state_folder, run_id)
     record = parse_record(drive.download_file_bytes(record_id).data)
     steps = plan_rollback(drive, record)
@@ -287,10 +336,18 @@ def rollback(
             log.exception("music-rollback: %s failed", step.what)
             step.result = f"failed: {type(exc).__name__}: {exc}"
     restored = [s.restores for s in steps if s.restores and s.result == "done"]
+    if forget_every_file:
+        restored = sorted(
+            {
+                str(e["file_id"])
+                for e in record.get("entries") or []
+                if e.get("action") == "in_place" and e.get("written_md5")
+            }
+        )
     if restored:
         step = Step(
             "library registry",
-            f"forget the values {len(restored)} restored files were synced with",
+            f"forget the values {len(restored)} files were synced with",
         )
         try:
             forget(restored)
@@ -367,13 +424,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     status = 0
     for run_id in run_ids:
-        status = max(status, _rollback_one(drive, state_folder, run_id, args.apply))
+        status = max(
+            status,
+            _rollback_one(
+                drive, state_folder, run_id, args.apply, args.catalog_put_backs
+            ),
+        )
     return status
 
 
-def _rollback_one(drive: Any, state_folder: str, run_id: str, apply: bool) -> int:
+def _rollback_one(
+    drive: Any, state_folder: str, run_id: str, apply: bool, forget_every_file: bool
+) -> int:
     try:
-        record_name, steps = rollback(drive, state_folder, run_id, apply=apply)
+        record_name, steps = rollback(
+            drive,
+            state_folder,
+            run_id,
+            apply=apply,
+            forget_every_file=forget_every_file,
+        )
     except RollbackError as exc:
         print(f"{exc}; nothing done.", file=sys.stderr)
         return 2

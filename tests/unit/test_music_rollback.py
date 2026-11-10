@@ -3,13 +3,14 @@ nothing touched that has changed since the run."""
 
 from __future__ import annotations
 
+import io
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from music_fakes import FakeDrive, mp3
-from mutagen.id3 import TIT2, TPE1
+from mutagen.id3 import ID3, TBPM, TCON, TIT2, TPE1
 
 from deejay_cog import music_rollback as rb
 from deejay_cog import new_music
@@ -218,7 +219,7 @@ def test_the_catalog_put_back_runs_are_found_and_no_others(drive: FakeDrive) -> 
     dry = RunRecord("library-sync", "pb-3", FlowMode.DRY_RUN).attach(drive, STATE)
     dry.finish("complete")
 
-    assert rb.catalog_put_back_runs(drive, STATE) == ["pb-1", "pb-2"]
+    assert rb.catalog_put_back_runs(drive, STATE) == ["pb-2", "pb-1"]
 
 
 def test_the_command_rolls_back_every_catalog_put_back(
@@ -235,3 +236,59 @@ def test_the_command_rolls_back_every_catalog_put_back(
     out = capsys.readouterr().out
     assert "library-sync-pb-1.json" in out and "library-sync-pb-2.json" in out
     assert rb.main(["pb-1", "--catalog-put-backs"]) == 2
+
+
+def test_a_file_changed_since_gets_back_only_what_the_run_wrote_still_there(
+    drive: FakeDrive,
+) -> None:
+    """The reconcile rounding a BPM after the run does not keep the run's
+    title and genre on the file."""
+
+    def song(title: str, genre: str, bpm: str) -> bytes:
+        return mp3(
+            TIT2(encoding=3, text=[title]),
+            TCON(encoding=3, text=[genre]),
+            TBPM(encoding=3, text=[bpm]),
+        )
+
+    original = song("Show Me", "R&B", "115.42")
+    file_id = drive.add("ShowMe_Usher_115.mp3", "library", original)
+    record = RunRecord("library-sync", "pb-1", FlowMode.WRITE).attach(drive, STATE)
+    write_in_place(
+        drive,
+        record,
+        file_id=file_id,
+        name="ShowMe_Usher_115.mp3",
+        original=original,
+        tagged=song("Show Me (Remix)", "R&B/Soul", "115.42"),
+        identified_by=rb.CATALOG_PUT_BACK,
+    )
+    record.finish("complete")
+    drive.items[file_id].data = song("Show Me (Remix)", "R&B/Soul", "115.4")
+
+    _, steps = rb.rollback(drive, STATE, "pb-1", apply=True, forget=lambda _: None)
+
+    frames = {
+        k: str(f.text[0]) for k, f in ID3(io.BytesIO(drive.items[file_id].data)).items()
+    }
+    assert frames == {"TIT2": "Show Me", "TCON": "R&B", "TBPM": "115.4"}
+    assert steps[0].result == "done"
+
+
+def test_a_catalog_put_back_forgets_every_file_it_wrote(drive: FakeDrive) -> None:
+    """A file already put back, or changed since, still sheds the values
+    the put-back recorded for it."""
+    file_id = _sync_run(drive, "pb-1", rb.CATALOG_PUT_BACK)
+    drive.items[file_id].data = mp3(TIT2(encoding=3, text=["Show Me"]))
+    forgotten: list[list[str]] = []
+
+    rb.rollback(
+        drive,
+        STATE,
+        "pb-1",
+        apply=True,
+        forget=forgotten.append,
+        forget_every_file=True,
+    )
+
+    assert forgotten == [[file_id]]
