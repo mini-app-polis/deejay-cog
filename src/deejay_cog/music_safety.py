@@ -246,7 +246,7 @@ def revision_bytes(drive: Any, file_id: str, revision_id: str) -> bytes:
 
 def revision_at(drive: Any, file_id: str, when: datetime) -> str | None:
     """The id of the file's last revision Drive saved at or before ``when``:
-    what the file held then. None when Drive no longer has one that old."""
+    what the file held then. None when Drive keeps none that old."""
     found: tuple[datetime, str] | None = None
     token: str | None = None
     while True:
