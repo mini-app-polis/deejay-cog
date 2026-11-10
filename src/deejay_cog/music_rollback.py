@@ -319,7 +319,7 @@ def rollback(
     the record's name and the steps, each with its result. ``forget`` is
     given the files whose tags were put back; with ``forget_every_file``,
     every file the run wrote in place, put back now or not (a catalog
-    put-back recorded values its files no longer hold)."""
+    put-back records the catalog's values, which its files do not hold)."""
     record_id, record_name = find_record(drive, state_folder, run_id)
     record = parse_record(drive.download_file_bytes(record_id).data)
     steps = plan_rollback(drive, record)
