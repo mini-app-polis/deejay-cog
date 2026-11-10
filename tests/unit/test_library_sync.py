@@ -749,6 +749,65 @@ def test_the_report_counts_the_run_records_read_for_replaced_values(
     assert summary.run_records_read == 1
 
 
+def test_a_run_record_already_read_is_not_downloaded_again(
+    settings, wired, drive, catalog
+) -> None:
+    [drive_id] = _flooded(drive, catalog, 1)
+    _replaced_by_pipeline(drive, drive_id, {"genre": "Pop"}, {"genre": "R&B/Soul"})
+    sync.library_sync(run_id="y-1")
+    catalog.marked.clear()
+
+    summary = sync.library_sync(run_id="y-2")
+
+    assert summary.run_records_read == 0 and summary.run_records_left == 0
+    index = _state(drive, sync.REPLACED_INDEX_NAME)
+    assert index is not None and index["replaced"][drive_id] == {"genre": ["Pop"]}
+
+
+def test_run_records_left_unread_hold_the_edits_and_keep_the_progress(
+    settings, wired, drive, catalog, posted, monkeypatch
+) -> None:
+    ids = _flooded(drive, catalog, 2)
+    for n, drive_id in enumerate(ids):
+        record = {
+            "flow": "library-reconcile",
+            "run_id": f"r-{n}",
+            "entries": [
+                {
+                    "file_id": drive_id,
+                    "original_name": "x.mp3",
+                    "action": "in_place",
+                    "state": "done",
+                    "old_tags": {"genre": "Pop"},
+                    "new_tags": {"genre": "R&B/Soul"},
+                }
+            ],
+        }
+        drive.add(
+            f"library-reconcile-r-{n}.json",
+            STATE,
+            json.dumps(record).encode(),
+            mime_type="application/json",
+        )
+    # Seconds left at each check: the cutoff is half of the first; the
+    # second record comes up after the share is spent.
+    left = iter([100.0, 80.0, 40.0])
+    monkeypatch.setattr(sync, "remaining_seconds", lambda: next(left, 40.0))
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.run_records_read == 1 and summary.run_records_left == 1
+    assert catalog.edited == [] and summary.edits_left == ids
+    assert catalog.marked == []  # files with unread edits are not synced
+    assert "run_records_left" in _text(posted)
+
+    monkeypatch.setattr(sync, "remaining_seconds", lambda: None)
+    again = sync.library_sync(run_id="y-2")
+
+    assert again.run_records_read == 1 and again.run_records_left == 0
+    assert again.edits_read == 2
+
+
 def test_a_bad_bulk_limit_does_nothing(
     settings, wired, catalog, posted, monkeypatch
 ) -> None:

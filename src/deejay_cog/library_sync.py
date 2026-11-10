@@ -160,7 +160,12 @@ _STATE_SUFFIXES = (
     "-tried.json",
     "-approvals.json",
     "-listing.json",
+    "-index.json",
 )
+
+#: The state file holding the values pipeline writes replaced, by file and
+#: field, and which run records it has read (by Drive modified time).
+REPLACED_INDEX_NAME = "library-sync-replaced-index.json"
 
 #: A BPM this close to the catalog's is a re-measure, not a change: left.
 BPM_REMEASURE = 1.5
@@ -249,6 +254,8 @@ class SyncSummary:
     #: Run records read for the values the pipeline replaced, and how long.
     run_records_read: int = 0
     run_records_sec: float = 0.0
+    #: Run records not read yet: the edits step's share ran out first.
+    run_records_left: int = 0
     #: Each field a file changed, by outcome: "path: field 'a' -> 'b'".
     edits: dict[str, list[str]] = field(default_factory=dict)
     #: Files changed outside the pipeline when that was a bulk change.
@@ -424,44 +431,106 @@ def _norm(name: str, value: str | None) -> str:
 
 
 def _replaced_values(
-    drive: Any, state: str, file_ids: set[str], summary: SyncSummary | None = None
-) -> dict[str, dict[str, set[str]]]:
+    drive: Any,
+    state: str,
+    file_ids: set[str],
+    summary: SyncSummary,
+    cutoff: float | None = None,
+) -> dict[str, dict[str, set[str]]] | None:
     """Per file and owned field, every value a pipeline write replaced in
     that file: the old tags of each in-place write the library flows' run
     records show was done. A field that now holds one of these was written
-    back over the pipeline's value, not edited."""
-    found: dict[str, dict[str, set[str]]] = {}
-    for f in drive.list_files(
-        parent_id=state, name_contains="library-", include_folders=False
-    ):
-        name = str(f.name)
+    back over the pipeline's value, not edited.
+
+    The values are kept in ``REPLACED_INDEX_NAME`` with the Drive modified
+    time each record was read at, so a run reads only the records that are
+    new or changed since. The index is saved as records are read, so a run
+    that runs out of its share keeps its progress and the next one goes on.
+    None when not every record could be read in this run (its share or the
+    run deadline ran out): no file's fields can be judged until they are."""
+    store = StateFile(drive, state, REPLACED_INDEX_NAME)
+    index = store.load() or {}
+    seen: dict[str, Any] = dict(index.get("records") or {})
+    replaced: dict[str, dict[str, list[str]]] = {
+        file_id: {name: list(values) for name, values in fields.items()}
+        for file_id, fields in (index.get("replaced") or {}).items()
+    }
+    pending = [
+        f
+        for f in drive.list_files(
+            parent_id=state, name_contains="library-", include_folders=False
+        )
+        if _is_run_record(str(f.name))
+        and (str(f.id) not in seen or seen[str(f.id)] != f.modified_time)
+    ]
+    read = 0
+    try:
+        for f in pending:
+            if shared_deadline_passed():
+                summary.stopped = "run deadline reached reading the run records"
+                break
+            if _edits_share_spent(cutoff):
+                break
+            try:
+                raw = drive.download_file_bytes(str(f.id)).data
+            except Exception:
+                if shared_deadline_passed():
+                    summary.stopped = "run deadline reached reading the run records"
+                    break
+                raise
+            summary.run_records_read += 1
+            read += 1
+            seen[str(f.id)] = f.modified_time
+            try:
+                record = parse_record(raw)
+            except ValueError:
+                continue
+            for file_id, name, was in _replaced_in(record):
+                values = replaced.setdefault(file_id, {}).setdefault(name, [])
+                if was not in values:
+                    values.append(was)
+    finally:
+        summary.run_records_left = len(pending) - read
+        if read:
+            with without_run_deadline():
+                store.save({"records": seen, "replaced": replaced})
+    if summary.run_records_left:
+        return None
+    return {
+        file_id: {name: set(values) for name, values in fields.items()}
+        for file_id, fields in replaced.items()
+        if file_id in file_ids
+    }
+
+
+def _is_run_record(name: str) -> bool:
+    """Whether a state folder file is a library flow's (writing) run record."""
+    return (
+        name.startswith("library-")
+        and name.endswith(".json")
+        and not name.endswith(".dry-run.json")
+        and not name.endswith(_STATE_SUFFIXES)
+    )
+
+
+def _replaced_in(record: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """(file id, field, old value) for each owned field a done, in-place
+    write in ``record`` changed."""
+    found: list[tuple[str, str, str]] = []
+    for entry in record.get("entries") or []:
+        file_id = str(entry.get("file_id") or "")
         if (
-            not name.startswith("library-")
-            or not name.endswith(".json")
-            or name.endswith(".dry-run.json")
-            or name.endswith(_STATE_SUFFIXES)
+            not file_id
+            or entry.get("action") != "in_place"
+            or entry.get("state") != "done"
         ):
             continue
-        if summary is not None:
-            summary.run_records_read += 1
-        try:
-            record = parse_record(drive.download_file_bytes(str(f.id)).data)
-        except ValueError:
-            continue
-        for entry in record.get("entries") or []:
-            file_id = str(entry.get("file_id") or "")
-            if (
-                file_id not in file_ids
-                or entry.get("action") != "in_place"
-                or entry.get("state") != "done"
-            ):
-                continue
-            old = entry.get("old_tags") or {}
-            new = entry.get("new_tags") or {}
-            for field_name in OWNED_FIELDS:
-                was = _norm(field_name, old.get(field_name))
-                if was and was != _norm(field_name, new.get(field_name)):
-                    found.setdefault(file_id, {}).setdefault(field_name, set()).add(was)
+        old = entry.get("old_tags") or {}
+        new = entry.get("new_tags") or {}
+        for field_name in OWNED_FIELDS:
+            was = _norm(field_name, old.get(field_name))
+            if was and was != _norm(field_name, new.get(field_name)):
+                found.append((file_id, field_name, was))
     return found
 
 
@@ -588,13 +657,19 @@ def _edits(
     if not rows:
         return
     started = monotonic()
-    replaced = _replaced_values(
-        drive, settings.state, {row.drive_file_id for row in rows}, summary
-    )
+    try:
+        found = _replaced_values(
+            drive, settings.state, {row.drive_file_id for row in rows}, summary, cutoff
+        )
+    except StateProblem as exc:
+        summary.failed.append(f"edits made in files not read: {exc}")
+        found = None
     summary.run_records_sec = monotonic() - started
-    if _edits_share_spent(cutoff):
-        summary.edits_left = [row.drive_file_id for row in rows]
+    if found is None or _edits_share_spent(cutoff):
+        if not summary.stopped:
+            summary.edits_left = [row.drive_file_id for row in rows]
         return
+    replaced = found
     record = RunRecord(
         FLOW_NAME,
         run_id,
@@ -820,6 +895,14 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
     report.count("changed_in_drive_left", len(summary.edits_left))
     report.count("run_records_read", summary.run_records_read)
     report.count("run_records_sec", round(summary.run_records_sec))
+    report.count("run_records_left", summary.run_records_left)
+    if summary.run_records_left:
+        report.notice(
+            "run_records_left",
+            f"{summary.run_records_left} run records not read yet for the values "
+            "the pipeline replaced; what was read is kept, and the next run "
+            "reads the rest before any file's edits are judged.",
+        )
     if summary.edits_left:
         report.notice(
             "changed_in_drive_left",

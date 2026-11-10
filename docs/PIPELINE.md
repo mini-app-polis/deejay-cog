@@ -691,6 +691,15 @@ files not read are counted as `changed_in_drive_left`, with a notice, and a
 later run reads them. The sync step runs on the rest of the time but skips
 those files: writing one and marking it synced would hide its unread edit.
 
+**Run records are read once.** The values pipeline writes replaced, by file
+and field, are kept in `library-sync-replaced-index.json` in the state
+folder with the Drive modified time of each run record read, so a run
+downloads only the records that are new or changed since. The index is
+saved as records are read, inside the edits step's share: when the share
+runs out first, the run keeps its progress, reports `run_records_left`,
+judges no file's edits (they are counted as `changed_in_drive_left`) and the
+next run reads the rest.
+
 The write follows the backfill's safety rules: never renamed, moved or
 deleted; head revision kept; audio checked before and after; every write
 in `library-sync-<run id>.json`, which `music_rollback` undoes (and then
@@ -702,7 +711,8 @@ nothing synced.
 
 **Report:** counts for `waiting`, `written`, `would_write`,
 `already_in_step`, `nothing_moved`, `values_recorded`,
-`changed_in_drive_read`, `changed_in_drive_left`, `edits_<outcome>`, `marked_synced` and `failed`;
+`changed_in_drive_read`, `changed_in_drive_left`, `run_records_read`,
+`run_records_sec`, `run_records_left`, `edits_<outcome>`, `marked_synced` and `failed`;
 every edit sent up, held or overwritten by the file's path and field; every
 file written by its path with the fields written; and how
 many files each entry's change reached.
