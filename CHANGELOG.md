@@ -1,3 +1,10 @@
+# [2.42.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.41.1...v2.42.0) (2026-11-10)
+
+
+### Features
+
+* **sync:** a bulk change made outside the pipeline is put back, not sent up to the catalog ([ae4c458](https://github.com/mini-app-polis/deejay-cog/commit/ae4c4582dceccc55e09cd593b53dd70295abafc6))
+
 ## [2.41.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.41.0...v2.41.1) (2026-11-09)
 
 
