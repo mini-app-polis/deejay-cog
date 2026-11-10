@@ -58,6 +58,8 @@ class DriveItem:
     trashed: bool = False
     app_properties: dict[str, str] = field(default_factory=dict)
     revisions: list[bytes] = field(default_factory=list)
+    #: When Drive saved each revision (RFC 3339), or None: one per revision.
+    revision_times: list[str | None] = field(default_factory=list)
     kept: set[str] = field(default_factory=set)
     modified_time: str | None = None
 
@@ -82,7 +84,9 @@ class FakeDrive:
         self.service = SimpleNamespace(
             files=lambda: SimpleNamespace(get=self._svc_get),
             revisions=lambda: SimpleNamespace(
-                update=self._svc_rev_update, get_media=self._svc_rev_get
+                update=self._svc_rev_update,
+                get_media=self._svc_rev_get,
+                list=self._svc_rev_list,
             ),
         )
 
@@ -92,7 +96,16 @@ class FakeDrive:
         file_id = f"f{next(self._ids)}"
         self.items[file_id] = DriveItem(file_id, name, [folder], data, **kw)
         self.items[file_id].revisions.append(data)
+        self.items[file_id].revision_times.append(None)
         return file_id
+
+    def rewrite(self, file_id: str, data: bytes, when: str) -> None:
+        """Another tool writing ``data`` over the file at ``when``: a new
+        revision, saved then."""
+        item = self.items[file_id]
+        item.data = data
+        item.revisions.append(data)
+        item.revision_times.append(when)
 
     def in_folder(self, folder: str) -> list[DriveItem]:
         return [i for i in self.items.values() if folder in i.parents and not i.trashed]
@@ -200,6 +213,24 @@ class FakeDrive:
 
         return _Request(run)
 
+    def _svc_rev_list(
+        self,
+        fileId: str,  # noqa: N803
+        fields: str,
+        pageSize: int,  # noqa: N803
+        pageToken: str | None,  # noqa: N803
+    ) -> _Request:
+        del fields, pageSize, pageToken
+        item = self.items[fileId]
+        return _Request(
+            lambda: {
+                "revisions": [
+                    {"id": f"r{n}", "modifiedTime": when}
+                    for n, when in enumerate(item.revision_times, start=1)
+                ]
+            }
+        )
+
     def _svc_rev_get(self, fileId: str, revisionId: str) -> _Request:  # noqa: N803
         return _Request(
             lambda: self.items[fileId].revisions[int(revisionId.removeprefix("r")) - 1]
@@ -238,6 +269,7 @@ class FakeDrive:
         data = Path(filepath).read_bytes()
         self.items[file_id].data = data
         self.items[file_id].revisions.append(data)
+        self.items[file_id].revision_times.append(None)
 
     def move_file(
         self, file_id: str, *, new_parent_id: str, remove_from_parents: bool = True

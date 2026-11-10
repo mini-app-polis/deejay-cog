@@ -101,9 +101,16 @@ from deejay_cog.music_safety import (
     file_meta,
     flow_mode,
     local_run_id,
+    revision_at,
+    revision_bytes,
     write_in_place,
 )
-from deejay_cog.music_tags import display_fields, read_tag_row, write_owned_fields
+from deejay_cog.music_tags import (
+    OWNED_FRAMES,
+    display_fields,
+    read_tag_row,
+    write_owned_fields,
+)
 
 log = logger_mod.get_logger()
 
@@ -118,8 +125,8 @@ DEFAULT_CHUNK_SIZE = 50
 
 #: More files changed outside the pipeline than this, in one run, is not an
 #: editing session but a bulk write (a tagger writing its own stored tags
-#: back over the library): nothing goes up, and the catalog's values are put
-#: back over those files instead.
+#: back over the library): nothing goes up, and each file's own values from
+#: its last sync are put back instead.
 EDIT_FLOOD_VAR = "LIBRARY_SYNC_EDIT_FLOOD"
 DEFAULT_EDIT_FLOOD = 25
 
@@ -207,6 +214,9 @@ class SyncSummary:
     flood: int = 0
     #: Each field put back over a file in a bulk change: "path: field ...".
     put_back: list[str] = field(default_factory=list)
+    #: Files in a bulk change Drive keeps no revision of from their last
+    #: sync: nothing to put back to, so left as they are.
+    left_as_is: list[str] = field(default_factory=list)
     synced: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     #: Files written (or that would be) per entry, as the entry is shown.
@@ -358,9 +368,12 @@ def _put_back(
     run_id: str,
     summary: SyncSummary,
 ) -> None:
-    """A bulk change: write the catalog's values back over each file where
-    the file now differs, and record the files as synced. Nothing goes up."""
-    displays = _displays(api, rows)
+    """A bulk change: undo it. Each file gets back, field by field, what it
+    held at its last sync (Drive's revision from then), where it now differs.
+    The catalog's values are never written here: a file the pipeline never
+    brought in step keeps what it had, and the reconcile, with the owner's
+    approvals, stays what brings it in step. Nothing goes up; each file is
+    recorded as synced with the values it already had recorded."""
     record = RunRecord(
         FLOW_NAME,
         run_id,
@@ -377,31 +390,33 @@ def _put_back(
                 summary.stopped = f"run deadline reached before putting back {row.path}"
                 status = "stopped"
                 break
-            display = displays.get(row.catalog_id) if row.catalog_id else None
-            if display is None:
-                summary.failed.append(
-                    f"{row.path} (its catalog entry {row.catalog_id} is gone)"
-                )
+            if row.synced is None or row.last_synced is None:
                 continue
             summary.edits_read += 1
             try:
-                want = display_fields(display, label=row.edit_label)
                 meta = file_meta(drive, row.drive_file_id)
                 if meta.get("trashed"):
                     continue
+                before_id = revision_at(drive, row.drive_file_id, row.last_synced)
+                if before_id is None:
+                    summary.left_as_is.append(row.path)
+                    done[row.drive_file_id] = row.synced
+                    continue
+                before = read_tag_row(
+                    revision_bytes(drive, row.drive_file_id, before_id)
+                )
                 data: bytes = drive.download_file_bytes(row.drive_file_id).data
                 have = read_tag_row(data)
                 back = {
                     name: value
-                    for name, value in want.items()
-                    if value
+                    for name in OWNED_FRAMES
+                    if (value := before.get(name) or "")
                     and (have.get(name) or "") != value
                     and not (name == "bpm" and _bpm_close(have.get(name), value))
                 }
-                values = LibraryFileTags(**want)
                 tagged = write_owned_fields(data, back) if back else None
                 if tagged is None:
-                    done[row.drive_file_id] = values
+                    done[row.drive_file_id] = row.synced
                     continue
                 name = str(meta.get("name") or row.path.rsplit("/", 1)[-1])
                 entry = write_in_place(
@@ -411,7 +426,7 @@ def _put_back(
                     name=name,
                     original=data,
                     tagged=tagged,
-                    identified_by="sync (bulk change outside the pipeline put back)",
+                    identified_by="sync (bulk change outside the pipeline undone)",
                     head_revision=meta.get("headRevisionId"),
                 )
                 for field_name in sorted(back):
@@ -420,7 +435,7 @@ def _put_back(
                         f"{back[field_name]!r}"
                     )
                 if entry.state == "done":
-                    done[row.drive_file_id] = values
+                    done[row.drive_file_id] = row.synced
             except AudioChanged as exc:
                 summary.aborted = f"{row.path}: {exc}"
                 status = "aborted"
@@ -657,9 +672,11 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
             "bulk_change_put_back",
             f"{summary.flood} files changed outside the pipeline since their last "
             f"sync, more than {EDIT_FLOOD_VAR} allows: nothing was sent up to the "
-            "catalog, and its values were put back over the files",
+            "catalog, and each file got back what it held at its last sync",
         )
         report.count("fields_put_back", len(summary.put_back))
+        for path in summary.left_as_is:
+            report.notice("no_revision_from_last_sync_left_as_is", path)
         for line in summary.put_back:
             if summary.mode.writes:
                 report.updated("put back over a file (bulk change)", line)
