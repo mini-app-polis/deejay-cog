@@ -50,6 +50,12 @@ Every other change goes up, however many files changed. Only past the
 ``LIBRARY_SYNC_EDIT_FLOOD`` backstop (default 1000) is the whole change
 held, nothing sent up and nothing written.
 
+**The edits step leaves the sync step half the run.** Reading changed files
+stops once ``EDITS_SHARE`` of the run's time is spent; the files not read
+are counted in the report (``changed_in_drive_left``) and read on a later
+run. The sync step runs on the rest, but skips those files: writing one and
+marking it synced would hide its unread edit from the next run.
+
 The write follows ADR-0007: never renamed, moved or deleted, the head
 revision kept, the audio checked before and after, and every write in the
 run record (``library-sync-<run id>.json``), which
@@ -91,7 +97,7 @@ from mini_app_polis.api.contract import (
     LibraryFilesSyncedResult,
     LibraryFileTags,
 )
-from mini_app_polis.deadline import without_run_deadline
+from mini_app_polis.deadline import remaining_seconds, without_run_deadline
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.pipeline_status import run_report
@@ -161,6 +167,10 @@ BPM_REMEASURE = 1.5
 
 #: Registry rows asked for per page when looking for files changed in Drive.
 REGISTRY_PAGE = 500
+
+#: The share of the run's time the edits step may spend before it stops, so
+#: the sync step always gets the rest.
+EDITS_SHARE = 0.5
 
 
 class Catalog(Protocol):
@@ -234,6 +244,11 @@ class SyncSummary:
     unmoved: list[str] = field(default_factory=list)
     #: Files read because they changed in Drive after their last sync.
     edits_read: int = 0
+    #: Drive ids of changed files not read: the edits step's share ran out.
+    edits_left: list[str] = field(default_factory=list)
+    #: Run records read for the values the pipeline replaced, and how long.
+    run_records_read: int = 0
+    run_records_sec: float = 0.0
     #: Each field a file changed, by outcome: "path: field 'a' -> 'b'".
     edits: dict[str, list[str]] = field(default_factory=dict)
     #: Files changed outside the pipeline when that was a bulk change.
@@ -350,6 +365,23 @@ def _mark(api: Catalog, done: dict[str, LibraryFileTags]) -> None:
         )
 
 
+def _edits_cutoff() -> float | None:
+    """The seconds left at which the edits step stops: ``EDITS_SHARE`` of
+    what is left now, which the sync step then has. None with no deadline."""
+    remaining = remaining_seconds()
+    if remaining is None:
+        return None
+    return remaining * (1 - EDITS_SHARE)
+
+
+def _edits_share_spent(cutoff: float | None) -> bool:
+    """Whether the edits step has used its share of the run."""
+    if cutoff is None:
+        return False
+    remaining = remaining_seconds()
+    return remaining is not None and remaining <= cutoff
+
+
 def _changed_since_sync(drive: Any, settings: BackfillSettings) -> dict[str, datetime]:
     """When Drive last saw each listed file change, from the scan's listing."""
     listing = StateFile(drive, settings.state, SCAN_LISTING_NAME).load() or {}
@@ -392,7 +424,7 @@ def _norm(name: str, value: str | None) -> str:
 
 
 def _replaced_values(
-    drive: Any, state: str, file_ids: set[str]
+    drive: Any, state: str, file_ids: set[str], summary: SyncSummary | None = None
 ) -> dict[str, dict[str, set[str]]]:
     """Per file and owned field, every value a pipeline write replaced in
     that file: the old tags of each in-place write the library flows' run
@@ -410,6 +442,8 @@ def _replaced_values(
             or name.endswith(_STATE_SUFFIXES)
         ):
             continue
+        if summary is not None:
+            summary.run_records_read += 1
         try:
             record = parse_record(drive.download_file_bytes(str(f.id)).data)
         except ValueError:
@@ -521,6 +555,7 @@ def _edits(
     flood: int,
     run_id: str,
     summary: SyncSummary,
+    cutoff: float | None = None,
 ) -> None:
     """Send up what files changed outside the pipeline since their last
     sync. A field that now holds a value the pipeline replaced in that file
@@ -552,9 +587,14 @@ def _edits(
         return
     if not rows:
         return
+    started = monotonic()
     replaced = _replaced_values(
-        drive, settings.state, {row.drive_file_id for row in rows}
+        drive, settings.state, {row.drive_file_id for row in rows}, summary
     )
+    summary.run_records_sec = monotonic() - started
+    if _edits_share_spent(cutoff):
+        summary.edits_left = [row.drive_file_id for row in rows]
+        return
     record = RunRecord(
         FLOW_NAME,
         run_id,
@@ -563,7 +603,7 @@ def _edits(
         folders={"root": settings.root, "state": settings.state},
     ).attach(drive, settings.state)
     try:
-        _read_edits(drive, api, record, rows, replaced, summary)
+        _read_edits(drive, api, record, rows, replaced, summary, cutoff)
     finally:
         with without_run_deadline():
             if record.entries:
@@ -585,10 +625,14 @@ def _read_edits(
     rows: list[LibraryFile],
     replaced: dict[str, dict[str, set[str]]],
     summary: SyncSummary,
+    cutoff: float | None,
 ) -> None:
-    for row in rows:
+    for index, row in enumerate(rows):
         if shared_deadline_passed():
             summary.stopped = f"run deadline reached before reading {row.path}"
+            return
+        if _edits_share_spent(cutoff):
+            summary.edits_left = [r.drive_file_id for r in rows[index:]]
             return
         summary.edits_read += 1
         try:
@@ -632,7 +676,7 @@ def _sync(
     run_id: str,
     summary: SyncSummary,
 ) -> None:
-    _edits(drive, api, settings, flood, run_id, summary)
+    _edits(drive, api, settings, flood, run_id, summary, _edits_cutoff())
     if summary.stopped or summary.aborted:
         if summary.aborted:
             _report_abort(run_id, summary)
@@ -640,6 +684,8 @@ def _sync(
     rows = api.list_library_files_needing_sync(
         library_root_id=settings.root, limit=chunk_size, offset=0
     )
+    left = set(summary.edits_left)
+    rows = [row for row in rows if row.drive_file_id not in left]
     summary.waiting = len(rows)
     if not rows:
         return
@@ -771,6 +817,16 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
     report.count("nothing_moved", len(summary.unmoved))
     report.count("values_recorded", len(summary.recorded))
     report.count("changed_in_drive_read", summary.edits_read)
+    report.count("changed_in_drive_left", len(summary.edits_left))
+    report.count("run_records_read", summary.run_records_read)
+    report.count("run_records_sec", round(summary.run_records_sec))
+    if summary.edits_left:
+        report.notice(
+            "changed_in_drive_left",
+            f"{len(summary.edits_left)} files changed in Drive were not read: the "
+            f"edits step stopped at {EDITS_SHARE:.0%} of the run so the sync step "
+            "could run. A later run reads them; they were not synced in this one.",
+        )
     if summary.flood:
         report.issue(
             "bulk_change_held",

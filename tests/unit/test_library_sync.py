@@ -708,6 +708,47 @@ def test_a_bulk_change_in_a_dry_run_writes_nothing(
         assert _frames(drive.items[drive_id].data)["TIT2"] == "honesty"
 
 
+def test_the_edits_step_stops_at_its_share_and_the_sync_step_still_runs(
+    settings, wired, drive, catalog, posted, monkeypatch
+) -> None:
+    ids = _flooded(drive, catalog, 3)
+    # Seconds left at each check: the cutoff is half of the first.
+    left = iter([100.0, 90.0, 80.0, 40.0])
+    monkeypatch.setattr(sync, "remaining_seconds", lambda: next(left, 40.0))
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert not summary.stopped
+    assert summary.edits_read == 1 and len(catalog.edited) == 1
+    assert summary.edits_left == ids[1:]
+    # The sync step ran, on the file whose edits were read only: one not
+    # read must not be marked synced over its unread edit.
+    assert [i for m in catalog.marked for i in m.drive_file_ids] == ids[:1]
+    assert "changed_in_drive_left" in _text(posted)
+
+
+def test_with_no_deadline_the_edits_step_reads_every_changed_file(
+    settings, wired, drive, catalog, monkeypatch
+) -> None:
+    _flooded(drive, catalog, 3)
+    monkeypatch.setattr(sync, "remaining_seconds", lambda: None)
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.edits_read == 3 and summary.edits_left == []
+
+
+def test_the_report_counts_the_run_records_read_for_replaced_values(
+    settings, wired, drive, catalog
+) -> None:
+    [drive_id] = _flooded(drive, catalog, 1)
+    _replaced_by_pipeline(drive, drive_id, {"genre": "Pop"}, {"genre": "R&B/Soul"})
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.run_records_read == 1
+
+
 def test_a_bad_bulk_limit_does_nothing(
     settings, wired, catalog, posted, monkeypatch
 ) -> None:
