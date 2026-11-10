@@ -717,3 +717,229 @@ def test_a_bad_bulk_limit_does_nothing(
 
     assert summary.problems and catalog.marked == []
     assert sync.EDIT_FLOOD_VAR in _text(posted)
+
+
+# -- stale write-backs, told by value ---------------------------------------
+
+
+def _replaced_by_pipeline(
+    drive: FakeDrive, drive_id: str, old: dict[str, str], new: dict[str, str]
+) -> None:
+    """A run record showing the pipeline replaced ``old`` with ``new`` in
+    the file, in place."""
+    record = {
+        "flow": "library-reconcile",
+        "run_id": "r-1",
+        "entries": [
+            {
+                "file_id": drive_id,
+                "original_name": drive.items[drive_id].name,
+                "action": "in_place",
+                "state": "done",
+                "old_tags": old,
+                "new_tags": new,
+            }
+        ],
+    }
+    drive.add(
+        "library-reconcile-r-1.json",
+        STATE,
+        json.dumps(record).encode(),
+        mime_type="application/json",
+    )
+
+
+def _changed(
+    drive: FakeDrive, catalog: FakeCatalog, entry: uuid.UUID, now: bytes, name: str
+) -> str:
+    """A linked file that held the catalog's values at its last sync and has
+    held ``now`` since a tool wrote it after."""
+    held = _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", bpm="95.5")
+    drive_id = _linked(drive, catalog, name, held, entry)
+    drive.items[drive_id].revision_times[0] = _BEFORE_SYNC
+    drive.rewrite(drive_id, now, _AFTER_SYNC)
+    return drive_id
+
+
+def test_the_backstop_is_high_by_default() -> None:
+    assert sync.DEFAULT_EDIT_FLOOD == 1000
+
+
+def test_more_files_than_the_old_limit_with_real_edits_all_go_up(
+    settings, wired, drive, catalog
+) -> None:
+    """A big editing session is not a bulk change: none of its values is one
+    the pipeline replaced, so every change goes up and nothing is put back."""
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    now = _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", "Neo Soul", bpm="95.5")
+    ids = [_changed(drive, catalog, entry, now, f"honesty{n}.mp3") for n in range(30)]
+    _listed(drive, dict.fromkeys(ids, _AFTER_SYNC))
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.flood == 0 and summary.put_back == []
+    assert {e.drive_file_id for e in catalog.edited} == set(ids)
+    assert all(e.tags.genre == "Neo Soul" for e in catalog.edited)
+    assert drive.writes(except_folder=STATE) == []
+
+
+def test_a_value_the_pipeline_replaced_is_put_back_and_not_sent_up(
+    settings, wired, drive, catalog, posted
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    stale = _song(entry, "honesty", "Pink Sweat$ feat. Kehlani", bpm="95.5")
+    drive_id = _changed(drive, catalog, entry, stale, "honesty.mp3")
+    _replaced_by_pipeline(drive, drive_id, {"title": "honesty"}, {"title": "Honesty"})
+    _listed(drive, {drive_id: _AFTER_SYNC})
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert _frames(drive.items[drive_id].data)["TIT2"] == "Honesty"
+    assert _frames(drive.items[drive_id].data)["COMM::eng"] == "cue: drop at 1:02"
+    [edited] = catalog.edited
+    assert edited.tags.title == "Honesty"  # what the file holds again
+    assert summary.put_back == ["RnB/honesty.mp3: title 'honesty' -> 'Honesty'"]
+    record = _state(drive, "library-sync-y-1.json")
+    assert record is not None
+    [put] = [e for e in record["entries"] if e["file_id"] == drive_id]
+    assert put["identified_by"] == sync.STALE_PUT_BACK and put["state"] == "done"
+    assert put["revision_kept"]  # music_rollback can undo it
+    assert "stale write-back put back" in str(posted.call_args_list)
+
+
+def test_a_file_with_both_has_the_stale_field_put_back_and_the_edit_sent_up(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    both = _song(entry, "honesty", "Pink Sweat$ feat. Kehlani", "Neo Soul", "95.5")
+    drive_id = _changed(drive, catalog, entry, both, "honesty.mp3")
+    _replaced_by_pipeline(drive, drive_id, {"title": "honesty"}, {"title": "Honesty"})
+    _listed(drive, {drive_id: _AFTER_SYNC})
+
+    summary = sync.library_sync(run_id="y-1")
+
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TIT2"] == "Honesty" and frames["TCON"] == "Neo Soul"
+    [edited] = catalog.edited
+    assert edited.tags.title == "Honesty" and edited.tags.genre == "Neo Soul"
+    assert summary.put_back == ["RnB/honesty.mp3: title 'honesty' -> 'Honesty'"]
+
+
+def test_a_stale_field_with_no_revision_from_the_last_sync_is_left_and_named(
+    settings, wired, drive, catalog, posted
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    stale = _song(entry, "honesty", "Pink Sweat$ feat. Kehlani", bpm="95.5")
+    drive_id = _changed(drive, catalog, entry, stale, "honesty.mp3")
+    drive.items[drive_id].revision_times[0] = None  # Drive kept none that old
+    _replaced_by_pipeline(drive, drive_id, {"title": "honesty"}, {"title": "Honesty"})
+    _listed(drive, {drive_id: _AFTER_SYNC})
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert _frames(drive.items[drive_id].data)["TIT2"] == "honesty"
+    assert catalog.edited == [] and summary.put_back == []
+    assert drive.writes(except_folder=STATE) == []
+    assert "stale_write_back_left" in str(posted.call_args_list)
+
+
+def test_a_last_sync_value_the_pipeline_also_replaced_is_not_put_back(
+    settings, wired, drive, catalog
+) -> None:
+    """The revision from the last sync may itself hold a stale value; then
+    no value the file held is safe, and the field is left."""
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    stale = _song(entry, "honesty", "Pink Sweat$ feat. Kehlani", bpm="95.5")
+    drive_id = _changed(drive, catalog, entry, stale, "honesty.mp3")
+    _replaced_by_pipeline(
+        drive, drive_id, {"title": "honesty"}, {"title": "Honesty (Live)"}
+    )
+    drive.add(
+        "library-sync-r-0.json",
+        STATE,
+        json.dumps(
+            {
+                "flow": "library-sync",
+                "run_id": "r-0",
+                "entries": [
+                    {
+                        "file_id": drive_id,
+                        "original_name": "honesty.mp3",
+                        "action": "in_place",
+                        "state": "done",
+                        "old_tags": {"title": "Honesty"},
+                        "new_tags": {"title": "HONESTY"},
+                    }
+                ],
+            }
+        ).encode(),
+        mime_type="application/json",
+    )
+    _listed(drive, {drive_id: _AFTER_SYNC})
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert _frames(drive.items[drive_id].data)["TIT2"] == "honesty"
+    assert summary.put_back == [] and catalog.edited == []
+    assert summary.stale_left
+
+
+def test_a_dry_run_names_the_put_back_and_writes_nothing(
+    settings, wired, drive, catalog, posted, monkeypatch
+) -> None:
+    monkeypatch.setitem(FLAGS, sync.MODE_FLAG, "dry-run")
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    stale = _song(entry, "honesty", "Pink Sweat$ feat. Kehlani", bpm="95.5")
+    drive_id = _changed(drive, catalog, entry, stale, "honesty.mp3")
+    _replaced_by_pipeline(drive, drive_id, {"title": "honesty"}, {"title": "Honesty"})
+    _listed(drive, {drive_id: _AFTER_SYNC})
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert _frames(drive.items[drive_id].data)["TIT2"] == "honesty"
+    assert drive.writes(except_folder=STATE) == []
+    [edited] = catalog.edited
+    assert edited.preview is True and edited.tags.title == "Honesty"
+    assert summary.put_back and "would_put_back" in str(posted.call_args_list)
+
+
+def test_a_dry_run_record_and_files_left_in_the_state_folder_are_not_records(
+    settings, wired, drive, catalog
+) -> None:
+    """Only done, in-place writes in real run records count as replaced."""
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    stale = _song(entry, "honesty", "Pink Sweat$ feat. Kehlani", bpm="95.5")
+    drive_id = _changed(drive, catalog, entry, stale, "honesty.mp3")
+    planned = {
+        "flow": "library-reconcile",
+        "run_id": "r-2",
+        "entries": [
+            {
+                "file_id": drive_id,
+                "action": "in_place",
+                "state": "planned",
+                "old_tags": {"title": "honesty"},
+                "new_tags": {"title": "Honesty"},
+            }
+        ],
+    }
+    drive.add(
+        "library-reconcile-r-2.dry-run.json",
+        STATE,
+        json.dumps(planned).encode(),
+        mime_type="application/json",
+    )
+    _listed(drive, {drive_id: _AFTER_SYNC})
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.put_back == []
+    [edited] = catalog.edited
+    assert edited.tags.title == "honesty"  # an edit, as far as the run can tell

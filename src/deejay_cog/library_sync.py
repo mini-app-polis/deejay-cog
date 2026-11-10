@@ -41,6 +41,15 @@ written back; a BPM a player re-measured is left; a title or artist that
 does not split into the catalog's parts cleanly, and the like, is held and
 named in the report. A file with no recorded values is not read.
 
+**A stale write-back is told by its value.** A changed field that now holds
+a value the pipeline replaced in that file (the old tags of a done, in-place
+write in any library run record) was written back over the pipeline's
+value, not edited: it is put back with what the file held at its last sync
+(its Drive revision then, never the catalog's value) and not sent up.
+Every other change goes up, however many files changed. Only past the
+``LIBRARY_SYNC_EDIT_FLOOD`` backstop (default 1000) is the whole change
+held, nothing sent up and nothing written.
+
 The write follows ADR-0007: never renamed, moved or deleted, the head
 revision kept, the audio checked before and after, and every write in the
 run record (``library-sync-<run id>.json``), which
@@ -101,6 +110,10 @@ from deejay_cog.music_safety import (
     file_meta,
     flow_mode,
     local_run_id,
+    parse_record,
+    revision_at,
+    revision_bytes,
+    tag_snapshot,
     write_in_place,
 )
 from deejay_cog.music_tags import (
@@ -121,12 +134,27 @@ MODE_FLAG = "flags.deejay_cog.library_sync"
 CHUNK_SIZE_VAR = "LIBRARY_SYNC_CHUNK_SIZE"
 DEFAULT_CHUNK_SIZE = 50
 
-#: More files changed outside the pipeline than this, in one run, is not an
-#: editing session but a bulk write (a tagger writing its own stored tags
-#: back over the library): nothing goes up and nothing is written; the files
-#: keep what they hold and the report says so.
+#: A backstop, well above any editing session: more files changed outside
+#: the pipeline than this, in one run, is a bulk write the value check below
+#: did not catch: nothing goes up and nothing is written; the files keep
+#: what they hold and the report says so.
 EDIT_FLOOD_VAR = "LIBRARY_SYNC_EDIT_FLOOD"
-DEFAULT_EDIT_FLOOD = 25
+DEFAULT_EDIT_FLOOD = 1000
+
+#: The owned fields a write-back can make stale (never the catalog link).
+OWNED_FIELDS = ("title", "artist", "year", "genre", "bpm", "label")
+
+#: How a run record marks a field put back after a stale write-back.
+STALE_PUT_BACK = "sync (stale write-back put back)"
+
+#: The state folder's files that are not run records.
+_STATE_SUFFIXES = (
+    "-manifest.json",
+    "-cursor.json",
+    "-tried.json",
+    "-approvals.json",
+    "-listing.json",
+)
 
 #: A BPM this close to the catalog's is a re-measure, not a change: left.
 BPM_REMEASURE = 1.5
@@ -210,6 +238,10 @@ class SyncSummary:
     edits: dict[str, list[str]] = field(default_factory=dict)
     #: Files changed outside the pipeline when that was a bulk change.
     flood: int = 0
+    #: Each stale field put back (or that would be): "path: field 'a' -> 'b'".
+    put_back: list[str] = field(default_factory=list)
+    #: Stale fields left as they are, and why.
+    stale_left: list[str] = field(default_factory=list)
     synced: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     #: Files written (or that would be) per entry, as the entry is shown.
@@ -353,6 +385,123 @@ def _bpm_close(a: str | None, b: str | None) -> bool:
         return False
 
 
+def _norm(name: str, value: str | None) -> str:
+    """A field's text as compared: stripped, and a year by its first four."""
+    text = (value or "").strip()
+    return text[:4] if name == "year" else text
+
+
+def _replaced_values(
+    drive: Any, state: str, file_ids: set[str]
+) -> dict[str, dict[str, set[str]]]:
+    """Per file and owned field, every value a pipeline write replaced in
+    that file: the old tags of each in-place write the library flows' run
+    records show was done. A field that now holds one of these was written
+    back over the pipeline's value, not edited."""
+    found: dict[str, dict[str, set[str]]] = {}
+    for f in drive.list_files(
+        parent_id=state, name_contains="library-", include_folders=False
+    ):
+        name = str(f.name)
+        if (
+            not name.startswith("library-")
+            or not name.endswith(".json")
+            or name.endswith(".dry-run.json")
+            or name.endswith(_STATE_SUFFIXES)
+        ):
+            continue
+        try:
+            record = parse_record(drive.download_file_bytes(str(f.id)).data)
+        except ValueError:
+            continue
+        for entry in record.get("entries") or []:
+            file_id = str(entry.get("file_id") or "")
+            if (
+                file_id not in file_ids
+                or entry.get("action") != "in_place"
+                or entry.get("state") != "done"
+            ):
+                continue
+            old = entry.get("old_tags") or {}
+            new = entry.get("new_tags") or {}
+            for field_name in OWNED_FIELDS:
+                was = _norm(field_name, old.get(field_name))
+                if was and was != _norm(field_name, new.get(field_name)):
+                    found.setdefault(file_id, {}).setdefault(field_name, set()).add(was)
+    return found
+
+
+def _put_back_stale(
+    drive: Any,
+    record: RunRecord,
+    row: LibraryFile,
+    data: bytes,
+    replaced: dict[str, set[str]],
+    summary: SyncSummary,
+) -> tuple[bytes, bool]:
+    """Put back each field of ``row``'s file that now holds a value the
+    pipeline replaced in it, with what the file held at its last sync (its
+    Drive revision then, never the catalog's value). Returns the file's
+    bytes as they are after it (the put-back's in a dry run too, so the
+    edits sent up are the file's real ones), and False when a stale field
+    had to be left, so the file's fields must not go up. Raises
+    :class:`AudioChanged`."""
+    now = tag_snapshot(data)
+    synced = row.synced.model_dump() if row.synced is not None else {}
+    stale = sorted(
+        f
+        for f in OWNED_FIELDS
+        if _norm(f, now.get(f)) in replaced.get(f, set())
+        and _norm(f, now.get(f)) != _norm(f, synced.get(f))
+    )
+    if not stale:
+        return data, True
+    rev = (
+        revision_at(drive, row.drive_file_id, row.last_synced)
+        if row.last_synced is not None
+        else None
+    )
+    if rev is None:
+        summary.stale_left.append(
+            f"{row.path}: {', '.join(stale)} left as they are (Drive keeps no "
+            "revision from its last sync)"
+        )
+        return data, False
+    before = tag_snapshot(revision_bytes(drive, row.drive_file_id, rev))
+    back: dict[str, str] = {}
+    left = False
+    for f in stale:
+        was = before.get(f) or ""
+        if not was or _norm(f, was) in replaced.get(f, set()):
+            # Empty then, or itself a value the pipeline replaced: no value
+            # the file held is safe to put back.
+            summary.stale_left.append(
+                f"{row.path}: {f} {now.get(f)!r} left as it is (its last-sync "
+                f"value {was!r} is not one to put back)"
+            )
+            left = True
+            continue
+        back[f] = was
+    tagged = write_owned_fields(data, back) if back else None
+    if tagged is None:
+        return data, not left
+    meta = file_meta(drive, row.drive_file_id)
+    name = str(meta.get("name") or row.path.rsplit("/", 1)[-1])
+    write_in_place(
+        drive,
+        record,
+        file_id=row.drive_file_id,
+        name=name,
+        original=data,
+        tagged=tagged,
+        identified_by=STALE_PUT_BACK,
+        head_revision=meta.get("headRevisionId"),
+    )
+    for f in sorted(back):
+        summary.put_back.append(f"{row.path}: {f} {now.get(f)!r} -> {back[f]!r}")
+    return tagged, not left
+
+
 def _hold(api: Catalog, rows: list[LibraryFile], summary: SyncSummary) -> None:
     """A bulk change: hold it. Nothing goes up to the catalog and nothing is
     written to the files — no automatic answer can tell a stale write-back
@@ -374,7 +523,10 @@ def _edits(
     summary: SyncSummary,
 ) -> None:
     """Send up what files changed outside the pipeline since their last
-    sync; a bulk change (more than ``flood`` files) is held instead."""
+    sync. A field that now holds a value the pipeline replaced in that file
+    is a stale write-back, put back first and not sent up; every other
+    change is an edit and goes up, however many files changed. Past the
+    ``flood`` backstop, the whole change is held instead."""
     try:
         changed = _changed_since_sync(drive, settings)
     except StateProblem as exc:
@@ -398,6 +550,42 @@ def _edits(
         summary.flood = len(rows)
         _hold(api, rows, summary)
         return
+    if not rows:
+        return
+    replaced = _replaced_values(
+        drive, settings.state, {row.drive_file_id for row in rows}
+    )
+    record = RunRecord(
+        FLOW_NAME,
+        run_id,
+        summary.mode,
+        stage="stale write-backs put back",
+        folders={"root": settings.root, "state": settings.state},
+    ).attach(drive, settings.state)
+    try:
+        _read_edits(drive, api, record, rows, replaced, summary)
+    finally:
+        with without_run_deadline():
+            if record.entries:
+                status = (
+                    "aborted"
+                    if summary.aborted
+                    else "stopped"
+                    if summary.stopped
+                    else "complete"
+                )
+                record.finish(status)
+                summary.record_name = record.file_name
+
+
+def _read_edits(
+    drive: Any,
+    api: Catalog,
+    record: RunRecord,
+    rows: list[LibraryFile],
+    replaced: dict[str, dict[str, set[str]]],
+    summary: SyncSummary,
+) -> None:
     for row in rows:
         if shared_deadline_passed():
             summary.stopped = f"run deadline reached before reading {row.path}"
@@ -405,6 +593,12 @@ def _edits(
         summary.edits_read += 1
         try:
             data: bytes = drive.download_file_bytes(row.drive_file_id).data
+            data, clean = _put_back_stale(
+                drive, record, row, data, replaced.get(row.drive_file_id, {}), summary
+            )
+            if not clean:
+                # A stale field that could not be put back must not go up.
+                continue
             tags = {k: v or None for k, v in read_tag_row(data).items()}
             result = api.report_library_file_edited(
                 LibraryFileEdited(
@@ -413,6 +607,9 @@ def _edits(
                     preview=not summary.mode.writes,
                 )
             )
+        except AudioChanged as exc:
+            summary.aborted = f"{row.path}: {exc}"
+            return
         except Exception as exc:  # noqa: BLE001 — one file must not end the run
             if shared_deadline_passed():
                 summary.stopped = f"run deadline reached reading {row.path}"
@@ -578,11 +775,19 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
         report.issue(
             "bulk_change_held",
             f"{summary.flood} files changed outside the pipeline since their last "
-            f"sync, more than {EDIT_FLOOD_VAR} allows: nothing was sent up to the "
-            "catalog and nothing was written; the files keep what they hold. "
-            "If the change was a stale write-back, repair it with "
+            f"sync, more than the {EDIT_FLOOD_VAR} backstop allows: nothing was "
+            "sent up to the catalog and nothing was written; the files keep what "
+            "they hold. If the change was a stale write-back, repair it with "
             "deejay_cog.library_restore.",
         )
+    report.count("stale_fields_put_back", len(summary.put_back))
+    for line in summary.put_back:
+        if summary.mode.writes:
+            report.updated("stale write-back put back", line)
+        else:
+            report.notice("would_put_back", line)
+    for line in summary.stale_left:
+        report.issue("stale_write_back_left", line)
     for outcome, lines in sorted(summary.edits.items()):
         report.count(f"edits_{outcome}", len(lines))
     for line in summary.edits.get("sent_up", []):

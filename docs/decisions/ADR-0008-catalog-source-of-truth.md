@@ -360,6 +360,20 @@ catalog (stats, summaries, the collection) uses the same rules.
 5. **It runs with the sync**, under the sync's mode, and only for files
    whose values a sync has recorded: off until the library is reconciled.
 
+## Decided with the owner, 2026-11-10 (a stale write-back is told by its value)
+
+1. **A changed field is stale when it holds a value the pipeline replaced
+   in that file**, as any library run record's old tags show for a done,
+   in-place write, however long ago. A stale field is put back with what
+   the file held at its last sync, never the catalog's value, and is not
+   sent up; every other change is an edit and goes up, however many files
+   changed, so a large editing session in VirtualDJ is not blocked.
+2. **The count limit stays only as a backstop**, `LIBRARY_SYNC_EDIT_FLOOD`
+   at 1000 by default: past it the whole change is held, as before.
+3. **A stale field with no safe value to put back is left and named**: no
+   Drive revision from the last sync, an empty value then, or one the
+   pipeline also replaced. That file's fields do not go up.
+
 ## Decided with the owner, 2026-11-09 (the steps' modes are feature flags)
 
 1. **Each step's mode lives in the API's feature flags**, not in a setting.
