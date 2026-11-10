@@ -190,3 +190,48 @@ def test_the_command_is_dry_unless_told_to_apply(
 
     assert rb.main(["r-1", "--apply"]) == 0
     assert drive.items[ids["delivered"]].parents == [IN]
+
+
+def _sync_run(drive: FakeDrive, run_id: str, identified_by: str) -> str:
+    """A library-sync run that wrote one file in place."""
+    original = mp3(TIT2(encoding=3, text=["Show Me"]))
+    file_id = drive.add(f"ShowMe_{run_id}.mp3", "library", original)
+    record = RunRecord("library-sync", run_id, FlowMode.WRITE).attach(drive, STATE)
+    write_in_place(
+        drive,
+        record,
+        file_id=file_id,
+        name=f"ShowMe_{run_id}.mp3",
+        original=original,
+        tagged=mp3(TIT2(encoding=3, text=["Show Me (Remix)"])),
+        identified_by=identified_by,
+    )
+    record.finish("complete")
+    return file_id
+
+
+def test_the_catalog_put_back_runs_are_found_and_no_others(drive: FakeDrive) -> None:
+    _sync_run(drive, "pb-1", rb.CATALOG_PUT_BACK)
+    _sync_run(drive, "pb-2", rb.CATALOG_PUT_BACK)
+    _sync_run(drive, "chunk-1", "sync (catalog wins on the fields that moved)")
+    _sync_run(drive, "undo-1", "sync (bulk change outside the pipeline undone)")
+    dry = RunRecord("library-sync", "pb-3", FlowMode.DRY_RUN).attach(drive, STATE)
+    dry.finish("complete")
+
+    assert rb.catalog_put_back_runs(drive, STATE) == ["pb-1", "pb-2"]
+
+
+def test_the_command_rolls_back_every_catalog_put_back(
+    drive: FakeDrive, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    _sync_run(drive, "pb-1", rb.CATALOG_PUT_BACK)
+    _sync_run(drive, "pb-2", rb.CATALOG_PUT_BACK)
+    monkeypatch.setenv("MUSIC_TAGGING_STATE_FOLDER_ID", STATE)
+    google = MagicMock()
+    google.from_env.return_value = SimpleNamespace(drive=drive)
+    monkeypatch.setattr(rb, "GoogleAPI", google)
+
+    assert rb.main(["--catalog-put-backs"]) == 0
+    out = capsys.readouterr().out
+    assert "library-sync-pb-1.json" in out and "library-sync-pb-2.json" in out
+    assert rb.main(["pb-1", "--catalog-put-backs"]) == 2
