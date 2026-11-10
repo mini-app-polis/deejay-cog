@@ -191,7 +191,7 @@ backfill does, and:
 | Setting | Default | What it does |
 |---------|---------|--------------|
 | `LIBRARY_SYNC_CHUNK_SIZE` | `50` | Files written per run; a whole number of at least 1. Each is downloaded to write its tags. |
-| `LIBRARY_SYNC_EDIT_FLOOD` | `25` | More files changed outside the pipeline than this in one run is a bulk change: nothing goes up to the catalog and nothing is written; the files keep what they hold, and the run reports it. A whole number of at least 1. |
+| `LIBRARY_SYNC_EDIT_FLOOD` | `1000` | A backstop: more files changed outside the pipeline than this in one run is a bulk change the value check did not catch: nothing goes up to the catalog and nothing is written; the files keep what they hold, and the run reports it. Below it, a changed field holding a value the pipeline replaced in that file is put back, and every other change goes up (see [PIPELINE.md](PIPELINE.md#library-sync)). A whole number of at least 1. |
 
 See [PIPELINE.md](PIPELINE.md#library-sync).
 

@@ -643,14 +643,35 @@ not split into parts cleanly, a genre the vocabulary does not place, or a
 one-character label is held: the file keeps it and the report names it. A
 dry run asks the API what would happen and changes nothing.
 
-**A bulk change is held.** When more files changed outside the pipeline
-since their last sync than `LIBRARY_SYNC_EDIT_FLOOD` allows, that is not an
-editing session but a bulk write — a tagger writing stored tags back over the
-library, or a repair. No automatic answer tells a stale write-back from the
-state a repair should restore, so nothing goes up to the catalog and nothing
-is written: the files keep what they hold, each is recorded as synced with
-the values it already had recorded, and the run ends at WARN with a
-`bulk_change_held` issue naming the count. A stale write-back is repaired with
+**A stale write-back is told from an edit by its value.** A tagger can
+write its own stored tags back over the library (VirtualDJ did on
+2026-11-09), and those old values must not reach the catalog as edits.
+Before a changed file's fields go up, each owned field (title, artist,
+year, genre, BPM, label) that differs from the value recorded at its last
+sync is checked against the values the pipeline replaced in that file: the
+old tags of every in-place write the library flows' run records
+(`library-*-<run id>.json` in the state folder) show was done, in any run.
+A field that now holds one of them is stale: it is put back, with the value
+the file held at its last sync (its Drive revision from then, never the
+catalog's), and is not sent up. Every other changed field is an edit and
+goes up as above, however many files changed in the run, so a big editing
+session goes through. A file with both has the stale field put back and the
+edit sent up. A stale field is left as it is, and named in the report
+(`stale_write_back_left`), when Drive keeps no revision from the file's last
+sync, when the value then was empty, or when it too is one the pipeline
+replaced; that file's fields do not go up. The report names every field
+put back (`stale write-back put back`; `would_put_back` in a dry run, which
+writes nothing) and every edit sent up. A put-back is an in-place write
+under the rules below, marked `sync (stale write-back put back)` in the
+run's record.
+
+**A bulk change is held.** `LIBRARY_SYNC_EDIT_FLOOD` (default 1000) is a
+backstop against a bulk write the value check does not catch: when more
+files changed outside the pipeline since their last sync than it allows,
+nothing goes up to the catalog and nothing is written: the files keep what
+they hold, each is recorded as synced with the values it already had
+recorded, and the run ends at WARN with a `bulk_change_held` issue naming
+the count. A stale write-back is repaired with
 `python -m deejay_cog.library_restore <time> --apply`, which puts each file's
 tags back to its last Drive revision before that time. A run record that
 marks writes of the catalog's values over files in a bulk change is undone
