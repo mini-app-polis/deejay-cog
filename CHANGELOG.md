@@ -1,3 +1,10 @@
+## [2.42.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.42.0...v2.42.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **library-sync:** undo a bulk change from each file's revision at its last sync, never with the catalog's values ([5213580](https://github.com/mini-app-polis/deejay-cog/commit/521358092785f1cdc1250680db89f24cc7898e23))
+
 # [2.42.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.41.1...v2.42.0) (2026-11-10)
 
 
