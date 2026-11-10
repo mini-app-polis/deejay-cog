@@ -73,6 +73,14 @@ replace what the API held, so the owner's review page on the WCS site always
 shows each file's latest. A run that cannot send them says so in its report
 and carries on; the next pass sends them again.
 
+**Long-open differences.** ``library-reconcile-open.json`` in the state
+folder keeps when each open difference was first seen (a difference whose
+values change starts again). Every run counts those open longer than
+``LONG_OPEN_DAYS`` (``long_open``): by then a full pass has had the chance
+to settle them, so each has no decision or one that cannot apply. The first
+run to find any warns (``long_open``, with the count by kind); it warns
+again only after the count has been back to zero.
+
 **Approvals** are the owner's, set on the review page and read from the API
 by each write run (``GET /v1/catalog/library/reconcile/approvals``)::
 
@@ -184,6 +192,12 @@ CHUNK_SIZE_VAR = "LIBRARY_RECONCILE_CHUNK_SIZE"
 DEFAULT_CHUNK_SIZE = 50
 
 CURSOR_NAME = f"{FLOW_NAME}-cursor.json"
+#: Every open difference and when it was first seen open, across runs.
+OPEN_NAME = f"{FLOW_NAME}-open.json"
+
+#: A difference open this long has had a full pass to close and did not:
+#: it has no decision, or its decision cannot apply. The report warns once.
+LONG_OPEN_DAYS = 7
 APPROVALS_NAME = f"{FLOW_NAME}-approvals.json"
 
 #: The kinds a difference is filed under, in the order they are reported.
@@ -636,6 +650,9 @@ class ReconcileSummary:
     reviewed: list[str] = field(default_factory=list)
     open: list[Difference] = field(default_factory=list)
     review_problem: str = ""
+    long_open: dict[str, int] = field(default_factory=dict)
+    long_open_warn: bool = False
+    open_problem: str = ""
 
     @property
     def files_with_differences(self) -> int:
@@ -959,6 +976,7 @@ def _reconcile(
                 record.finish(status)
             _save_state(cursor_store, cursor, drive, settings, run_id, summary)
             _send_review(api, run_id, summary)
+            _track_open(drive, settings, summary)
     if summary.aborted:
         _report_abort(run_id, summary)
 
@@ -997,6 +1015,65 @@ def _save_state(
         }
     )
     _save_record(drive, settings.state, run_id, summary)
+
+
+def _open_key(diff: Difference) -> str:
+    return f"{diff.drive_file_id}|{diff.field}"
+
+
+def _track_open(
+    drive: Any, settings: BackfillSettings, summary: ReconcileSummary
+) -> None:
+    """Keep when each open difference was first seen, and count those open
+    longer than ``LONG_OPEN_DAYS`` by kind.
+
+    For every file this run compared, its entries are replaced by what is
+    open on it now; a difference whose values changed starts again. A run
+    warns once when the count first goes above zero, and again only after
+    it has been back to zero. A failure is reported, never raised."""
+    store = StateFile(drive, settings.state, OPEN_NAME)
+    try:
+        held = store.load() or {}
+        entries: dict[str, dict[str, str]] = dict(held.get("open") or {})
+        compared = set(summary.reviewed)
+        now = datetime.now(UTC)
+        stamp = now.isoformat(timespec="seconds")
+        kept = {k: v for k, v in entries.items() if k.split("|", 1)[0] not in compared}
+        for diff in summary.open:
+            key = _open_key(diff)
+            was = entries.get(key)
+            same = (
+                was is not None
+                and was.get("file") == diff.file_value
+                and was.get("catalog") == diff.catalog_value
+            )
+            kept[key] = {
+                "since": was["since"] if same and was else stamp,
+                "kind": diff.kind,
+                "path": diff.path,
+                "file": diff.file_value,
+                "catalog": diff.catalog_value,
+            }
+        cutoff = now.timestamp() - LONG_OPEN_DAYS * 86400
+        long_open: dict[str, int] = {}
+        for value in kept.values():
+            if datetime.fromisoformat(value["since"]).timestamp() <= cutoff:
+                long_open[value["kind"]] = long_open.get(value["kind"], 0) + 1
+        warned = bool(held.get("warned"))
+        summary.long_open = long_open
+        summary.long_open_warn = bool(long_open) and not warned
+        store.save(
+            {
+                "flow": FLOW_NAME,
+                "version": 1,
+                "open": kept,
+                "warned": bool(long_open),
+                "updated_at": stamp,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 — the tracker is not the run
+        log.exception("library-reconcile: could not track open differences")
+        summary.open_problem = f"{type(exc).__name__}: {exc}"
 
 
 def _save_record(
@@ -1107,6 +1184,21 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
             "the differences did not reach the review page "
             f"({summary.review_problem}); the next pass sends them again",
         )
+    if summary.open_problem:
+        report.issue(
+            "open_not_tracked",
+            f"how long differences have been open was not recorded "
+            f"({summary.open_problem})",
+        )
+    long_open = sum(summary.long_open.values())
+    if summary.long_open_warn:
+        kinds = ", ".join(f"{k} {n}" for k, n in sorted(summary.long_open.items()))
+        report.issue(
+            "long_open",
+            f"{long_open} differences have been open over {LONG_OPEN_DAYS} days "
+            f"({kinds}): decide them on the review page",
+        )
+    report.count("long_open", long_open)
     report.count("compared", summary.compared)
     report.count("matching", summary.matching)
     report.count("with_differences", summary.files_with_differences)

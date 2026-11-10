@@ -862,3 +862,97 @@ def test_audio_that_would_change_stops_the_write_and_keeps_the_cursor(
     assert _state(drive, rec.CURSOR_NAME)["position"] == 0
     assert drive.writes(except_folder=STATE) == []
     assert finding.call_args.args[1] == "ERROR"
+
+
+# ---------------------------------------------------------------------------
+# Long-open differences
+# ---------------------------------------------------------------------------
+
+
+def _age_open(drive: FakeDrive, days: int) -> None:
+    """Move every recorded difference's first sighting ``days`` back."""
+    held = _state(drive, rec.OPEN_NAME)
+    assert held is not None
+    since = (dt.datetime.now(dt.UTC) - dt.timedelta(days=days)).isoformat()
+    for value in held["open"].values():
+        value["since"] = since
+    store = StateFile(drive, STATE, rec.OPEN_NAME)
+    store.load()  # the file it writes over
+    store.save(held)
+
+
+def test_each_open_difference_is_recorded_with_when_it_was_first_seen(
+    settings, wired, drive, catalog
+) -> None:
+    [drive_id] = _library(drive, catalog, [{"genre": "Neo Soul"}])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    held = _state(drive, rec.OPEN_NAME)
+    assert list(held["open"]) == [f"{drive_id}|genre"]
+    assert held["open"][f"{drive_id}|genre"]["kind"] == "genre_remapped"
+    assert summary.long_open == {} and not summary.long_open_warn
+
+
+def test_a_difference_open_over_a_week_warns_once(
+    settings, wired, drive, catalog, posted
+) -> None:
+    _library(drive, catalog, [{"genre": "Neo Soul", "year": "2016"}])
+    rec.library_reconcile(run_id="r-1")
+    _age_open(drive, rec.LONG_OPEN_DAYS + 1)
+
+    first = rec.library_reconcile(run_id="r-2")
+    text = _text(posted)
+    second = rec.library_reconcile(run_id="r-3")
+
+    assert first.long_open == {"genre_remapped": 1, "year_later": 1}
+    assert first.long_open_warn and "long_open" in text
+    assert second.long_open == first.long_open
+    assert not second.long_open_warn  # warned once, not every run
+
+
+def test_a_difference_whose_values_change_starts_again(
+    settings, wired, drive, catalog
+) -> None:
+    [drive_id] = _library(drive, catalog, [{"genre": "Neo Soul"}])
+    rec.library_reconcile(run_id="r-1")
+    _age_open(drive, rec.LONG_OPEN_DAYS + 1)
+    entry = catalog.rows[0].catalog_id
+    catalog.displays[entry] = _display(entry, genre="R&B/Soul")
+
+    summary = rec.library_reconcile(run_id="r-2")
+
+    assert summary.long_open == {}
+
+
+def test_a_settled_difference_leaves_the_record_and_the_warning_resets(
+    settings, writing, drive, posted
+) -> None:
+    [drive_id] = _library(drive, writing, [{"genre": "Neo Soul"}])
+    _approve(writing, kinds=[])
+    rec.library_reconcile(run_id="r-1")
+    _age_open(drive, rec.LONG_OPEN_DAYS + 1)
+    assert rec.library_reconcile(run_id="r-2").long_open_warn
+
+    _approve(writing, kinds=["genre_remapped"])
+    settled = rec.library_reconcile(run_id="r-3")
+
+    assert settled.long_open == {}
+    assert _state(drive, rec.OPEN_NAME)["open"] == {}
+    assert _state(drive, rec.OPEN_NAME)["warned"] is False
+
+
+def test_a_tracker_that_fails_is_reported_and_the_run_carries_on(
+    settings, wired, drive, catalog, posted, monkeypatch
+) -> None:
+    _library(drive, catalog, [{"genre": "Neo Soul"}])
+
+    def broken(*_a, **_k):
+        raise RuntimeError("state folder unreadable")
+
+    monkeypatch.setattr(rec, "_open_key", broken)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.compared == 1 and "unreadable" in summary.open_problem
+    assert "open_not_tracked" in _text(posted)
