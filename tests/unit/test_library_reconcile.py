@@ -20,7 +20,10 @@ from mini_app_polis.api.contract import (
     CatalogDisplayRequest,
     CatalogFillUp,
     CatalogFillUpResult,
+    LibraryFieldEdit,
     LibraryFile,
+    LibraryFileEdited,
+    LibraryFileEditResult,
     LibraryFileRegister,
     ReconcileApprovals,
     ReconcileReport,
@@ -267,6 +270,41 @@ class WritingCatalog(FakeCatalog):
 
     fills: list[tuple[str, CatalogFillUp]] = field(default_factory=list)
     registrations: list[LibraryFileRegister] = field(default_factory=list)
+    kept: list[LibraryFileEdited] = field(default_factory=list)
+    holds: dict[str, str] = field(default_factory=dict)
+
+    def report_library_file_edited(self, payload: LibraryFileEdited):
+        """The entry takes each kept field's file value, unless held."""
+        self.kept.append(payload)
+        row = next(r for r in self.rows if r.drive_file_id == payload.drive_file_id)
+        assert row.catalog_id is not None
+        entry = self.displays[row.catalog_id]
+        tags = payload.tags.model_dump()
+        fields, taken = [], {}
+        for name in payload.keep_file:
+            held = self.holds.get(name)
+            fields.append(
+                LibraryFieldEdit(
+                    field=name,
+                    file=tags[name],
+                    outcome="held" if held else "sent_up",
+                    why=held,
+                )
+            )
+            if not held:
+                taken[name] = tags[name]
+        updates: dict = {}
+        for name, value in taken.items():
+            if name == "year":
+                updates["release_year"] = int(value)
+            elif name == "bpm":
+                updates["bpm"] = float(value)
+            else:
+                updates[name] = value
+        self.displays[row.catalog_id] = entry.model_copy(update=updates)
+        return LibraryFileEditResult(
+            drive_file_id=row.drive_file_id, catalog_id=row.catalog_id, fields=fields
+        )
 
     def fill_up_catalog_entry(self, catalog_id, payload: CatalogFillUp):
         self.fills.append((str(catalog_id), payload))
@@ -625,6 +663,92 @@ def test_an_approved_fill_up_goes_to_the_catalog_and_the_file_is_unchanged(
     assert catalog_id == str(entry) and fill.label == "Atlantic"
     assert summary.filled == ["0.mp3 (label)"]
     assert drive.items[drive_id].data == before
+
+
+def test_a_kind_approved_for_the_file_goes_up_and_the_file_is_unchanged(
+    settings, writing, drive, posted, monkeypatch
+) -> None:
+    [drive_id] = _library(drive, writing, [{"year": "2016", "bpm": "75.4"}])
+    before = drive.items[drive_id].data
+    _approve(writing, file_wins_kinds=["year_later", "bpm_differs"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    [kept] = writing.kept
+    assert kept.drive_file_id == drive_id
+    assert kept.keep_file == ["bpm", "year"]
+    assert (kept.tags.year, kept.tags.bpm) == ("2016", "75.4")
+    assert drive.items[drive_id].data == before  # the file is never written
+    assert writing.registrations == []
+    assert summary.kept == ["0.mp3 (bpm, year)"] and summary.written == []
+    [review] = writing.reviews
+    assert review.differences == []  # both settled
+    assert "catalog took the file's value" in _text(posted)
+
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "dry-run")
+    again = rec.run_reconcile(run_id="r-2", mode=FlowMode.DRY_RUN, api=writing)
+    assert again.compared == 1 and again.matching == 1
+
+
+def test_an_other_difference_goes_up_only_for_the_file_approved_for_it(
+    settings, writing, drive
+) -> None:
+    ids = _library(
+        drive, writing, [{"title": "Something Else"}, {"title": "Something Else"}]
+    )
+    _approve(writing, file_wins_files={ids[1]: ["title"]})
+
+    rec.library_reconcile(run_id="r-1")
+
+    [kept] = writing.kept
+    assert kept.drive_file_id == ids[1] and kept.keep_file == ["title"]
+    assert _frames(drive.items[ids[1]].data)["TIT2"] == "Something Else"
+    [review] = writing.reviews
+    assert [(d.drive_file_id, d.field) for d in review.differences] == [
+        (ids[0], "title")
+    ]
+
+
+def test_a_file_value_the_catalog_holds_stays_open_with_why(
+    settings, writing, drive, posted
+) -> None:
+    [drive_id] = _library(drive, writing, [{"artist": "Charlie Puth & Kaskade"}])
+    writing.holds["artist"] = "not split into parts cleanly"
+    _approve(writing, file_wins_files={drive_id: ["artist"]})
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.kept == []
+    assert summary.kept_held == [
+        "0.mp3: artist 'Charlie Puth & Kaskade' (held: not split into parts cleanly)"
+    ]
+    [review] = writing.reviews
+    assert [d.field for d in review.differences] == ["artist"]
+    assert "kept_held" in _text(posted)
+
+
+def test_one_file_can_settle_some_fields_each_way(settings, writing, drive) -> None:
+    [drive_id] = _library(drive, writing, [{"genre": "Neo Soul", "year": "2016"}])
+    _approve(writing, kinds=["genre_remapped"], file_wins_kinds=["year_later"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TCON"] == "Pop"  # the catalog's genre, written
+    assert frames["TDRC"] == "2016"  # the file's year, kept and sent up
+    assert [k.keep_file for k in writing.kept] == [["year"]]
+    assert summary.written == ["0.mp3 (genre)"] and summary.kept == ["0.mp3 (year)"]
+    assert writing.reviews[0].differences == []
+
+
+def test_a_dry_run_sends_nothing_up_for_the_file(settings, wired, drive) -> None:
+    writing = WritingCatalog()
+    _library(drive, writing, [{"year": "2016"}])
+    _approve(writing, file_wins_kinds=["year_later"])
+
+    summary = rec.run_reconcile(run_id="r-1", mode=FlowMode.DRY_RUN, api=writing)
+
+    assert writing.kept == [] and summary.kept == []
 
 
 def test_without_approvals_a_write_run_writes_nothing(

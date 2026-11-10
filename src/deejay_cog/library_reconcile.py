@@ -77,10 +77,18 @@ and carries on; the next pass sends them again.
 by each write run (``GET /v1/catalog/library/reconcile/approvals``)::
 
     {"kinds": ["case_punctuation", "genre_remapped", "fill_up"],
-     "files": {"<drive file id>": ["title"]}}
+     "files": {"<drive file id>": ["title"]},
+     "file_wins_kinds": ["year_later", "bpm_differs"],
+     "file_wins_files": {"<drive file id>": ["artist"]}}
 
-``kinds`` names the approved kinds (any but ``other``); ``files`` approves
-``other`` differences one file and field at a time. Approvals given before
+Each approval says which side wins, so every difference has a way to
+close. ``kinds`` and ``files`` approve it for the catalog: its value is
+written over the file. ``file_wins_kinds`` and ``file_wins_files`` approve
+it for the file: its value goes up to the catalog entry (``POST
+/v1/catalog/library/files/edited`` with ``keep_file``) and the file is not
+written. ``kinds`` names whole kinds (any but ``other``); ``files`` approves
+``other`` differences one file and field at a time, and the same for the
+file's side. Approvals given before
 the API held them were kept in ``library-reconcile-approvals.json`` in the
 state folder; ``python -m deejay_cog.reconcile_admin seed`` carries that file
 over once, and nothing reads it after. A write run writes each
@@ -89,8 +97,11 @@ through ``write_in_place`` (head revision kept, audio checked before and
 after, every write in ``library-reconcile-<run id>.json``, which
 ``python -m deejay_cog.music_rollback <run id>`` undoes), registers the file
 as synced, and sends approved ``fill_up`` values up to the catalog
-(``POST /v1/catalog/{id}/fill-up``) without writing the file. Anything not
-approved is left as it is and counted. Until any approvals are set a write
+(``POST /v1/catalog/{id}/fill-up``) without writing the file. A difference
+approved for the file goes up to the entry without writing the file; one
+the API holds (a title or artist that does not split into parts cleanly, a
+genre off the vocabulary) stays open on the review page, with the reason in
+the report. Anything not approved is left as it is and counted. Until any approvals are set a write
 run writes nothing. Genre is written; subgenre is not (no frame for it is
 decided). An audio mismatch stops the run with an ERROR finding and leaves
 the cursor on that file.
@@ -118,8 +129,12 @@ from mini_app_polis.api.contract import (
     CatalogDisplayRequest,
     CatalogFillUp,
     CatalogFillUpResult,
+    LibraryFieldEdit,
     LibraryFile,
+    LibraryFileEdited,
+    LibraryFileEditResult,
     LibraryFileRegister,
+    LibraryFileTags,
     ReconcileApprovals,
     ReconcileDifference,
     ReconcileReport,
@@ -222,6 +237,12 @@ class Catalog(Protocol):
 
     def register_library_file(self, payload: LibraryFileRegister) -> LibraryFile:
         """Register a library file, or bring its row up to date."""
+        ...
+
+    def report_library_file_edited(
+        self, payload: LibraryFileEdited
+    ) -> LibraryFileEditResult:
+        """Send a file's fields up to its entry (``keep_file``: the file wins)."""
         ...
 
     def read_reconcile_approvals(self) -> ReconcileApprovals:
@@ -487,18 +508,33 @@ def classify(
 
 @dataclass(frozen=True)
 class Approvals:
-    """What the owner approved: whole kinds, and ``other`` differences one
-    file and field at a time."""
+    """What the owner approved, for the catalog (``kinds``, ``files``) or for
+    the file (``file_kinds``, ``file_files``): whole kinds, and ``other``
+    differences one file and field at a time."""
 
     kinds: frozenset[str] = frozenset()
     files: dict[str, frozenset[str]] = field(default_factory=dict)
+    file_kinds: frozenset[str] = frozenset()
+    file_files: dict[str, frozenset[str]] = field(default_factory=dict)
+
+    def side(self, diff: Difference) -> str | None:
+        """Which value wins for ``diff``: ``catalog``, ``file``, or None when
+        the owner has not approved it."""
+        if diff.kind == "other":
+            if diff.field in self.files.get(diff.drive_file_id, frozenset()):
+                return "catalog"
+            if diff.field in self.file_files.get(diff.drive_file_id, frozenset()):
+                return "file"
+            return None
+        if diff.kind in self.kinds:
+            return "catalog"
+        if diff.kind in self.file_kinds:
+            return "file"
+        return None
 
     def approves(self, diff: Difference) -> bool:
-        """Whether the owner approved ``diff``: its kind, or for ``other``,
-        its file and field."""
-        if diff.kind == "other":
-            return diff.field in self.files.get(diff.drive_file_id, frozenset())
-        return diff.kind in self.kinds
+        """Whether the owner approved ``diff``, for either side."""
+        return self.side(diff) is not None
 
 
 def parse_approvals(data: dict[str, Any]) -> tuple[Approvals, list[str]]:
@@ -537,6 +573,8 @@ def from_api(approvals: ReconcileApprovals) -> Approvals | None:
     return Approvals(
         frozenset(approvals.kinds),
         {str(k): frozenset(v) for k, v in approvals.files.items()},
+        frozenset(approvals.file_wins_kinds),
+        {str(k): frozenset(v) for k, v in approvals.file_wins_files.items()},
     )
 
 
@@ -591,6 +629,8 @@ class ReconcileSummary:
     written: list[str] = field(default_factory=list)
     would_write: list[str] = field(default_factory=list)
     filled: list[str] = field(default_factory=list)
+    kept: list[str] = field(default_factory=list)
+    kept_held: list[str] = field(default_factory=list)
     not_approved: int = 0
     aborted: str = ""
     reviewed: list[str] = field(default_factory=list)
@@ -713,13 +753,18 @@ def _apply_one(
     approvals: Approvals,
     summary: ReconcileSummary,
 ) -> set[str]:
-    """Write one file's approved differences, catalog winning; send its
-    approved fill-ups to the catalog. Return the fields it settled (written,
-    or filled up). Raises :class:`AudioChanged`."""
+    """Settle one file's approved differences: send those approved for the
+    file up to its entry, send its approved fill-ups to the catalog, and
+    write those approved for the catalog over the file. Return the fields it
+    settled. Raises :class:`AudioChanged`."""
     name, data, diffs, wanted = compared
     approved = [d for d in diffs if approvals.approves(d)]
     summary.not_approved += len(diffs) - len(approved)
     settled: set[str] = set()
+    kept = [d for d in approved if approvals.side(d) == "file"]
+    if kept and record.mode.writes:
+        settled |= _keep_file(api, row, data, kept, summary)
+    approved = [d for d in approved if approvals.side(d) == "catalog"]
     fills = [d for d in approved if d.kind == "fill_up"]
     fill = _fill_up(fills)
     to_write = {d.field: wanted[d.field] for d in approved if d.kind != "fill_up"}
@@ -762,6 +807,50 @@ def _apply_one(
         )
     )
     return settled
+
+
+def _keep_file(
+    api: Catalog,
+    row: LibraryFile,
+    data: bytes,
+    kept: list[Difference],
+    summary: ReconcileSummary,
+) -> set[str]:
+    """Send the fields approved for the file up to its entry; return those
+    the entry took. The file is not written. A field the API holds stays
+    open, with why."""
+    fields = sorted({d.field for d in kept if d.field in FIELDS})
+    if not fields:
+        return set()
+    tags = {name: value or None for name, value in read_tag_row(data).items()}
+    result = api.report_library_file_edited(
+        LibraryFileEdited(
+            drive_file_id=row.drive_file_id,
+            tags=LibraryFileTags(**tags),
+            keep_file=fields,  # type: ignore[arg-type]
+        )
+    )
+    outcomes: dict[str, LibraryFieldEdit] = {f.field: f for f in result.fields}
+    taken: set[str] = set()
+    for name in fields:
+        edit = outcomes.get(name)
+        if edit is None:
+            # The API already shows the file's value; the next pass compares
+            # again, and this says why it may still differ.
+            summary.kept_held.append(
+                f"{row.path}: {name} (the catalog already shows the file's value)"
+            )
+            continue
+        if edit.outcome == "sent_up":
+            taken.add(name)
+        else:
+            summary.kept_held.append(
+                f"{row.path}: {name} {edit.file!r} ({edit.outcome}"
+                f"{': ' + edit.why if edit.why else ''})"
+            )
+    if taken:
+        summary.kept.append(f"{row.path} ({', '.join(sorted(taken))})")
+    return taken
 
 
 def _send_review(api: Catalog, run_id: str, summary: ReconcileSummary) -> None:
@@ -930,6 +1019,8 @@ def _save_record(
         "failed": summary.failed,
         "written": summary.written,
         "filled": summary.filled,
+        "kept": summary.kept,
+        "kept_held": summary.kept_held,
         "not_approved": summary.not_approved,
     }
     store = StateFile(drive, state, name)
@@ -1025,11 +1116,16 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
     if summary.mode.writes:
         report.count("written", len(summary.written))
         report.count("filled_up", len(summary.filled))
+        report.count("kept_from_file", len(summary.kept))
         report.count("not_approved", summary.not_approved)
         for item in summary.written:
             report.created("tags written", item)
         for item in summary.filled:
             report.updated("catalog filled up", item)
+        for item in summary.kept:
+            report.updated("catalog took the file's value", item)
+        for item in summary.kept_held:
+            report.notice("kept_held", item)
     if summary.aborted:
         report.issue("audio_changed_run_stopped", summary.aborted)
     for kind in KINDS:

@@ -137,6 +137,26 @@ def test_the_review_marks_each_kind_and_other_file_approved_or_held() -> None:
     assert "d.mp3 [d4] title: 'Bodies' -> 'Bodie' [held]" in text
 
 
+def test_the_review_marks_what_is_approved_for_the_file() -> None:
+    items = admin.latest_items(
+        [
+            _record(
+                "2026-11-10T12:00",
+                year_later=[_diff("x/a.mp3", "year", "2003", "2007")],
+                other=[_diff("x/c.mp3", "artist", "A & B", "A", "d3")],
+            )
+        ]
+    )
+    approvals = rec.Approvals(
+        file_kinds=frozenset({"year_later"}), file_files={"d3": frozenset({"artist"})}
+    )
+
+    text = admin.review_text(items, approvals)
+
+    assert "## year_later (1, approved for the file)" in text
+    assert "c.mp3 [d3] artist: 'A & B' -> 'A' [approved for the file]" in text
+
+
 def test_review_reads_the_state_folders_records(drive, api, capsys, tmp_path) -> None:
     _put(
         drive,
