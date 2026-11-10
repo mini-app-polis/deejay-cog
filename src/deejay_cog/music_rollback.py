@@ -313,10 +313,13 @@ def rollback(
     *,
     apply: bool,
     forget: Callable[[list[str]], None] = forget_synced_values,
+    forget_every_file: bool = False,
 ) -> tuple[str, list[Step]]:
     """Plan, and with ``apply`` carry out, the undoing of one run. Returns
     the record's name and the steps, each with its result. ``forget`` is
-    given the files whose tags were put back."""
+    given the files whose tags were put back; with ``forget_every_file``,
+    every file the run wrote in place, put back now or not (a catalog
+    put-back recorded values its files no longer hold)."""
     record_id, record_name = find_record(drive, state_folder, run_id)
     record = parse_record(drive.download_file_bytes(record_id).data)
     steps = plan_rollback(drive, record)
@@ -333,10 +336,18 @@ def rollback(
             log.exception("music-rollback: %s failed", step.what)
             step.result = f"failed: {type(exc).__name__}: {exc}"
     restored = [s.restores for s in steps if s.restores and s.result == "done"]
+    if forget_every_file:
+        restored = sorted(
+            {
+                str(e["file_id"])
+                for e in record.get("entries") or []
+                if e.get("action") == "in_place" and e.get("written_md5")
+            }
+        )
     if restored:
         step = Step(
             "library registry",
-            f"forget the values {len(restored)} restored files were synced with",
+            f"forget the values {len(restored)} files were synced with",
         )
         try:
             forget(restored)
@@ -413,13 +424,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     status = 0
     for run_id in run_ids:
-        status = max(status, _rollback_one(drive, state_folder, run_id, args.apply))
+        status = max(
+            status,
+            _rollback_one(
+                drive, state_folder, run_id, args.apply, args.catalog_put_backs
+            ),
+        )
     return status
 
 
-def _rollback_one(drive: Any, state_folder: str, run_id: str, apply: bool) -> int:
+def _rollback_one(
+    drive: Any, state_folder: str, run_id: str, apply: bool, forget_every_file: bool
+) -> int:
     try:
-        record_name, steps = rollback(drive, state_folder, run_id, apply=apply)
+        record_name, steps = rollback(
+            drive,
+            state_folder,
+            run_id,
+            apply=apply,
+            forget_every_file=forget_every_file,
+        )
     except RollbackError as exc:
         print(f"{exc}; nothing done.", file=sys.stderr)
         return 2

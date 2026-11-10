@@ -273,3 +273,22 @@ def test_a_file_changed_since_gets_back_only_what_the_run_wrote_still_there(
     }
     assert frames == {"TIT2": "Show Me", "TCON": "R&B", "TBPM": "115.4"}
     assert steps[0].result == "done"
+
+
+def test_a_catalog_put_back_forgets_every_file_it_wrote(drive: FakeDrive) -> None:
+    """A file already put back, or changed since, still sheds the values
+    the put-back recorded for it."""
+    file_id = _sync_run(drive, "pb-1", rb.CATALOG_PUT_BACK)
+    drive.items[file_id].data = mp3(TIT2(encoding=3, text=["Show Me"]))
+    forgotten: list[list[str]] = []
+
+    rb.rollback(
+        drive,
+        STATE,
+        "pb-1",
+        apply=True,
+        forget=forgotten.append,
+        forget_every_file=True,
+    )
+
+    assert forgotten == [[file_id]]
