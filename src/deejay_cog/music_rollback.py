@@ -94,8 +94,9 @@ class RollbackError(RuntimeError):
 
 
 def find_record(drive: Any, state_folder: str, run_id: str) -> tuple[str, str]:
-    """The id and name of the run's record. A dry run's record is never
-    one to undo, since that run wrote nothing."""
+    """The id and name of the run's record, by its run id or the start of
+    one (as a run report shows it). A dry run's record is never one to undo,
+    since that run wrote nothing."""
     run_id = run_id.strip()
     if not run_id:
         raise RollbackError("no run id given")
@@ -103,6 +104,15 @@ def find_record(drive: Any, state_folder: str, run_id: str) -> tuple[str, str]:
         parent_id=state_folder, name_contains=run_id, include_folders=False
     )
     matches = [f for f in files if str(f.name).endswith(f"-{run_id}.json")]
+    if not matches:
+        # The start of a run id, as a run report shows it.
+        matches = [
+            f
+            for f in files
+            if f"-{run_id}" in str(f.name)
+            and str(f.name).endswith(".json")
+            and not str(f.name).endswith(".dry-run.json")
+        ]
     if not matches:
         dry = [f for f in files if str(f.name).endswith(f"-{run_id}.dry-run.json")]
         if dry:

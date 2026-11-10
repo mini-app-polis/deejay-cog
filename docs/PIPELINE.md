@@ -621,23 +621,18 @@ not split into parts cleanly, a genre the vocabulary does not place, or a
 one-character label is held: the file keeps it and the report names it. A
 dry run asks the API what would happen and changes nothing.
 
-**A bulk change is put back, not sent up.** When more files changed
-outside the pipeline since their last sync than `LIBRARY_SYNC_EDIT_FLOOD`
-allows, that is not an editing session but a tagger writing its own stored
-tags back over the library (VirtualDJ writing an old copy of every file's
-tags, say). Then nothing goes up to the catalog, and the change is undone:
-each of those files gets back, field by field, what it held at its last
-sync (Drive's revision from then), where it now differs (a BPM within 1.5
-is a re-measure and is left), with the same safety rules as every other
-write. The catalog's values are never written here: the values a sync
-records are the catalog's, and a file the pipeline never brought in step
-does not hold them, so writing them would be a retag past the reconcile's
-approvals. A file Drive keeps no revision of from its last sync is left as
-it is and named in the report. Each file is then recorded as synced with
-the values it already had recorded. The report says how many files changed
-and lists every field put back; a dry run lists what it would put back. A run record that marks writes of the catalog's
-values over files in a bulk change is undone with `python -m
-deejay_cog.music_rollback --catalog-put-backs --apply`.
+**A bulk change is held.** When more files changed outside the pipeline
+since their last sync than `LIBRARY_SYNC_EDIT_FLOOD` allows, that is not an
+editing session but a bulk write — a tagger writing stored tags back over the
+library, or a repair. No automatic answer tells a stale write-back from the
+state a repair should restore, so nothing goes up to the catalog and nothing
+is written: the files keep what they hold, each is recorded as synced with
+the values it already had recorded, and the run ends at WARN with a
+`bulk_change_held` issue naming the count. A stale write-back is repaired with
+`python -m deejay_cog.library_restore <time> --apply`, which puts each file's
+tags back to its last Drive revision before that time. A run record that
+marks writes of the catalog's values over files in a bulk change is undone
+with `python -m deejay_cog.music_rollback --catalog-put-backs --apply`.
 
 The write follows the backfill's safety rules: never renamed, moved or
 deleted; head revision kept; audio checked before and after; every write
