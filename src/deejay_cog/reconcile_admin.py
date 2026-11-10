@@ -29,13 +29,13 @@ holds approvals it sends nothing and says so (the API would refuse it too).
 **cursor** prints the reconcile's cursor; ``--position N --apply`` moves it
 (0 starts the next run from the first identified file).
 
-**run** runs the reconcile once, here, with the environment's settings or
-the ``--mode`` and ``--chunk`` given, and prints what it did. When the mode
-comes out off (the scheduled reconcile turned off, and no ``--mode``), it
-runs nothing and says so. A write run
-here writes exactly as the scheduled one does; run it while the scheduled
-reconcile is off (``LIBRARY_RECONCILE_MODE=off``), so the two do not move
-the cursor at once.
+**run** runs the reconcile once, here, in the ``--mode`` given or, without
+one, the mode the ``flags.deejay_cog.library_reconcile`` flag sets, with the
+environment's chunk or the ``--chunk`` given, and prints what it did. When
+the mode comes out off (the flag off, and no ``--mode``), it runs nothing
+and says so. ``--mode`` applies to this run only; the flag is not changed.
+A write run here writes exactly as the scheduled one does; run it while the
+flag is off, so the two do not move the cursor at once.
 
 **cursor** changes only the cursor file, and **seed** only the API's
 approvals, once; **review** and **approvals** read only.
@@ -64,13 +64,13 @@ from deejay_cog.library_reconcile import (
     CURSOR_NAME,
     FLOW_NAME,
     KINDS,
-    MODE_VAR,
+    MODE_FLAG,
     Approvals,
     from_api,
     library_reconcile,
     parse_approvals,
 )
-from deejay_cog.music_safety import STATE_FOLDER_VAR, FlowMode, flow_mode
+from deejay_cog.music_safety import STATE_FOLDER_VAR, FlowMode, flow_mode, parse_mode
 
 PROG = "python -m deejay_cog.reconcile_admin"
 
@@ -309,13 +309,14 @@ def _cursor_cmd(args: argparse.Namespace, drive: Any, state: str) -> int:
 
 
 def _run_cmd(args: argparse.Namespace) -> int:
-    if args.mode:
-        os.environ[MODE_VAR] = args.mode
     if args.chunk is not None:
         os.environ[CHUNK_SIZE_VAR] = str(args.chunk)
-    if flow_mode(MODE_VAR) is FlowMode.OFF:
-        raise AdminError(f"{MODE_VAR} is off here: give --mode dry-run or --mode write")
-    s = library_reconcile()
+    mode = (
+        parse_mode(args.mode, setting="--mode") if args.mode else flow_mode(MODE_FLAG)
+    )
+    if mode is FlowMode.OFF:
+        raise AdminError(f"{MODE_FLAG} is off: give --mode dry-run or --mode write")
+    s = library_reconcile(mode=mode)
     print(
         f"{s.record_name or 'no record'}: mode {s.mode.value}, files "
         f"{s.start + 1}-{s.position}, {s.compared} compared, {s.matching} matching, "

@@ -24,6 +24,7 @@ from music_fakes import DriveItem, FakeDrive
 from deejay_cog import library_backfill as backfill
 from deejay_cog import library_scan as scan
 from deejay_cog.music_safety import FlowMode
+from flag_fakes import FLAGS
 
 ROOT, STATE = "root", "state"
 FOLDER = backfill.FOLDER_MIME_TYPE
@@ -107,7 +108,7 @@ def registry() -> FakeRegistry:
 def settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(backfill.ROOT_FOLDER_VAR, ROOT)
     monkeypatch.setenv(backfill.STATE_FOLDER_VAR, STATE)
-    monkeypatch.setenv(scan.MODE_VAR, "write")
+    monkeypatch.setitem(FLAGS, scan.MODE_FLAG, "write")
     monkeypatch.delenv(scan.LISTING_SECONDS_VAR, raising=False)
     monkeypatch.delenv(backfill.CHUNK_SIZE_VAR, raising=False)
 
@@ -195,9 +196,9 @@ def test_off_reads_nothing_and_reports_nothing(
     settings, wired, drive, registry, posted, monkeypatch, value
 ) -> None:
     if value is None:
-        monkeypatch.delenv(scan.MODE_VAR)
+        monkeypatch.delitem(FLAGS, scan.MODE_FLAG, raising=False)
     else:
-        monkeypatch.setenv(scan.MODE_VAR, value)
+        monkeypatch.setitem(FLAGS, scan.MODE_FLAG, value)
     drive.add("a.mp3", ROOT)
 
     summary = scan.library_scan(run_id="s-1")
@@ -374,7 +375,7 @@ def test_no_file_is_added_while_the_backfill_is_still_listing(
 def test_a_dry_run_reports_and_changes_nothing(
     settings, wired, drive, registry, posted, monkeypatch
 ) -> None:
-    monkeypatch.setenv(scan.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, scan.MODE_FLAG, "dry-run")
     a = drive.add("a.mp3", ROOT)
     b = drive.add("b.mp3", ROOT)
     gone = "gone-id"

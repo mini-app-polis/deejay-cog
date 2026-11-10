@@ -39,7 +39,7 @@ taken in with the new-music steps (:class:`deejay_cog.new_music.Intake`): a
 tagged copy under its new name in the destination folder and the original
 moved to processed-originals on a confident match, the original moved to
 needs-review otherwise. That run is reported under ``new-music`` and follows
-the stricter of the message's mode and ``NEW_MUSIC_MODE``.
+the stricter of the message's mode and ``flags.deejay_cog.new_music``.
 
 **Library files.** A message marked ``"flow": "library-identify"`` comes
 from the nightly library run (:mod:`deejay_cog.library_identify`). The file
@@ -56,7 +56,7 @@ the audio, then Spotify's length for each side. The file is linked by
 whichever side a second source backs, and left for the owner when none
 does or both are. That run
 is reported under ``library-identify`` and follows the stricter of the
-message's mode and ``LIBRARY_IDENTIFY_MODE``.
+message's mode and ``flags.deejay_cog.library_identify``.
 """
 
 from __future__ import annotations
@@ -720,10 +720,10 @@ def intake_by_fingerprint(
 ) -> new_music.IntakeSummary:
     """One new-music file's fingerprint run, reported under ``new-music``.
 
-    Runs in the stricter of the sender's mode and ``NEW_MUSIC_MODE`` here,
+    Runs in the stricter of the sender's mode and ``flags.deejay_cog.new_music``,
     so turning the flow off (or to dry-run) also stops files already queued.
     """
-    mode = stricter(sender_mode, flow_mode(new_music.MODE_VAR))
+    mode = stricter(sender_mode, flow_mode(new_music.MODE_FLAG))
     log.info("deejay-fingerprint: new-music file %s in %s", name or file_id, mode.value)
 
     client = (
@@ -978,8 +978,8 @@ def library_identify_by_fingerprint(
 ) -> LibraryIdentifyResult | None:
     """One library file's fingerprint run, reported under
     ``library-identify``, in the stricter of the sender's mode and
-    ``LIBRARY_IDENTIFY_MODE`` here."""
-    mode = stricter(sender_mode, flow_mode(library_identify.MODE_VAR))
+    ``flags.deejay_cog.library_identify``."""
+    mode = stricter(sender_mode, flow_mode(library_identify.MODE_FLAG))
     started_at = monotonic()
     result: LibraryIdentifyResult | None = None
     if mode is FlowMode.OFF:
@@ -1085,8 +1085,6 @@ def effective_settings() -> dict[str, Any]:
     return {
         "RETAG_MIN_CONFIDENCE": min_confidence(),
         "ACOUSTID_API_KEY": os.getenv("ACOUSTID_API_KEY", "").strip(),
-        new_music.MODE_VAR: flow_mode(new_music.MODE_VAR).value,
-        library_identify.MODE_VAR: flow_mode(library_identify.MODE_VAR).value,
         **{var: os.getenv(var, "").strip() for var in new_music.FOLDER_VARS.values()},
     }
 

@@ -272,7 +272,9 @@ review before it acts and to undo after.
   to the music folders, and reports per file what it would do (old and new
   tags, new name, destination). New-music reads `NEW_MUSIC_MODE`; the
   backfill reads `LIBRARY_BACKFILL_MODE`. The fingerprint function uses the stricter of
-  the sender's mode and its own.
+  the sender's mode and its own. (Since 2026-11-09 the modes are read from
+  the API's feature flags, not the environment: see
+  [ADR-0008](ADR-0008-catalog-source-of-truth.md#decided-with-the-owner-2026-11-09-the-steps-modes-are-feature-flags).)
 - **The audio is never altered.** Before new tag bytes are uploaded, their
   audio — the bytes left once any ID3v2 tag (with its footer) at the start
   and any ID3v1, APEv2 or appended ID3v2 tag at the end are removed — must

@@ -37,6 +37,7 @@ from deejay_cog import library_identify as ident
 from deejay_cog.fingerprint_jobs import FingerprintJobMessage
 from deejay_cog.music_safety import FlowMode, RunRecord
 from deejay_cog.second_opinion import Heard, Recording
+from flag_fakes import FLAGS
 
 ROOT, STATE = "root", "state"
 _NOW = dt.datetime(2026, 11, 6, tzinfo=dt.UTC)
@@ -156,7 +157,7 @@ def jobs() -> FakeJobs:
 def settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(backfill.ROOT_FOLDER_VAR, ROOT)
     monkeypatch.setenv(backfill.STATE_FOLDER_VAR, STATE)
-    monkeypatch.setenv(ident.MODE_VAR, "write")
+    monkeypatch.setitem(FLAGS, ident.MODE_FLAG, "write")
     monkeypatch.delenv(ident.CHUNK_SIZE_VAR, raising=False)
     monkeypatch.delenv(backfill.CHUNK_SIZE_VAR, raising=False)
 
@@ -215,7 +216,7 @@ def _text(posted: MagicMock) -> str:
 def test_off_reads_nothing(
     settings, wired, drive, api, jobs, posted, monkeypatch
 ) -> None:
-    monkeypatch.delenv(ident.MODE_VAR)
+    monkeypatch.delitem(FLAGS, ident.MODE_FLAG, raising=False)
     _unidentified(drive, api, "temple.mp3", _song())
 
     summary = ident.library_identify(run_id="i-1")
@@ -494,7 +495,7 @@ def test_each_run_takes_the_next_chunk(
 def test_a_dry_run_changes_nothing_and_tries_the_same_files_again(
     settings, wired, drive, api, jobs, posted, monkeypatch
 ) -> None:
-    monkeypatch.setenv(ident.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, ident.MODE_FLAG, "dry-run")
     known = _unidentified(drive, api, "temple.mp3", _song(genre="House"))
     _unidentified(drive, api, "track01.mp3", _no_tags())
     before = drive.items[known].data
@@ -862,7 +863,7 @@ def test_a_library_identify_message_runs_the_library_flow(monkeypatch) -> None:
 
 
 def test_the_library_flow_follows_the_stricter_mode(monkeypatch, drive, api) -> None:
-    monkeypatch.setenv(ident.MODE_VAR, "off")
+    monkeypatch.setitem(FLAGS, ident.MODE_FLAG, "off")
 
     result = fp.library_identify_by_fingerprint(
         "f1", root=ROOT, path="p", sender_mode=FlowMode.WRITE, drive=drive, api=api

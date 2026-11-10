@@ -3,10 +3,11 @@
 The music library is what the owner DJs from, so a flow that writes to it
 goes through these rules (ADR-0007, amended 2026-11-03):
 
-- **A mode per flow**, read from the environment at the start of each run:
-  ``off`` (the default, and what an unset or unknown value means), ``dry-run``
-  (read, identify and compute everything, write nothing to the library) or
-  ``write``. :func:`flow_mode`.
+- **A mode per flow**, read from the flow's feature flag in the API
+  (``flags.deejay_cog.STEP``) at the start of each run: ``off`` (what a
+  missing, switched-off or unknown flag, or an API that cannot be read,
+  means), ``dry-run`` (read, identify and compute everything, write nothing
+  to the library) or ``write``. :func:`flow_mode`.
 - **The audio is never altered.** Before new tag bytes are uploaded, the
   audio they carry is compared with the original's, byte for byte, with the
   tags at either end stripped (:func:`audio_payload`); after the upload the
@@ -39,7 +40,10 @@ from typing import Any
 
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.deadline import without_run_deadline
+from mini_app_polis.environment import api_base_url
 from mutagen.id3 import ID3, ID3NoHeaderError
+
+from deejay_cog.api_client import api_client
 
 log = logger_mod.get_logger()
 
@@ -83,9 +87,48 @@ def parse_mode(raw: str | None, *, setting: str = "mode") -> FlowMode:
     return FlowMode.OFF
 
 
-def flow_mode(var: str) -> FlowMode:
-    """The mode the environment variable ``var`` sets, read now."""
-    return parse_mode(os.getenv(var), setting=var)
+def _read_flags() -> dict[str, str | None]:
+    """Every feature flag's mode text by name, read from the API now.
+
+    A flag that is switched off reads as ``off`` whatever its value, so
+    turning a flag off always stops its step.
+    """
+    client = api_client(base_url=api_base_url().strip() or None)
+    return {
+        flag.name: flag.value if flag.enabled else FlowMode.OFF.value
+        for flag in client.list_flags()
+    }
+
+
+def flow_modes(*flags: str) -> dict[str, FlowMode]:
+    """The modes the feature flags ``flags`` set, read from the API once.
+
+    Fails closed: when the flags cannot be read, every one of them is off
+    for this run, and a flag the API does not have is off.
+    """
+    try:
+        values = _read_flags()
+    except Exception as exc:  # any failure to read the flags is off
+        log.warning(
+            "could not read the feature flags (%s: %s); %s off for this run",
+            type(exc).__name__,
+            exc,
+            ", ".join(flags),
+        )
+        return dict.fromkeys(flags, FlowMode.OFF)
+    modes: dict[str, FlowMode] = {}
+    for flag in flags:
+        if flag not in values:
+            log.warning("feature flag %s was not found; treated as off", flag)
+            modes[flag] = FlowMode.OFF
+        else:
+            modes[flag] = parse_mode(values[flag], setting=flag)
+    return modes
+
+
+def flow_mode(flag: str) -> FlowMode:
+    """The mode the feature flag ``flag`` sets, read from the API now."""
+    return flow_modes(flag)[flag]
 
 
 def stricter(*modes: FlowMode) -> FlowMode:

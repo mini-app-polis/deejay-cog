@@ -56,7 +56,7 @@ file, and a re-run updates the same row. A registration that fails does not
 stop the run: the file is named in the report and, in a ``write`` run, kept in
 the cursor's ``registry_retry`` and registered again at the start of the next.
 
-**Safety:** ``LIBRARY_BACKFILL_MODE`` is ``off`` unless ``dry-run`` or
+**Safety:** ``flags.deejay_cog.library_backfill`` is ``off`` unless ``dry-run`` or
 ``write``. A dry run writes nothing to any music file, does not move the
 cursor (so the same chunk can be reviewed and then written) and saves the
 would-be run record. An audio mismatch stops the run with an ERROR finding
@@ -127,8 +127,9 @@ log = logger_mod.get_logger()
 
 FLOW_NAME = "library-backfill"
 
-#: off | dry-run | write; unset or unknown is off.
-MODE_VAR = "LIBRARY_BACKFILL_MODE"
+#: The feature flag holding this step's mode: off | dry-run | write; a
+#: missing flag or an unknown value is off.
+MODE_FLAG = "flags.deejay_cog.library_backfill"
 
 #: The library's root folder, walked recursively.
 ROOT_FOLDER_VAR = "LIBRARY_ROOT_FOLDER_ID"
@@ -976,7 +977,7 @@ def library_backfill(*, run_id: str | None = None) -> BackfillSummary:
 
     ``run_id`` is the queue message id when the Lambda worker runs this.
     """
-    return run_backfill(run_id=run_id, mode=flow_mode(MODE_VAR))
+    return run_backfill(run_id=run_id, mode=flow_mode(MODE_FLAG))
 
 
 def _report_abort(run_id: str, summary: BackfillSummary) -> None:
@@ -996,7 +997,7 @@ def _report_abort(run_id: str, summary: BackfillSummary) -> None:
 def _record(report: Any, summary: BackfillSummary, duration_sec: float) -> None:
     report.duration_sec = duration_sec
     if summary.mode is FlowMode.OFF:
-        report.notice("off", f"{MODE_VAR} is off: nothing was read or written")
+        report.notice("off", f"{MODE_FLAG} is off: nothing was read or written")
         return
     for problem in summary.problems:
         report.issue("setting", problem)
@@ -1006,7 +1007,7 @@ def _record(report: Any, summary: BackfillSummary, duration_sec: float) -> None:
     if dry:
         report.notice(
             "dry_run",
-            f"{MODE_VAR} is dry-run: no music was written and the cursor did "
+            f"{MODE_FLAG} is dry-run: no music was written and the cursor did "
             f"not move; would-be record {summary.record_name or '(none)'}",
         )
     if summary.listing_finished:

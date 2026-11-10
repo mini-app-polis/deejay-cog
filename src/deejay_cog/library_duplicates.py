@@ -24,7 +24,7 @@ group, and the files of the song's other edits are shown in it marked kept
 on purpose, with why, so they can never be sent to the trash through it.
 
 Each group has a key made from its files, so an unchanged library reports
-the same groups every night. With ``LIBRARY_DUPLICATES_MODE=write`` the
+the same groups every night. With ``flags.deejay_cog.library_duplicates`` at ``write`` the
 groups go to the API (``POST /v1/catalog/library/duplicates``), where the
 WCS duplicates page shows them; they replace the open groups for the root.
 A dry run lists the groups in the run report only.
@@ -65,9 +65,10 @@ log = logger_mod.get_logger()
 
 FLOW_NAME = "library-duplicates"
 
-#: off | dry-run | write; unset or unknown is off. Write sends the groups to
+#: The feature flag holding this step's mode: off | dry-run | write; a
+#: missing flag or an unknown value is off. Write sends the groups to
 #: the API; no mode ever writes a music file.
-MODE_VAR = "LIBRARY_DUPLICATES_MODE"
+MODE_FLAG = "flags.deejay_cog.library_duplicates"
 
 #: Files of one song whose durations are further apart than this are
 #: different edits, not copies.
@@ -332,7 +333,7 @@ def run_duplicates(
 
 def library_duplicates(*, run_id: str | None = None) -> DuplicatesSummary:
     """Find the library's duplicate groups, send them to the API, and report."""
-    return run_duplicates(run_id=run_id, mode=flow_mode(MODE_VAR))
+    return run_duplicates(run_id=run_id, mode=flow_mode(MODE_FLAG))
 
 
 def _record(report: Any, summary: DuplicatesSummary, duration_sec: float) -> None:
@@ -343,7 +344,7 @@ def _record(report: Any, summary: DuplicatesSummary, duration_sec: float) -> Non
         return
     if summary.mode is FlowMode.DRY_RUN:
         report.notice(
-            "dry_run", f"{MODE_VAR} is dry-run: the groups were not sent to the API"
+            "dry_run", f"{MODE_FLAG} is dry-run: the groups were not sent to the API"
         )
     if summary.left_out:
         report.notice(

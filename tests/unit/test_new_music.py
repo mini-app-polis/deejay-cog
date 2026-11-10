@@ -27,6 +27,7 @@ from deejay_cog.music_safety import (
     audio_payload,
     tag_snapshot,
 )
+from flag_fakes import FLAGS
 
 IN, DEST, REVIEW, ORIG, STATE = "in", "dest", "review", "orig", "state"
 _CATALOG_ID = uuid.UUID("11111111-2222-3333-4444-555555555555")
@@ -105,7 +106,7 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> None:
         "state": STATE,
     }.items():
         monkeypatch.setenv(flow.FOLDER_VARS[role], value)
-    monkeypatch.setenv(flow.MODE_VAR, "write")
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "write")
     monkeypatch.delenv(flow.MAX_FILES_VAR, raising=False)
 
 
@@ -162,9 +163,9 @@ def test_unset_or_unknown_mode_is_off_and_nothing_is_touched(
 ) -> None:
     drive.add("a.mp3", IN, _tagged())
     if value is None:
-        monkeypatch.delenv(flow.MODE_VAR)
+        monkeypatch.delitem(FLAGS, flow.MODE_FLAG, raising=False)
     else:
-        monkeypatch.setenv(flow.MODE_VAR, value)
+        monkeypatch.setitem(FLAGS, flow.MODE_FLAG, value)
 
     summary = flow.new_music(run_id="m-1")
 
@@ -252,7 +253,7 @@ def test_a_catalog_match_is_copied_tagged_and_renamed_and_the_original_kept(
 def test_dry_run_writes_nothing_but_its_record(
     settings, wired, posted, drive, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(flow.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
     drive.add("track01.mp3", IN, _tagged())
     drive.add("clip.m4a", IN, b"m4a", mime_type="audio/mp4")
     drive.add("Temple (Niko The Kid Remix)_Thomas Gold.mp3", DEST, b"x")
@@ -276,7 +277,7 @@ def test_dry_run_writes_nothing_but_its_record(
 def test_dry_run_reports_what_it_would_write(
     settings, wired, posted, drive, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(flow.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
     file_id = drive.add("track01.mp3", IN, _tagged())
 
     summary = flow.new_music(run_id="m-1")
@@ -372,7 +373,7 @@ def test_a_file_keeps_its_own_release_label_in_its_title_and_name(
 def test_dry_run_previews_the_entry_and_writes_nothing(
     settings, wired, posted, drive, api, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(flow.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
     file_id = drive.add("new.mp3", IN, _tagged("brand new song", "new artist"))
 
     summary = flow.new_music(run_id="m-1")

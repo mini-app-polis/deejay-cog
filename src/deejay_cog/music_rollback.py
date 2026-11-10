@@ -31,7 +31,7 @@ files in a bulk change (``CATALOG_PUT_BACK``):
     doppler run -- uv run python -m deejay_cog.music_rollback --catalog-put-backs --apply
 
 An original moved back into the new-music input folder is taken in again by
-the next new-music run; set ``NEW_MUSIC_MODE`` to ``off`` first to stop that.
+the next new-music run; set the ``flags.deejay_cog.new_music`` flag to ``off`` first to stop that.
 """
 
 from __future__ import annotations

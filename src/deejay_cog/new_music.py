@@ -29,7 +29,7 @@ registry cannot be read, is moved unchanged to ``NEW_MUSIC_REVIEW_FOLDER_ID``. N
 is deleted and nothing is overwritten. This is the only flow that names a
 file; files already in the library are never renamed.
 
-Everything goes through :mod:`deejay_cog.music_safety`: ``NEW_MUSIC_MODE``
+Everything goes through :mod:`deejay_cog.music_safety`: ``flags.deejay_cog.new_music``
 (``off`` unless set to ``dry-run`` or ``write``), the audio check before
 and after each upload (a mismatch stops the run), no emptied tags, and the
 run record in ``MUSIC_TAGGING_STATE_FOLDER_ID`` that
@@ -91,8 +91,9 @@ log = logger_mod.get_logger()
 
 FLOW_NAME = "new-music"
 
-#: off | dry-run | write; unset or unknown is off.
-MODE_VAR = "NEW_MUSIC_MODE"
+#: The feature flag holding this step's mode: off | dry-run | write; a
+#: missing flag or an unknown value is off.
+MODE_FLAG = "flags.deejay_cog.new_music"
 
 #: Files per run when ``NEW_MUSIC_MAX_FILES_PER_RUN`` is unset; 0 is no cap.
 MAX_FILES_VAR = "NEW_MUSIC_MAX_FILES_PER_RUN"
@@ -691,7 +692,7 @@ def new_music(*, run_id: str | None = None) -> IntakeSummary:
 
     ``run_id`` is the queue message id when the Lambda worker runs this.
     """
-    mode = flow_mode(MODE_VAR)
+    mode = flow_mode(MODE_FLAG)
     api = api_client(base_url=api_base_url().strip() or None)
 
     def work(intake: Intake) -> None:
@@ -704,7 +705,7 @@ def new_music(*, run_id: str | None = None) -> IntakeSummary:
 def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
     report.duration_sec = duration_sec
     if summary.mode is FlowMode.OFF:
-        report.notice("off", f"{MODE_VAR} is off: nothing was read or written")
+        report.notice("off", f"{MODE_FLAG} is off: nothing was read or written")
         return
     for problem in summary.problems:
         report.issue("setting", problem)
@@ -714,7 +715,7 @@ def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
     if dry:
         report.notice(
             "dry_run",
-            f"{MODE_VAR} is dry-run: nothing was written; would-be record "
+            f"{MODE_FLAG} is dry-run: nothing was written; would-be record "
             f"{summary.record_name}",
         )
     report.ok(0 if dry else len(summary.identified))

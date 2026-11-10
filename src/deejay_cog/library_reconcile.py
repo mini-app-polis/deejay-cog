@@ -95,7 +95,7 @@ run writes nothing. Genre is written; subgenre is not (no frame for it is
 decided). An audio mismatch stops the run with an ERROR finding and leaves
 the cursor on that file.
 
-**Safety:** ``LIBRARY_RECONCILE_MODE`` is ``off`` unless ``dry-run`` or
+**Safety:** ``flags.deejay_cog.library_reconcile`` is ``off`` unless ``dry-run`` or
 ``write``. The comment frame and VirtualDJ's frames are never written.
 """
 
@@ -160,8 +160,9 @@ log = logger_mod.get_logger()
 
 FLOW_NAME = "library-reconcile"
 
-#: off | dry-run | write; unset or unknown is off.
-MODE_VAR = "LIBRARY_RECONCILE_MODE"
+#: The feature flag holding this step's mode: off | dry-run | write; a
+#: missing flag or an unknown value is off.
+MODE_FLAG = "flags.deejay_cog.library_reconcile"
 
 #: Files per run; a whole number of at least 1.
 CHUNK_SIZE_VAR = "LIBRARY_RECONCILE_CHUNK_SIZE"
@@ -974,10 +975,15 @@ def run_reconcile(
     return summary
 
 
-def library_reconcile(*, run_id: str | None = None) -> ReconcileSummary:
+def library_reconcile(
+    *, run_id: str | None = None, mode: FlowMode | None = None
+) -> ReconcileSummary:
     """Compare the next chunk of linked library files with the catalog and
-    report the differences by kind."""
-    return run_reconcile(run_id=run_id, mode=flow_mode(MODE_VAR))
+    report the differences by kind, in ``mode`` or, without one, the mode
+    the step's feature flag sets."""
+    return run_reconcile(
+        run_id=run_id, mode=flow_mode(MODE_FLAG) if mode is None else mode
+    )
 
 
 def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None:

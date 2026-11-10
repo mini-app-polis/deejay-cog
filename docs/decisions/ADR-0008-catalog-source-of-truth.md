@@ -312,7 +312,7 @@ catalog (stats, summaries, the collection) uses the same rules.
    written (their registration clears the values), gets the entry's current
    values recorded and nothing written: the reconcile, with the owner's
    approvals, is what brings a file in step with its entry.
-3. **`LIBRARY_SYNC_MODE` stays off until the library is reconciled**, as
+3. **The sync's mode stays off until the library is reconciled**, as
    before.
 
 ## Decided with the owner, 2026-11-09 (an edit made in VirtualDJ goes up)
@@ -336,8 +336,28 @@ catalog (stats, summaries, the collection) uses the same rules.
 4. **A rollback is not an edit.** Undoing a write puts back the file's
    earlier tags, so the rollback has the registry forget the values the
    file was synced with, and the next sync records them afresh.
-5. **It runs with the sync**, under `LIBRARY_SYNC_MODE`, and only for files
+5. **It runs with the sync**, under the sync's mode, and only for files
    whose values a sync has recorded: off until the library is reconciled.
+
+## Decided with the owner, 2026-11-09 (the steps' modes are feature flags)
+
+1. **Each step's mode lives in the API's feature flags**, not in a setting.
+   Each step has one flag, `flags.deejay_cog.STEP` (`new_music`,
+   `library_scan`, `library_trash`, `library_identify`, `library_backfill`,
+   `library_sync`, `library_duplicates` and `library_reconcile`), whose
+   value is `off`, `dry-run` or `write`. A run reads its step's flag when
+   it starts, so a change made in the API takes effect on the next run with
+   no settings sync. The `*_MODE` settings are gone.
+2. **It fails closed.** An API the run cannot read, a flag the API does not
+   have, a flag switched off, and an empty or unknown value are all `off`
+   for that run; an unknown value is logged and never turns writing on.
+3. **The fingerprint function still runs in the stricter** of the message's
+   mode and the flag (`library_identify` for a library file, `new_music`
+   for a new-music file).
+4. **Numbers and folders stay configuration.** Chunk sizes, time budgets
+   and folder ids are still settings; only the modes moved.
+5. **A local reconcile run's `--mode` is for that run only**; it does not
+   change the flag.
 
 ## Consequences
 

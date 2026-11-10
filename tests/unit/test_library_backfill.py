@@ -25,6 +25,7 @@ from deejay_cog import library_backfill as flow
 from deejay_cog import library_nightly as nightly
 from deejay_cog import music_rollback as rb
 from deejay_cog.music_safety import tag_snapshot
+from flag_fakes import FLAGS
 
 ROOT, STATE = "root", "state"
 FOLDER = flow.FOLDER_MIME_TYPE
@@ -82,7 +83,7 @@ def api() -> FakeApi:
 def settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(flow.ROOT_FOLDER_VAR, ROOT)
     monkeypatch.setenv(flow.STATE_FOLDER_VAR, STATE)
-    monkeypatch.setenv(flow.MODE_VAR, "write")
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "write")
     monkeypatch.delenv(flow.CHUNK_SIZE_VAR, raising=False)
     monkeypatch.delenv(flow.SKIP_IDS_VAR, raising=False)
 
@@ -185,9 +186,9 @@ def test_unset_or_unknown_mode_is_off_and_nothing_is_touched(
 ) -> None:
     _library(drive, 2)
     if value is None:
-        monkeypatch.delenv(flow.MODE_VAR)
+        monkeypatch.delitem(FLAGS, flow.MODE_FLAG, raising=False)
     else:
-        monkeypatch.setenv(flow.MODE_VAR, value)
+        monkeypatch.setitem(FLAGS, flow.MODE_FLAG, value)
 
     summary = flow.library_backfill(run_id="m-1")
 
@@ -264,7 +265,7 @@ def _tree(drive: FakeDrive) -> dict[str, str]:
 def test_the_first_run_lists_the_library_without_downloading_it(
     settings, wired, drive, downloads, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(flow.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
     monkeypatch.setenv(flow.CHUNK_SIZE_VAR, "1")
     ids = _tree(drive)
 
@@ -550,7 +551,7 @@ def test_a_bad_reserve_does_nothing(
 def test_a_dry_run_writes_no_music_and_does_not_move_the_cursor(
     settings, wired, posted, drive, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(flow.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
     monkeypatch.setenv(flow.CHUNK_SIZE_VAR, "2")
     ids = _library(drive, 3)
     before = {i: drive.items[i].data for i in ids}
@@ -580,7 +581,7 @@ def test_a_dry_run_writes_no_music_and_does_not_move_the_cursor(
     assert "dry-run" in _text(posted)
 
     # Then written: the same chunk the dry run showed.
-    monkeypatch.setenv(flow.MODE_VAR, "write")
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "write")
     written = flow.library_backfill(run_id="w-1")
     assert written.start == 0
     assert [e["file_id"] for e in _record(drive, "w-1")["entries"]] == ids[:2]
@@ -900,7 +901,7 @@ def test_a_backfill_run_is_rolled_back_from_its_kept_revisions(
 def test_a_dry_backfill_run_cannot_be_rolled_back(
     settings, wired, drive, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(flow.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
     _library(drive, 1)
     flow.library_backfill(run_id="d-1")
 
@@ -963,7 +964,7 @@ def test_a_file_the_catalog_does_not_have_is_registered_unidentified(
 def test_a_dry_run_registers_files_but_writes_no_music(
     settings, wired, drive, api: FakeApi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(flow.MODE_VAR, "dry-run")
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
     ids = _library(drive, 2)
     before = {i: drive.items[i].data for i in ids}
 
