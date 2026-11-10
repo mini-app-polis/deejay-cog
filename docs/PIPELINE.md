@@ -501,7 +501,8 @@ entry than the registry's link is listed under `other`.
 **Kinds:** `case_punctuation`, `featured_moved`, `artist_joiner`,
 `version_brackets`, `genre_remapped`, `genre_filled`, `year_filled` (the
 file has none), `year_earlier` (the catalog's year is older), `year_later`
-(the file's year is older: left unapproved, the file keeps the older year),
+(the file's year is older: approved for the file, the older year goes up to
+the catalog),
 `year_differs` (a year that is not a number), `bpm_rounding` (less than
 1.5 BPM), `bpm_differs`, `label_differs`, `fill_up` (a file value for a field
 the catalog leaves empty) and `other`.
@@ -525,12 +526,22 @@ them from the API (`GET /v1/catalog/library/reconcile/approvals`):
 
 ```json
 {"kinds": ["case_punctuation", "genre_remapped", "fill_up"],
- "files": {"<drive file id>": ["title"]}}
+ "files": {"<drive file id>": ["title"]},
+ "file_wins_kinds": ["year_later", "bpm_differs"],
+ "file_wins_files": {"<drive file id>": ["artist"]}}
 ```
 
+Every approval says which side wins, so every difference has a way to
+close; leaving one unapproved only means it is not decided yet. `kinds`
+and `files` approve it **for the catalog**: the catalog's value is written
+over the file. `file_wins_kinds` and `file_wins_files` approve it **for the
+file**: the file's value goes up to the entry and the file is not written.
 `kinds` approves whole kinds (any but `other`); `files` approves `other`
 differences one file and field at a time (`title`, `artist`, `year`,
-`genre`, `bpm`, `label`, `catalog_id`). Approvals that cannot be read stop
+`genre`, `bpm`, `label`, `catalog_id`). The file's side takes the same
+shapes, but not `fill_up` (already the file's value going up), `year_filled`
+or `genre_filled` (the file has no value), or `catalog_id`; a kind, or a
+file's field, goes one way only. Approvals that cannot be read stop
 the run before it compares anything; until any are set, a write run writes
 nothing. The approvals given before the API held them were kept in
 `library-reconcile-approvals.json` in the state folder; `reconcile_admin
@@ -542,11 +553,20 @@ renamed, moved or deleted; head revision kept; audio checked before and
 after; every write in `library-reconcile-<run id>.json`, which
 `music_rollback` undoes. The file is then registered as synced. Approved
 `fill_up` values go up to the catalog (`POST /v1/catalog/{id}/fill-up`) and
-the file is not written. Differences not approved are left and counted
-(`not_approved`). Genre is written; subgenre is not, as no frame for it is
+the file is not written. Differences approved for the file go up to the
+entry as a catalog revision (`POST /v1/catalog/library/files/edited` with
+`keep_file`, whatever the last sync recorded) and the file is not written;
+the library sync then carries the value to the entry's other files. One the
+API holds (a title or artist that does not split into parts cleanly, a
+genre off the vocabulary, a one-character label) stays open on the review
+page and is reported under `kept_held` with the reason. Differences not
+approved are left and counted (`not_approved`). Genre is written; subgenre is not, as no frame for it is
 decided. An audio mismatch stops the run with an ERROR finding and leaves
 the cursor on that file. After a write run, a dry run over the same files
 shows no approved difference left.
+
+**Report** (write run): counts for `written`, `filled_up`,
+`kept_from_file` and `not_approved`, with every file by its path.
 
 **Approval rules:** what is approved, and why some kinds are held, is in
 [ADR-0008, decided 2026-11-07](decisions/ADR-0008-catalog-source-of-truth.md#decided-with-the-owner-2026-11-07-the-first-reconcile-review).

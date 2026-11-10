@@ -261,6 +261,27 @@ catalog (stats, summaries, the collection) uses the same rules.
    groups the differences by kind and records the approvals in the state
    folder.
 
+## Decided with the owner, 2026-11-10 (every difference closes)
+
+1. **The goal is that every file and its entry match.** A difference left
+   unapproved only means it is not decided yet; it is never the way to keep
+   the file's value.
+2. **An approval says which side wins.** Approved for the catalog, its value
+   is written over the file (as before). Approved for the file, the file's
+   value goes up to the entry as a catalog revision, the file is not
+   written, and the sync carries the value to the entry's other files.
+   Either way the two then match and the difference closes. Kinds and
+   `other` differences can each be approved either way, one way at a time.
+3. **Keeping the file's value now goes through the catalog.** Where the
+   2026-11-07 decisions keep the file's value (the older year, decision 3;
+   a real BPM difference, decision 4), the difference is approved for the
+   file instead of being left open, so the catalog takes that value.
+4. **A value the catalog cannot take stays open.** The file's side uses the
+   same holds as an edit made in VirtualDJ (a title or artist that does not
+   split into parts cleanly, a genre off the vocabulary, a one-character
+   label): such a difference stays on the review page with the reason, for
+   the entry to be fixed in the editor.
+
 ## Decided with the owner, 2026-11-09 (files the fingerprint finds nothing for)
 
 1. **A file the fingerprint finds nothing for is identified by its own

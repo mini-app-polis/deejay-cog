@@ -131,14 +131,25 @@ def latest_items(records: Sequence[dict[str, Any]], since: str = "") -> list[Ite
     return list(latest.values())
 
 
-def _approved(item: Item, approvals: Approvals) -> bool:
+def _mark(item: Item, approvals: Approvals) -> str:
+    """How the approvals settle one difference: approved (the catalog wins),
+    approved for the file, or held."""
     if item.kind == "other":
-        return item.field in approvals.files.get(item.drive_file_id, frozenset())
-    return item.kind in approvals.kinds
+        if item.field in approvals.files.get(item.drive_file_id, frozenset()):
+            return "approved"
+        if item.field in approvals.file_files.get(item.drive_file_id, frozenset()):
+            return "approved for the file"
+        return "held"
+    if item.kind in approvals.kinds:
+        return "approved"
+    if item.kind in approvals.file_kinds:
+        return "approved for the file"
+    return "held"
 
 
 def review_text(items: Sequence[Item], approvals: Approvals, since: str = "") -> str:
-    """The differences grouped by kind, each marked approved or held."""
+    """The differences grouped by kind, each marked approved (the catalog
+    wins), approved for the file, or held."""
     files = {i.drive_file_id for i in items}
     lines = [
         f"# Reconcile review{f' since {since}' if since else ''}",
@@ -153,13 +164,17 @@ def review_text(items: Sequence[Item], approvals: Approvals, since: str = "") ->
             continue
         if kind == "other":
             state = "approved file by file"
+        elif kind in approvals.kinds:
+            state = "approved"
+        elif kind in approvals.file_kinds:
+            state = "approved for the file"
         else:
-            state = "approved" if kind in approvals.kinds else "held"
+            state = "held"
         lines.append(f"## {kind} ({len(found)}, {state})")
         for i in found:
             mark = ""
             if kind == "other":
-                mark = " [approved]" if _approved(i, approvals) else " [held]"
+                mark = f" [{_mark(i, approvals)}]"
             lines.append(
                 f"- {i.name} [{i.drive_file_id}] {i.field}: "
                 f"{i.file_value!r} -> {i.catalog_value!r}{mark}"
