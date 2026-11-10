@@ -1,3 +1,10 @@
+# [2.43.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.42.1...v2.43.0) (2026-11-10)
+
+
+### Features
+
+* **rollback:** undo every library-sync run that wrote the catalog's values in a bulk change ([0a21903](https://github.com/mini-app-polis/deejay-cog/commit/0a219039f086fcd84b89137021ac82b46286d48c))
+
 ## [2.42.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.42.0...v2.42.1) (2026-11-10)
 
 
