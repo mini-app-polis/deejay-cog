@@ -963,8 +963,8 @@ The last step of the `library-backfill` library job
 Off unless the `flags.deejay_cog.library_duplicates` flag is `dry-run` or `write`. Read-only: it
 never writes, renames, moves or deletes a music file.
 
-**Each run** reads the registry's present files under the root (leaving out
-those already marked for the trash) and the catalog's title and artist for
+**Each run** reads, for each library root on its own, the registry's present
+files under that root (leaving out those already marked for the trash) and the catalog's title and artist for
 the entries they link to (`POST /v1/catalog/display`), and links files that
 share an md5 (exact copies), a catalog entry, a title and artist as the
 display rules write them out (case, spacing and punctuation ignored), or a
@@ -977,15 +977,35 @@ other. Each linked set is split into its edits; every edit with two or
 more files is a group, listing the song's other edits marked kept on
 purpose with why, so the page can never send them to the trash.
 
-A group's key is made from its files, so an unchanged library gives the
-same groups. `write` sends them to the API
-(`POST /v1/catalog/library/duplicates`), replacing the root's open groups;
-a dry run only reports them.
+**Per root** ([ADR-0009](decisions/ADR-0009-library-folders.md), decision
+4). Files are grouped only with files of the same root: a file in FX Music
+and one in the main library are never duplicates of each other.
 
-**Report:** counts for `files` and `groups` (and, in write, the API's
-`open_groups`, `added` and `dropped`), and every group with its reasons and
-files by path, when the groups changed (or in a dry run). Open groups the
-same as last run wait on the duplicates page and are not named again.
+- **The main library** (its own folder and New Music, one root): files are
+  grouped within and across the two folders, as above. Neither folder is
+  preferred; the owner picks the keeper on the duplicates page.
+- **FX Music:** files are grouped only within one folder; a different cut
+  (another length or edit) is kept on purpose, as above. Copies linked
+  across FX folders are kept there on purpose (one per role or event), so
+  they are never offered as a group to resolve: each set is listed in the
+  run report (`fx_across_folders`, with every path) for the owner to decide
+  case by case. The duplicates page does not show them.
+
+A group's key is made from its files, so an unchanged library gives the
+same groups. `write` sends each root's groups to the API
+(`POST /v1/catalog/library/duplicates`), replacing that root's open groups;
+a dry run only reports them. A root whose files can't be read or whose
+groups can't be sent is reported (`failed`, naming the root), and the other
+root still runs.
+
+**Report:** counts for `files` and `groups` over every root (and, in write,
+the API's `open_groups`, `added` and `dropped`), and every group with its
+reasons and files by path, when the root's groups changed (or in a dry
+run). Open groups the same as last run wait on the duplicates page and are
+not named again. With more than one root, each root's group count
+(`groups_main`, `groups_fx`) is given and every group line starts with the
+root, named by the settings naming its folders; with FX Music set,
+`fx_across_folders` counts its sets of copies across folders.
 
 ### Run records
 
