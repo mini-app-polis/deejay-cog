@@ -2,7 +2,7 @@
 
 Files dropped in ``NEW_MUSIC_INPUT_FOLDER_ID`` are usually new releases,
 not yet in the play history or the catalog (ADR-0007, amended 2026-11-11).
-Intake no longer looks a file up, makes catalog entries or writes tags: an
+Intake does not look a file up, make catalog entries or write tags: an
 MP3 with a usable title and artist is copied, tags and audio unchanged, into
 New Music under a name built from its own tags, and the library's steps
 take it from there (scan, identify with its fingerprint check, duplicates,

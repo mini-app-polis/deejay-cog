@@ -518,3 +518,4 @@ def test_the_request_is_logged_with_the_run(
         worker.lambda_handler(_event(_body("library-backfill", request=_REQUEST)), None)
 
     assert "request=req-7 caller=watcher-cog" in caplog.text
+    reporting_flow.assert_called_once_with(run_id="m-0")
