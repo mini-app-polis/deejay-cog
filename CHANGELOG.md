@@ -1,3 +1,10 @@
+## [2.49.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.49.0...v2.49.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* **library-reconcile:** don't put an approved difference first again once a run tried it ([a747b62](https://github.com/mini-app-polis/deejay-cog/commit/a747b621f24df8f00a47785f16e5e7963afb456d))
+
 # [2.49.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.48.2...v2.49.0) (2026-11-11)
 
 
