@@ -1,3 +1,11 @@
+# [2.50.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.49.2...v2.50.0) (2026-11-11)
+
+
+### Features
+
+* **library-reconcile:** add reconcile_admin baseline to record the library as compared ([c9df20a](https://github.com/mini-app-polis/deejay-cog/commit/c9df20a91d8f5cc38b41787b4c1fecff389a5dbd))
+* **library:** act only on change and stay quiet when idle ([782e421](https://github.com/mini-app-polis/deejay-cog/commit/782e4216b63e7928307682fad22b057c01876624))
+
 ## [2.49.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.49.1...v2.49.2) (2026-11-11)
 
 
