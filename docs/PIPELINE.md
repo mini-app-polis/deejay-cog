@@ -997,6 +997,14 @@ other. Each linked set is split into its edits; every edit with two or
 more files is a group, listing the song's other edits marked kept on
 purpose with why, so the page can never send them to the trash.
 
+**Owner edits** (ADR-0008, decided 2026-11-11): a file linked to an entry
+the catalog marks as an owner edit (`<…>` in its title) is an edit of its
+own, never a duplicate of the published song's files, even with the same
+md5. Listed in the published song's group, it is kept on purpose as an
+owner edit. Files on one owner-edit entry are grouped as copies of it like
+any other, the published song's files shown kept beside them. In FX Music
+an owner edit is not listed as a copy across folders either.
+
 **Per root** ([ADR-0009](decisions/ADR-0009-library-folders.md), decision
 4). Files are grouped only with files of the same root: a file in FX Music
 and one in the main library are never duplicates of each other.

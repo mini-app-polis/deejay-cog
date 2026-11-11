@@ -57,7 +57,9 @@ def _file(
     )
 
 
-def _display(entry: uuid.UUID, title: str, artist: str) -> CatalogDisplay:
+def _display(
+    entry: uuid.UUID, title: str, artist: str, *, owner_edit: bool = False
+) -> CatalogDisplay:
     return CatalogDisplay(
         id=entry,
         title=title,
@@ -66,6 +68,7 @@ def _display(entry: uuid.UUID, title: str, artist: str) -> CatalogDisplay:
         genre=None,
         bpm=None,
         label=None,
+        owner_edit=owner_edit,
         changed_at=_NOW,
     )
 
@@ -212,6 +215,132 @@ def test_a_file_of_unknown_length_joins_the_largest_edit() -> None:
     [group] = dup.find_groups(files, {})
 
     assert _members(group) == {"a": None, "b": None}
+
+
+# ── Owner edits ───────────────────────────────────────────────────────────
+
+_SONG, _CUT, _CUT2 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+_SHOWN = {
+    _SONG: _display(_SONG, "Baby What You Want Me To Do", "Etta James"),
+    _CUT: _display(
+        _CUT, "Baby What You Want Me To Do <Intro Cut>", "Etta James", owner_edit=True
+    ),
+    _CUT2: _display(
+        _CUT2,
+        "Baby What You Want Me To Do <Self Censored>",
+        "Etta James",
+        owner_edit=True,
+    ),
+}
+
+
+def test_an_owner_edit_is_never_a_duplicate_of_the_published_song_even_by_md5() -> None:
+    files = [
+        _file("song", "Blues/baby.mp3", catalog_id=_SONG, md5="m"),
+        _file("cut", "Blues/baby (1).mp3", catalog_id=_CUT, md5="m"),
+    ]
+
+    assert dup.find_groups(files, _SHOWN) == []
+
+
+def test_an_owner_edit_beside_the_published_songs_copies_is_kept_as_an_owner_edit() -> (
+    None
+):
+    files = [
+        _file("song", "Blues/baby.mp3", catalog_id=_SONG, md5="m"),
+        _file("song2", "Blues/baby (1).mp3", catalog_id=_SONG, md5="m"),
+        _file("cut", "Blues/baby (2).mp3", catalog_id=_CUT, md5="m"),
+    ]
+
+    [group] = dup.find_groups(files, _SHOWN)
+
+    members = _members(group)
+    assert members["song"] is None and members["song2"] is None
+    why = members["cut"]
+    assert why is not None and "owner edit" in why
+    assert "release label" not in why and "different edit" not in why
+    [kept] = [m for m in group.files if m.kept_on_purpose]
+    assert kept.drive_file_id == "cut"
+
+
+def test_two_files_on_one_owner_edit_entry_are_copies_of_it() -> None:
+    files = [
+        _file("cut", "Blues/baby_cut.mp3", catalog_id=_CUT, md5="c"),
+        _file("cut2", "Fx/baby_cut.mp3", catalog_id=_CUT, md5="c"),
+        _file("song", "Blues/baby.mp3", catalog_id=_SONG, md5="c"),
+    ]
+
+    [group] = dup.find_groups(files, _SHOWN)
+
+    members = _members(group)
+    assert members["cut"] is None and members["cut2"] is None
+    # The published song's file is shown kept, never offered for the trash.
+    assert members["song"] == "the published song (this group is of an owner edit)"
+    assert [m.drive_file_id for m in group.files if not m.kept_on_purpose] == [
+        "cut",
+        "cut2",
+    ]
+
+
+def test_two_owner_edits_of_one_song_are_not_copies_of_each_other() -> None:
+    files = [
+        _file("cut", "Blues/baby_cut.mp3", catalog_id=_CUT, md5="c"),
+        _file("censored", "Blues/baby_censored.mp3", catalog_id=_CUT2, md5="c"),
+    ]
+
+    assert dup.find_groups(files, _SHOWN) == []
+
+
+def test_a_file_kept_as_an_owner_edit_is_never_sent_for_the_trash() -> None:
+    files = [
+        _file("song", "Blues/baby.mp3", catalog_id=_SONG, md5="m"),
+        _file("song2", "Blues/baby (1).mp3", catalog_id=_SONG, md5="m"),
+        _file("cut", "Blues/baby (2).mp3", catalog_id=_CUT, md5="m"),
+        _file("cut2", "Blues/baby (3).mp3", catalog_id=_CUT, md5="m"),
+    ]
+
+    groups = dup.find_groups(files, _SHOWN)
+
+    assert len(groups) == 2
+    for group in groups:
+        offered = {m.drive_file_id for m in group.files if not m.kept_on_purpose}
+        assert offered in ({"song", "song2"}, {"cut", "cut2"})
+        for m in group.files:
+            if m.drive_file_id not in offered:
+                assert m.kept_on_purpose and m.why_kept
+
+
+def test_unflagged_entries_group_as_before() -> None:
+    files = [
+        _file("song", "Blues/baby.mp3", catalog_id=_SONG, md5="m"),
+        _file("other", "Blues/baby (1).mp3", catalog_id=uuid.uuid4(), md5="m"),
+    ]
+    shown = {_SONG: _SHOWN[_SONG]}
+
+    [group] = dup.find_groups(files, shown)
+
+    assert _members(group) == {"song": None, "other": None}
+
+
+def test_the_run_reads_owner_edits_from_the_catalog_and_keeps_them_apart() -> None:
+    catalog = FakeCatalog(
+        rows=[
+            _file("song", "Blues/baby.mp3", catalog_id=_SONG, md5="m"),
+            _file("song2", "Blues/baby (1).mp3", catalog_id=_SONG, md5="m"),
+            _file("cut", "Blues/baby (2).mp3", catalog_id=_CUT, md5="m"),
+        ],
+        displays=dict(_SHOWN),
+    )
+
+    dup.run_duplicates(run_id="d-1", mode=FlowMode.WRITE, api=catalog)
+
+    [report] = catalog.reports
+    [group] = report.groups
+    assert {m.drive_file_id for m in group.files if not m.kept_on_purpose} == {
+        "song",
+        "song2",
+    }
+    assert "owner edit" in (_members(group)["cut"] or "")
 
 
 # ── Stability ─────────────────────────────────────────────────────────────
@@ -465,6 +594,38 @@ def test_fx_copies_in_different_folders_are_listed_for_the_owner_not_grouped(
         "fx_across_folders",
         f"{FX_LABEL}: Events/MADjam 2026/song.mp3; Walk-ons/song.mp3",
     ) in [c.args for c in report.notice.call_args_list]
+
+
+def test_an_fx_owner_edit_in_one_folder_is_not_a_copy_of_the_published_song(
+    roots,
+) -> None:
+    catalog = RootsCatalog(
+        rows=[
+            _fx("song", "Bow/baby.mp3", catalog_id=_SONG, md5="m"),
+            _fx("cut", "Bow/baby (1).mp3", catalog_id=_CUT, md5="m"),
+        ],
+        displays=dict(_SHOWN),
+    )
+
+    summary = dup.run_duplicates(run_id="d-1", mode=FlowMode.DRY_RUN, api=catalog)
+
+    assert summary.groups == []
+
+
+def test_an_fx_owner_edit_in_another_folder_is_not_listed_as_a_copy(roots) -> None:
+    catalog = RootsCatalog(
+        rows=[
+            _fx("song", "Bow/baby.mp3", catalog_id=_SONG, md5="m"),
+            _fx("cut", "Walk On/baby.mp3", catalog_id=_CUT, md5="m"),
+            _fx("cut2", "Award/baby.mp3", catalog_id=_CUT, md5="m"),
+        ],
+        displays=dict(_SHOWN),
+    )
+
+    summary = dup.run_duplicates(run_id="d-1", mode=FlowMode.DRY_RUN, api=catalog)
+
+    [fx] = [r for r in summary.roots if r.root.key == "fx"]
+    assert fx.across_folders == [["Award/baby.mp3", "Walk On/baby.mp3"]]
 
 
 def test_with_two_roots_each_group_names_its_root(roots) -> None:
