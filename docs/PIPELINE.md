@@ -18,11 +18,13 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
                               Lambda `deejay_cog.worker.lambda_handler`
                                                   │ one flow run per message
                                                   ▼
-                               process-new-files │ ingest-live-history
+                                the flow for the message's mode
 ```
 
-- **watcher-cog** notices new files in the CSV drop zone or the VirtualDJ
-  history folder and asks the API for a run of the matching `mode`.
+- **watcher-cog** notices new files in a watched Drive folder (the CSV drop
+  zone, the VirtualDJ history folder, the music upload and new-music input
+  folders) and asks the API for a run of the matching `mode`. It also runs
+  the library jobs on their schedules (below).
 - **api-kaianolevine-com** validates the mode and enqueues
   `{"type": "deejay.run", "version": 1, "payload": {"mode": "<mode>"}}`. It is
   the queue's only producer.
@@ -31,8 +33,11 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
 - **library-backfill** and **library-reconcile** are the modes meant to run
   on a schedule ([ADR-0003](decisions/ADR-0003-on-demand-no-cadence.md),
   amended 2026-11-03), each on its own, so the reconcile has a whole run's
-  time to write in. What sends their messages is wired outside this repo;
-  either can also be run on demand through `POST /v1/deejay/runs`.
+  time to write in: `library-backfill` nightly (the
+  [library job](#the-library-jobs)), `library-reconcile` through the day.
+  watcher-cog's scheduled jobs send them; the schedules are declared in
+  `mini-app-polis/infra`. Either can also be run on demand
+  ([below](#running-a-library-job-on-demand)).
 - Nothing else runs between triggers. The queue, function, dead-letter queue and
   alarms are declared in `mini-app-polis/infra`: a FIFO queue
   with reserved concurrency 1, so two sweeps never race over one folder; a
@@ -50,8 +55,8 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
 | `ingest-live-history` | **ingest-live-history** | `ingest_live_history.py` | Sends the plays in the **most recent** VirtualDJ `.m3u` to `POST /v1/live-plays`. Not the whole history. |
 | `retag-music` | **retag-music** | `retag_music_from_catalog.py` | Looks each audio file in the music upload folder up in the catalog and writes the catalog's tags over the same Drive file. |
 | `new-music` | **new-music** | `new_music.py` | Identifies each file in the new-music input folder, sends a tagged copy named `{title}_{artist}` to the destination folder and keeps the original in processed-originals. Off by default. |
-| `library-backfill` | **library-backfill** | `library_backfill.py` | Retags the music library from the catalog, in place, the next chunk of files each night from a stored position. Never renames, moves or deletes a library file. Off by default. |
-| `library-reconcile` | **library-reconcile** | `library_reconcile.py` | Compares the next chunk of linked library files with the catalog and, in write mode, writes the differences the owner approved. Off by default. |
+| `library-backfill` | **the library job** | `library_nightly.py` | Six steps over the music library, each with its own flag: scan, trash, identify, backfill, sync, duplicates ([below](#the-library-jobs)). Never renames, moves or deletes a library file (the trash step only moves the copies the owner chose to Drive's trash). |
+| `library-reconcile` | **library-reconcile** | `library_reconcile.py` | Settles the differences the owner approved, then compares the next chunk of linked library files with the catalog. |
 
 ### Local-only (never run by the worker)
 
@@ -230,6 +235,71 @@ destinations.
 by name. Off, the report says only that the flow is off; a missing setting
 is a WARN naming it.
 
+## The library jobs
+
+Two worker modes keep the music library and the catalog in step
+([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md)):
+
+- **`library-backfill`, the nightly library job** (`library_nightly.py`),
+  runs six steps in order, each with its own flag, settings and report:
+  [library-scan](#library-scan) (files added or removed reach the
+  registry), [library-trash](#library-trash) (the copies the owner chose
+  on the duplicates page go to Drive's trash),
+  [library-identify](#library-identify) (new files are linked to the
+  catalog), [library-backfill](#library-backfill) (the first linking pass
+  over the library; it reports `library_done` once the whole library is
+  linked), [library-sync](#library-sync) (edits made in VirtualDJ go up,
+  then catalog edits come down) and
+  [library-duplicates](#library-duplicates) (copies of one song grouped
+  for the duplicates page). A step that fails is reported and the next
+  one still runs; a step due after the run's deadline is skipped and done
+  next run.
+- **`library-reconcile`** (`library_reconcile.py`) runs on its own,
+  several times a day, so a write run has the worker's whole timeout. It
+  compares linked files with their entries and writes only what the owner
+  approved on the WCS review page.
+
+**How a file moves through them.** A new file is registered by the scan,
+linked by identify (only its `TXXX:CATALOG_ID` is written), and brought in
+step with its entry by the reconcile, field by field as the owner approves.
+From then on the sync keeps it in step: a catalog edit or display-rule
+change is written to the file on the next nightly run, and a tag edited in
+VirtualDJ goes up to the entry. The sync writes a file only once it has
+recorded what the file was last synced with; until then (a file just
+linked, written by the reconcile, or restored) it records those values and
+writes nothing, so for such a file the reconcile, not the sync, settles a
+difference first.
+
+### Running a library job on demand
+
+`POST /v1/deejay/runs` with `{"mode": "library-backfill"}` or
+`{"mode": "library-reconcile"}` queues one run, as the schedule does. The
+API takes it only from a principal with `deejay.runs.create`; from a
+working session, that is the owner console key in the `owner-session`
+Doppler project:
+
+```bash
+doppler run --project owner-session --config prd -- sh -c 'curl -sS -X POST https://api.kaianolevine.com/v1/deejay/runs -H "Authorization: Bearer $OWNER_CONSOLE_API_KEY" -H "Content-Type: application/json" -d "{\"mode\":\"library-backfill\"}"'
+```
+
+What to expect from the queue:
+
+- **One run at a time, in order.** The FIFO queue has one message group,
+  so a run queued on demand waits behind the scheduled ones.
+- **The same request twice within 5 minutes is one run.** The queue drops
+  a message identical to one sent in the last 5 minutes and answers with
+  the earlier message's id. The API's `deduplicated` flag is about
+  something else (Drive files a watcher already claimed) and stays `false`
+  for these requests.
+- **A run stopped at the deadline comes back.** Its message is delivered
+  again under the same run id, and each step carries on from where it got
+  to. After three receives the message goes to the dead-letter queue and
+  its alarm fires. A run that cannot finish holds the queue for every run
+  behind it until then; to start over, purge the queue
+  (`deejay-jobs.fifo`) and, once nothing is running, queue one fresh run.
+- **The code a run uses is the code deployed when it starts**, not when
+  it was queued. The worker deploys on a release from `main`.
+
 ## library-backfill
 
 Retags the files already in the music library from the catalog, in place
@@ -322,7 +392,7 @@ run's chunk** rather than start a new one, and carries on the same run
 record. A write cut off between the upload and its check is checked before
 the run stops. Before that, the backfill starts no file with less than
 `LIBRARY_BACKFILL_RESERVE_SECONDS` (default 120) left before the run
-deadline: it stops cleanly, reported as `paused`, so the reconcile, sync and
+deadline: it stops cleanly, reported as `paused`, so the sync and
 duplicate report after it still run, and the next run carries on from the
 cursor. The run record and the cursor are saved after each file even past
 the deadline, so a written file is never done twice. A written file takes
@@ -392,8 +462,9 @@ names each would-be change (`would_add`, `would_mark_back`, `would_move`,
 The third step of the nightly `library-backfill` job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decisions 2 and
 5): the library files the registry holds as `unidentified` (new to the
-library, or ones the backfill could not match) are identified, linked to
-their catalog entry and written with its values. Off unless
+library, or ones the backfill could not match) are identified and linked to
+their catalog entry; only the link is written to the file, and the
+reconcile brings its owned fields in step. Off unless
 the `flags.deejay_cog.library_identify` flag is `dry-run` or `write` (see
 [CONFIGURATION.md](CONFIGURATION.md#library-identify)).
 
@@ -507,6 +578,14 @@ from the registry (`Song (No Intro Edit)`). The comment and every
 VirtualDJ-owned frame are left out. A `TXXX:CATALOG_ID` naming another
 entry than the registry's link is listed under `other`.
 
+**A kind approval covers every file of that kind.** There is no per-file
+exception to it: with `year_later` approved for the file, any file whose
+year is older than its entry's sends that year up, even when the entry's
+year was set in the editor on purpose. To make one such file follow the
+entry, change the entry once the sync has recorded the file's values; the
+sync then writes the entry's value to the file before the reconcile sees a
+difference. Only `other` differences are approved file by file.
+
 **Kinds:** `case_punctuation`, `featured_moved`, `artist_joiner`,
 `version_brackets`, `genre_remapped`, `genre_filled`, `year_filled` (the
 file has none), `year_earlier` (the catalog's year is older), `year_later`
@@ -527,7 +606,10 @@ and the differences still open on them (`POST
 /v1/catalog/library/reconcile/differences`): all of them in a dry run, and
 in a write run those it did not write or fill up. For those files they
 replace what the API held, so the owner's review page on the WCS site shows
-each file's latest. A run that cannot send them reports `review_not_sent`
+each file's latest. The API leaves out a fill-up its catalog would refuse
+(a genre off the vocabulary, a one-character label such as the `E`/`C`
+markers): the file keeps that value on purpose and nothing goes up, so the
+review page does not list it. A run that cannot send them reports `review_not_sent`
 and carries on; the next pass sends them again.
 
 **Approvals** are the owner's, set on the review page; each write run reads
@@ -580,7 +662,8 @@ shows no approved difference left.
 **Long-open differences:** `library-reconcile-open.json` in the state folder
 keeps when each open difference was first seen; a difference whose values
 change starts again. Every run counts those open more than 7 days
-(`long_open`). A full pass has had the chance to settle each of them, so it
+(`long_open`), leaving out a refused fill-up (one a write run tried and
+the catalog would not take; above). A full pass has had the chance to settle each of them, so it
 has no decision, or one that cannot apply. The first run to find any warns
 once (`long_open`, with the count by kind), and again only after the count
 has been back to zero.
@@ -619,9 +702,11 @@ The API's approvals hold the current choices.
 The fifth step of the nightly `library-backfill` job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), step 4 and
 decision 5, edit): catalog edits and display-rule changes reach the files
-they affect. Off unless the `flags.deejay_cog.library_sync` flag is `dry-run` or `write`, and
-meant to stay off until the library is reconciled (see
-[CONFIGURATION.md](CONFIGURATION.md#library-sync)).
+they affect. Off unless the `flags.deejay_cog.library_sync` flag is
+`dry-run` or `write` (see
+[CONFIGURATION.md](CONFIGURATION.md#library-sync)); it was kept off until
+the library was reconciled, so the reconcile and the owner's approvals
+decided the first writes.
 
 **Each run** takes the next `LIBRARY_SYNC_CHUNK_SIZE` files the API lists
 as needing a sync (`GET /v1/catalog/library/files/needing-sync`): present,
@@ -681,6 +766,11 @@ put back (`stale write-back put back`; `would_put_back` in a dry run, which
 writes nothing) and every edit sent up. A put-back is an in-place write
 under the rules below, marked `sync (stale write-back put back)` in the
 run's record.
+
+The check cannot tell a deliberate edit back to a value the pipeline once
+replaced from a write-back: such an edit is put back too. To set a field to
+an older value, change it in the catalog editor; the sync writes it to the
+entry's files.
 
 **A bulk change is held.** `LIBRARY_SYNC_EDIT_FLOOD` (default 1000) is a
 backstop against a bulk write the value check does not catch: when more
@@ -790,6 +880,24 @@ its state (`planned`, `pending`, `done`, `skipped`, `failed`, `restored`),
 the reason for a skip or failure, the Drive revision kept and the MD5 of the
 original and written contents (in-place writes), any copy made (id, folder,
 name) and any move (from, to).
+
+### Putting the library's tags back to a moment
+
+```bash
+doppler run -- uv run python -m deejay_cog.library_restore <time>          # what it would do
+doppler run -- uv run python -m deejay_cog.library_restore <time> --apply  # do it
+```
+
+`<time>` is an ISO 8601 time with its offset (`2026-11-09T18:30:00-06:00`).
+A dry run unless `--apply`. For every library file Drive saw change after
+that time, each owned field that now differs from the file's last Drive
+revision at or before it gets that revision's value back; a field the old
+revision leaves empty is not emptied. Each write is recorded as a
+`library-restore` run that `music_rollback` undoes. The registry then
+forgets the restored files' synced values, so the sync records them afresh
+rather than reading the restore as edits: until it has (a few nightly runs
+for a large restore, at `LIBRARY_SYNC_CHUNK_SIZE` files a run), catalog
+edits do not reach those files.
 
 ### Restoring a file's own BPM
 
@@ -904,6 +1012,13 @@ folder is taken in again by the next new-music run: set the
 
 Both flows are safe to run again: archived CSVs are no longer in the drop
 zone, and re-sent plays are deduplicated by the API.
+
+The library jobs stop between files at the deadline, save where they got
+to, and raise `RunOutOfTime`, so the message is delivered again under the
+same run id and the run carries on; a step that fails is reported as an
+ERROR finding and the next step still runs. See
+[Running a library job on demand](#running-a-library-job-on-demand) for
+what a run that keeps stopping does to the queue.
 
 ---
 

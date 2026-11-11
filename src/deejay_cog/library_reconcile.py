@@ -86,7 +86,8 @@ and carries on; the next pass sends them again.
 **Long-open differences.** ``library-reconcile-open.json`` in the state
 folder keeps when each open difference was first seen (a difference whose
 values change starts again). Every run counts those open longer than
-``LONG_OPEN_DAYS`` (``long_open``): by then a full pass has had the chance
+``LONG_OPEN_DAYS`` (``long_open``), leaving out an approved fill-up a run
+tried and the catalog refused (the file keeps that value on purpose): by then a full pass has had the chance
 to settle them, so each has no decision or one that cannot apply. The first
 run to find any warns (``long_open``, with the count by kind); it warns
 again only after the count has been back to zero.
@@ -1140,6 +1141,10 @@ def _track_open(
         cutoff = now.timestamp() - LONG_OPEN_DAYS * 86400
         long_open: dict[str, int] = {}
         for value in kept.values():
+            if value.get("kind") == "fill_up" and value.get("tried"):
+                # Approved and refused by the catalog: the file keeps its
+                # value on purpose, so it never closes and is not "long open".
+                continue
             if datetime.fromisoformat(value["since"]).timestamp() <= cutoff:
                 long_open[value["kind"]] = long_open.get(value["kind"], 0) + 1
         warned = bool(held.get("warned"))
