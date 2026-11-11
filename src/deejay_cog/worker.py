@@ -59,12 +59,12 @@ from deejay_cog._pipeline_eval import post_run_finding
 from deejay_cog.fingerprint_jobs import QUEUE_URL_VAR
 from deejay_cog.ingest_live_history import ingest_live_history
 from deejay_cog.library_backfill import CHUNK_SIZE_VAR as BACKFILL_CHUNK_SIZE_VAR
+from deejay_cog.library_backfill import FX_ROOT_FOLDER_VAR, chunk_size_setting
 from deejay_cog.library_backfill import (
     RESERVE_SECONDS_VAR as BACKFILL_RESERVE_SECONDS_VAR,
 )
 from deejay_cog.library_backfill import ROOT_FOLDER_VAR as BACKFILL_ROOT_FOLDER_VAR
 from deejay_cog.library_backfill import SKIP_IDS_VAR as BACKFILL_SKIP_IDS_VAR
-from deejay_cog.library_backfill import chunk_size_setting
 from deejay_cog.library_identify import CHUNK_SIZE_VAR as IDENTIFY_CHUNK_SIZE_VAR
 from deejay_cog.library_identify import (
     chunk_size_setting as identify_chunk_size_setting,
@@ -163,6 +163,7 @@ def effective_settings() -> dict[str, Any]:
         NEW_MUSIC_MAX_FILES_VAR: max_files_per_run(),
         **{var: os.getenv(var, "").strip() for var in NEW_MUSIC_FOLDER_VARS.values()},
         BACKFILL_ROOT_FOLDER_VAR: os.getenv(BACKFILL_ROOT_FOLDER_VAR, "").strip(),
+        FX_ROOT_FOLDER_VAR: os.getenv(FX_ROOT_FOLDER_VAR, "").strip(),
         BACKFILL_CHUNK_SIZE_VAR: chunk_size_setting(),
         BACKFILL_SKIP_IDS_VAR: os.getenv(BACKFILL_SKIP_IDS_VAR, "").strip(),
         BACKFILL_RESERVE_SECONDS_VAR: os.getenv(

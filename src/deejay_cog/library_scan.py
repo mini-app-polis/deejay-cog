@@ -21,9 +21,19 @@ metadata only (no downloads), and compared with the API's library registry:
 **Never** renames, moves, deletes or downloads a file: only the registry
 changes.
 
+**Roots** (ADR-0009). Each library root is listed, compared and registered
+on its own. The main library is ``LIBRARY_ROOT_FOLDER_ID`` and, when set,
+New Music (``NEW_MUSIC_DESTINATION_FOLDER_ID``), both under the main root's
+id: New Music's files are registered under a path prefixed with
+``/New Music``, so a file moved between the two folders is moved, not removed
+and added. FX Music (``FX_LIBRARY_ROOT_FOLDER_ID``), when set, is a root of
+its own; the backfill does not list it, so none of its files are left to
+the backfill.
+
 **Position.** The listing is the backfill's resumable listing, kept in
-``library-scan-listing.json`` in ``MUSIC_TAGGING_STATE_FOLDER_ID``. A run
-lists for at most ``LIBRARY_SCAN_LISTING_SECONDS`` (default 90), so the
+``library-scan-listing.json`` in ``MUSIC_TAGGING_STATE_FOLDER_ID`` for the
+main library and ``library-scan-fx-listing.json`` for FX Music. A run
+lists for at most ``LIBRARY_SCAN_LISTING_SECONDS`` (default 90) in all, so the
 backfill's chunk still fits in the run, and the next run carries on where
 it stopped. Once a listing is complete it is compared, and the next run
 starts a new one.
@@ -32,8 +42,9 @@ starts a new one.
 ``write``. A dry run lists and compares, and reports what it would add and
 remove, but changes nothing in the registry. A listing with no MP3s, or one
 that would mark more than half of the present files not present, changes
-nothing and is reported as an issue: it is far likelier to be a wrong root
-or a Drive outage than the library emptying overnight.
+nothing under that root and is reported as an issue: it is far likelier to be
+a wrong root or a Drive outage than the library emptying overnight. Each root
+is judged on its own listing and rows.
 """
 
 from __future__ import annotations
@@ -64,8 +75,8 @@ from deejay_cog.api_client import api_client
 from deejay_cog.library_backfill import (
     CURSOR_NAME,
     MANIFEST_NAME,
-    ROOT_FOLDER_VAR,
     BackfillSettings,
+    LibraryRoot,
     StateFile,
     StateProblem,
     is_mp3_listing,
@@ -86,7 +97,16 @@ MODE_FLAG = "flags.deejay_cog.library_scan"
 LISTING_SECONDS_VAR = "LIBRARY_SCAN_LISTING_SECONDS"
 DEFAULT_LISTING_SECONDS = 90
 
+#: The main library's listing; other roots' listings are named by their key.
 LISTING_NAME = f"{FLOW_NAME}-listing.json"
+
+
+def listing_name(root: LibraryRoot) -> str:
+    """The state file holding ``root``'s listing."""
+    return (
+        LISTING_NAME if root.key == "main" else f"{FLOW_NAME}-{root.key}-listing.json"
+    )
+
 
 #: Registry rows asked for per page.
 REGISTRY_PAGE = 500
@@ -196,14 +216,13 @@ def _list(
     listing: dict[str, Any],
     *,
     exclude: set[str],
-    budget: float,
+    deadline: float,
 ) -> bool:
-    """List folders until none are left or the budget is spent; save the
-    listing either way. True when the listing is complete."""
-    started = monotonic()
+    """List folders until none are left or ``deadline`` (on ``monotonic``)
+    passes; save the listing either way. True when the listing is complete."""
     listed = 0
     while listing["pending_folders"]:
-        if shared_deadline_passed() or monotonic() - started >= budget:
+        if shared_deadline_passed() or monotonic() >= deadline:
             with without_run_deadline():
                 store.save(listing)
             return False
@@ -283,21 +302,24 @@ def compare(
 
 
 def _refusal(
-    listing: dict[str, Any], rows: dict[str, LibraryFile], gone: list[str]
+    root: LibraryRoot,
+    listing: dict[str, Any],
+    rows: dict[str, LibraryFile],
+    gone: list[str],
 ) -> str:
-    """Why the comparison must not be applied, or "" when it may."""
+    """Why the comparison of ``root`` must not be applied, or "" when it may."""
     mp3s = sum(1 for item in listing["files"] if is_mp3_listing(item))
     present = sum(1 for row in rows.values() if row.present)
     if mp3s == 0 and present:
         return (
-            f"the listing of {ROOT_FOLDER_VAR} found no MP3s but the registry has "
+            f"the listing of {root.label} found no MP3s but the registry has "
             f"{present} present; nothing was changed"
         )
     if present and len(gone) * 2 > present:
         return (
-            f"{len(gone)} of {present} present files would be marked not present; "
-            "nothing was changed (check the root and Drive, then trash "
-            f"{LISTING_NAME} to list again)"
+            f"{len(gone)} of {present} present files under {root.label} would be "
+            "marked not present; nothing was changed (check the root and Drive, "
+            f"then trash {listing_name(root)} to list again)"
         )
     return ""
 
@@ -333,6 +355,101 @@ def _apply(
             )
 
 
+def new_listing(root: LibraryRoot) -> dict[str, Any]:
+    """A listing of ``root`` about to start: each of its folders queued at
+    the path its files are registered under."""
+    listing = {**new_manifest(root.root_id), "flow": FLOW_NAME}
+    for folder in root.folders[1:]:
+        listing["pending_folders"].append({"id": folder.folder_id, "path": folder.path})
+        listing["folders"][folder.folder_id] = folder.path
+    listing["root_folders"] = root.folder_ids
+    return listing
+
+
+def _is_current(listing: dict[str, Any] | None, root: LibraryRoot) -> bool:
+    """Whether a saved listing is of ``root``'s folders and not yet compared."""
+    if listing is None or listing.get("compared_at"):
+        return False
+    if listing.get("root_folder_id") != root.root_id:
+        return False
+    # A listing saved before roots covered more than one folder lists the root's.
+    folders = listing.get("root_folders", [listing.get("root_folder_id")])
+    return list(folders) == root.folder_ids
+
+
+def _merge(summary: ScanSummary, part: ScanSummary) -> None:
+    """Add one root's comparison to the run's."""
+    summary.added_held = summary.added_held or part.added_held
+    summary.added.extend(part.added)
+    summary.back.extend(part.back)
+    summary.moved.extend(part.moved)
+    summary.removed.extend(part.removed)
+    summary.left_for_backfill += part.left_for_backfill
+    summary.unchanged += part.unchanged
+    summary.failed.extend(part.failed)
+
+
+def _scan_root(
+    drive: Any,
+    api: Registry | None,
+    settings: BackfillSettings,
+    root: LibraryRoot,
+    deadline: float,
+    summary: ScanSummary,
+) -> Registry | None:
+    """List, compare and register one root; the API client, once made."""
+    store = StateFile(drive, settings.state, listing_name(root))
+    try:
+        listing = store.load()
+    except StateProblem as exc:
+        summary.problems.append(str(exc))
+        return api
+    if listing is None or not _is_current(listing, root):
+        listing = new_listing(root)
+    others = {
+        folder_id
+        for other in settings.roots
+        if other.key != root.key
+        for folder_id in other.folder_ids
+    }
+    before = len(listing["files"])
+    complete = _list(
+        drive, store, listing, exclude={settings.state, *others}, deadline=deadline
+    )
+    summary.listed += len(listing["files"]) - before
+    summary.listing_pending_folders += len(listing["pending_folders"])
+    if not complete:
+        summary.listing_complete = False
+        return api
+
+    pending: set[str] | None = set()
+    if root.key == "main":
+        # Only the main library's own folder is the backfill's to register.
+        try:
+            pending = _pending_backfill(drive, settings.state)
+        except StateProblem as exc:
+            summary.problems.append(str(exc))
+            return api
+    client = api or cast(Registry, api_client(base_url=api_base_url().strip() or None))
+    rows = _registry_rows(client, root.root_id)
+    part = ScanSummary(summary.mode)
+    registrations, gone = compare(listing, rows, pending, root.root_id, part)
+    refused = _refusal(root, listing, rows, gone)
+    if refused:
+        summary.refused = (
+            f"{summary.refused}; {refused}" if summary.refused else refused
+        )
+    else:
+        summary.compared = True
+        if summary.mode.writes:
+            _apply(client, registrations, gone, part)
+        _merge(summary, part)
+    # Compared (or refused): the next run lists the root afresh.
+    listing["compared_at"] = _now()
+    store.save(listing)
+    return client
+
+
 def _scan(
     drive: Any,
     api: Registry | None,
@@ -340,42 +457,13 @@ def _scan(
     budget: int,
     summary: ScanSummary,
 ) -> None:
-    store = StateFile(drive, settings.state, LISTING_NAME)
-    try:
-        listing = store.load()
-    except StateProblem as exc:
-        summary.problems.append(str(exc))
-        return
-    if (
-        listing is None
-        or listing.get("compared_at")
-        or listing.get("root_folder_id") != settings.root
-    ):
-        listing = {**new_manifest(settings.root), "flow": FLOW_NAME}
-    before = len(listing["files"])
-    complete = _list(drive, store, listing, exclude={settings.state}, budget=budget)
-    summary.listed = len(listing["files"]) - before
-    summary.listing_pending_folders = len(listing["pending_folders"])
-    if not complete:
-        return
+    deadline = monotonic() + budget
     summary.listing_complete = True
-
-    try:
-        pending = _pending_backfill(drive, settings.state)
-    except StateProblem as exc:
-        summary.problems.append(str(exc))
-        return
-    client = api or cast(Registry, api_client(base_url=api_base_url().strip() or None))
-    rows = _registry_rows(client, settings.root)
-    registrations, gone = compare(listing, rows, pending, settings.root, summary)
-    summary.refused = _refusal(listing, rows, gone)
-    if not summary.refused:
-        summary.compared = True
-        if summary.mode.writes:
-            _apply(client, registrations, gone, summary)
-    # Compared (or refused): the next run lists the library afresh.
-    listing["compared_at"] = _now()
-    store.save(listing)
+    for root in settings.roots:
+        api = _scan_root(drive, api, settings, root, deadline, summary)
+        if summary.problems:
+            summary.listing_complete = False
+            return
 
 
 def run_scan(

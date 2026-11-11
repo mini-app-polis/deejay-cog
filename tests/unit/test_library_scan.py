@@ -27,6 +27,7 @@ from deejay_cog.music_safety import FlowMode
 from flag_fakes import FLAGS
 
 ROOT, STATE = "root", "state"
+NEW_MUSIC, FX = "new-music", "fx"
 FOLDER = backfill.FOLDER_MIME_TYPE
 _LINK = uuid.UUID("11111111-2222-3333-4444-555555555555")
 _NOW = dt.datetime(2026, 11, 6, tzinfo=dt.UTC)
@@ -41,12 +42,18 @@ class FakeRegistry:
     absent_calls: list[list[str]] = field(default_factory=list)
 
     def add(
-        self, drive_id: str, path: str, *, present: bool = True, linked: bool = True
+        self,
+        drive_id: str,
+        path: str,
+        *,
+        present: bool = True,
+        linked: bool = True,
+        root: str = ROOT,
     ) -> None:
         self.rows[drive_id] = LibraryFile(
             id=uuid.uuid4(),
             drive_file_id=drive_id,
-            library_root_id=ROOT,
+            library_root_id=root,
             path=path,
             identification_status="identified" if linked else "unidentified",
             catalog_id=_LINK if linked else None,
@@ -57,8 +64,11 @@ class FakeRegistry:
         )
 
     def list_library_files(self, **kwargs) -> list[LibraryFile]:
-        assert kwargs["library_root_id"] == ROOT
-        rows = list(self.rows.values())
+        rows = [
+            row
+            for row in self.rows.values()
+            if row.library_root_id == kwargs["library_root_id"]
+        ]
         start = kwargs["offset"]
         return rows[start : start + kwargs["limit"]]
 
@@ -111,6 +121,24 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(FLAGS, scan.MODE_FLAG, "write")
     monkeypatch.delenv(scan.LISTING_SECONDS_VAR, raising=False)
     monkeypatch.delenv(backfill.CHUNK_SIZE_VAR, raising=False)
+    monkeypatch.delenv(backfill.NEW_MUSIC_FOLDER_VAR, raising=False)
+    monkeypatch.delenv(backfill.FX_ROOT_FOLDER_VAR, raising=False)
+
+
+@pytest.fixture
+def new_music(monkeypatch: pytest.MonkeyPatch, drive: FakeDrive) -> None:
+    """New Music set: a sibling of the main library folder."""
+    monkeypatch.setenv(backfill.NEW_MUSIC_FOLDER_VAR, NEW_MUSIC)
+    drive.items[NEW_MUSIC] = DriveItem(
+        NEW_MUSIC, "New Music", ["elsewhere"], mime_type=FOLDER
+    )
+
+
+@pytest.fixture
+def fx(monkeypatch: pytest.MonkeyPatch, drive: FakeDrive) -> None:
+    """FX Music set: a library root of its own."""
+    monkeypatch.setenv(backfill.FX_ROOT_FOLDER_VAR, FX)
+    drive.items[FX] = DriveItem(FX, "FX Music", ["elsewhere"], mime_type=FOLDER)
 
 
 @pytest.fixture
@@ -173,8 +201,8 @@ def _backfill_done(drive: FakeDrive, file_ids: list[str], position: int) -> None
     )
 
 
-def _listing(drive: FakeDrive) -> dict | None:
-    found = [i for i in drive.in_folder(STATE) if i.name == scan.LISTING_NAME]
+def _listing(drive: FakeDrive, name: str = scan.LISTING_NAME) -> dict | None:
+    found = [i for i in drive.in_folder(STATE) if i.name == name]
     return json.loads(found[0].data) if found else None
 
 
@@ -475,3 +503,205 @@ def test_a_compared_listing_is_listed_afresh_the_next_night(
     assert _listing(drive)["generation"] != generation
     assert [p.drive_file_id for p in registry.registrations] == [new]
     assert summary.added == ["b.mp3"]
+
+
+# ---------------------------------------------------------------------------
+# Roots: the main library (its folder and New Music) and FX Music
+# ---------------------------------------------------------------------------
+
+
+def _roots() -> tuple[backfill.LibraryRoot, ...]:
+    settings, problems = backfill.BackfillSettings.from_env()
+    assert problems == [] and settings is not None
+    return settings.roots
+
+
+def test_only_the_library_root_is_one_root_of_one_folder(settings) -> None:
+    [main] = _roots()
+
+    assert (main.key, main.root_id, main.folder_ids) == ("main", ROOT, [ROOT])
+
+
+def test_new_music_is_a_folder_of_the_main_root_and_fx_a_root_of_its_own(
+    settings, new_music, fx
+) -> None:
+    main, fx_root = _roots()
+
+    assert (main.root_id, main.folder_ids) == (ROOT, [ROOT, NEW_MUSIC])
+    assert main.folders[1].path == backfill.NEW_MUSIC_PATH_PREFIX
+    assert (fx_root.key, fx_root.root_id, fx_root.folder_ids) == ("fx", FX, [FX])
+
+
+@pytest.mark.parametrize(
+    ("var", "value"),
+    [
+        (backfill.NEW_MUSIC_FOLDER_VAR, ROOT),
+        (backfill.FX_ROOT_FOLDER_VAR, ROOT),
+        (backfill.FX_ROOT_FOLDER_VAR, STATE),
+        (backfill.FX_ROOT_FOLDER_VAR, NEW_MUSIC),
+    ],
+)
+def test_a_root_folder_named_twice_is_a_problem(
+    settings, new_music, monkeypatch, var, value
+) -> None:
+    monkeypatch.setenv(var, value)
+
+    found, problems = backfill.BackfillSettings.from_env()
+
+    assert found is None
+    assert any(var in p and "different folders" in p for p in problems)
+
+
+def test_new_music_files_register_under_the_main_root_with_a_prefixed_path(
+    settings, new_music, wired, drive, registry, posted
+) -> None:
+    a = drive.add("a.mp3", ROOT)
+    _backfill_done(drive, [a], position=1)
+    registry.add(a, "a.mp3")
+    fresh = drive.add("a.mp3", NEW_MUSIC)  # the same name as the main folder's
+    sub = drive.add("Week 1", NEW_MUSIC, mime_type=FOLDER)
+    later = drive.add("b.mp3", sub)
+
+    summary = scan.library_scan(run_id="s-1")
+
+    assert summary.compared
+    assert sorted(summary.added) == ["/New Music/Week 1/b.mp3", "/New Music/a.mp3"]
+    by_id = {p.drive_file_id: p for p in registry.registrations}
+    assert set(by_id) == {fresh, later}
+    assert all(p.library_root_id == ROOT for p in by_id.values())
+    assert by_id[fresh].path == "/New Music/a.mp3"
+    assert registry.rows[a].path == "a.mp3"  # the main folder's row is untouched
+    assert _listing(drive)["root_folders"] == [ROOT, NEW_MUSIC]
+
+
+@pytest.mark.parametrize("into_main", [True, False])
+def test_a_file_moved_between_the_main_folder_and_new_music_is_moved(
+    settings, new_music, wired, drive, registry, into_main
+) -> None:
+    keep = drive.add("keep.mp3", ROOT)
+    a = drive.add("a.mp3", ROOT if into_main else NEW_MUSIC)
+    _backfill_done(drive, [keep], position=1)
+    registry.add(keep, "keep.mp3")
+    registry.add(a, "/New Music/a.mp3" if into_main else "a.mp3")
+    row_id = registry.rows[a].id
+
+    summary = scan.library_scan(run_id="s-1")
+
+    move = "/New Music/a.mp3 -> a.mp3" if into_main else "a.mp3 -> /New Music/a.mp3"
+    assert summary.moved == [move]
+    assert summary.added == [] and summary.removed == []
+    assert registry.absent_calls == []
+    assert registry.rows[a].id == row_id
+    assert registry.rows[a].catalog_id == _LINK
+
+
+def test_fx_music_is_listed_and_registered_as_its_own_root(
+    settings, fx, wired, drive, registry, posted
+) -> None:
+    a = drive.add("a.mp3", ROOT)
+    _backfill_done(drive, [a], position=1)
+    registry.add(a, "a.mp3")
+    walk_on = drive.add("Walk-ons", FX, mime_type=FOLDER)
+    clip = drive.add("a.mp3", walk_on)
+    drive.add("bow.wav", FX, mime_type="audio/wav")  # MP3s only
+
+    summary = scan.library_scan(run_id="s-1")
+
+    [payload] = registry.registrations
+    assert (payload.drive_file_id, payload.library_root_id) == (clip, FX)
+    assert payload.path == "Walk-ons/a.mp3"
+    assert summary.added == ["Walk-ons/a.mp3"]
+    assert summary.left_for_backfill == 0
+    assert summary.unchanged == 1
+    fx_listing = _listing(drive, f"{scan.FLOW_NAME}-fx-listing.json")
+    assert fx_listing["root_folder_id"] == FX
+    assert fx_listing["compared_at"]
+    assert all(item["id"] != clip for item in _listing(drive)["files"])
+
+
+def test_one_roots_refusal_does_not_stop_the_other(
+    settings, fx, wired, drive, registry, posted
+) -> None:
+    a = drive.add("a.mp3", ROOT)
+    _backfill_done(drive, [a], position=1)
+    registry.add(a, "a.mp3")
+    new = drive.add("b.mp3", ROOT)
+    for n in range(2):
+        registry.add(f"fx-{n}", f"fx-{n}.mp3", root=FX)  # FX lists no MP3s
+
+    summary = scan.library_scan(run_id="s-1")
+
+    assert summary.refused
+    assert backfill.FX_ROOT_FOLDER_VAR in summary.refused
+    assert [p.drive_file_id for p in registry.registrations] == [new]
+    assert registry.absent_calls == []
+    assert all(registry.rows[f"fx-{n}"].present for n in range(2))
+    assert "no MP3s" in _text(posted)
+
+
+def test_the_main_roots_files_are_not_made_absent_by_fx_music(
+    settings, fx, wired, drive, registry
+) -> None:
+    files = [drive.add(f"{n}.mp3", ROOT) for n in range(3)]
+    _backfill_done(drive, files, position=3)
+    for n, drive_id in enumerate(files):
+        registry.add(drive_id, f"{n}.mp3")
+    clip = drive.add("clip.mp3", FX)
+    registry.add(clip, "clip.mp3", root=FX)
+    del drive.items[files[2]]
+
+    summary = scan.library_scan(run_id="s-1")
+
+    assert not summary.refused
+    assert summary.removed == ["2.mp3"]
+    assert registry.absent_calls == [[files[2]]]
+    assert summary.unchanged == 3
+
+
+def test_a_listing_saved_before_new_music_was_set_is_listed_afresh(
+    settings, wired, drive, registry, monkeypatch
+) -> None:
+    sub = drive.add("Dir", ROOT, mime_type=FOLDER)
+    a = drive.add("a.mp3", sub)
+    _backfill_done(drive, [a], position=1)
+    registry.add(a, "Dir/a.mp3")
+    ticks = iter([0.0, 0.0, 0.0, 100.0])
+    monkeypatch.setattr(scan, "monotonic", lambda: next(ticks, 1000.0))
+    scan.run_scan(run_id="s-1", mode=FlowMode.WRITE)
+    old = _listing(drive)
+    assert old["pending_folders"]
+    monkeypatch.setattr(scan, "monotonic", lambda: 0.0)
+    monkeypatch.setenv(backfill.NEW_MUSIC_FOLDER_VAR, NEW_MUSIC)
+    drive.items[NEW_MUSIC] = DriveItem(
+        NEW_MUSIC, "New Music", ["elsewhere"], mime_type=FOLDER
+    )
+
+    summary = scan.run_scan(run_id="s-2", mode=FlowMode.WRITE)
+
+    assert summary.listing_complete
+    assert _listing(drive)["generation"] != old["generation"]
+    assert _listing(drive)["root_folders"] == [ROOT, NEW_MUSIC]
+
+
+def test_a_listing_saved_before_roots_carries_on_when_only_the_root_is_set(
+    settings, wired, drive, registry, monkeypatch
+) -> None:
+    sub = drive.add("Dir", ROOT, mime_type=FOLDER)
+    a = drive.add("a.mp3", sub)
+    _backfill_done(drive, [a], position=1)
+    registry.add(a, "Dir/a.mp3")
+    ticks = iter([0.0, 0.0, 0.0, 100.0])
+    monkeypatch.setattr(scan, "monotonic", lambda: next(ticks, 1000.0))
+    scan.run_scan(run_id="s-1", mode=FlowMode.WRITE)
+    store = backfill.StateFile(drive, STATE, scan.LISTING_NAME)
+    saved = store.load()
+    assert saved is not None
+    del saved["root_folders"]  # as a listing from before roots
+    store.save(saved)
+    monkeypatch.setattr(scan, "monotonic", lambda: 0.0)
+
+    summary = scan.run_scan(run_id="s-2", mode=FlowMode.WRITE)
+
+    assert summary.listing_complete
+    assert summary.unchanged == 1
+    assert _listing(drive)["generation"] == saved["generation"]

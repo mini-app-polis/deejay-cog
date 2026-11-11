@@ -147,7 +147,17 @@ library registry in step with what is in the library. It reads
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_SCAN_LISTING_SECONDS` | `90` | The most seconds one run spends listing the library, so the backfill's chunk still fits in the run; a whole number of at least 1. |
+| `LIBRARY_SCAN_LISTING_SECONDS` | `90` | The most seconds one run spends listing the libraries, so the backfill's chunk still fits in the run; a whole number of at least 1. |
+| `NEW_MUSIC_DESTINATION_FOLDER_ID` | none | New Music, the folder new-music intake writes to (above). When set, it is listed as part of the main library, under `LIBRARY_ROOT_FOLDER_ID`'s root. |
+| `FX_LIBRARY_ROOT_FOLDER_ID` | none | FX Music, listed recursively as a library root of its own. Unset, there is no FX library. |
+
+There are two libraries
+([ADR-0009](decisions/ADR-0009-library-folders.md)): **the main library**,
+`LIBRARY_ROOT_FOLDER_ID` and New Music under one root, and **FX Music**.
+With only `LIBRARY_ROOT_FOLDER_ID` set, the scan lists that one folder as
+before. Any two of `LIBRARY_ROOT_FOLDER_ID`, `NEW_MUSIC_DESTINATION_FOLDER_ID`,
+`FX_LIBRARY_ROOT_FOLDER_ID` and `MUSIC_TAGGING_STATE_FOLDER_ID` that name the
+same folder are a problem, for the backfill as well as the scan.
 
 A problem with a setting is a WARN in the scan's report; the backfill runs
 regardless. See [PIPELINE.md](PIPELINE.md#library-scan).

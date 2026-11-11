@@ -134,6 +134,18 @@ MODE_FLAG = "flags.deejay_cog.library_backfill"
 #: The library's root folder, walked recursively.
 ROOT_FOLDER_VAR = "LIBRARY_ROOT_FOLDER_ID"
 
+#: New Music, the folder new-music intake writes to: listed with the main
+#: library, under its root (ADR-0009).
+NEW_MUSIC_FOLDER_VAR = "NEW_MUSIC_DESTINATION_FOLDER_ID"
+
+#: FX Music, a library root of its own when set (ADR-0009).
+FX_ROOT_FOLDER_VAR = "FX_LIBRARY_ROOT_FOLDER_ID"
+
+#: The path New Music's files are registered under, in the main library.
+#: A path in the main folder never starts with "/": a top-level file's path
+#: is its bare name, and a name holding "/" can't sync to a local disk.
+NEW_MUSIC_PATH_PREFIX = "/New Music"
+
 #: Files per run; a whole number of at least 1.
 CHUNK_SIZE_VAR = "LIBRARY_BACKFILL_CHUNK_SIZE"
 DEFAULT_CHUNK_SIZE = 10
@@ -180,6 +192,37 @@ def _now() -> str:
 
 
 @dataclass(frozen=True)
+class LibraryFolder:
+    """One Drive folder a library root covers, listed recursively."""
+
+    folder_id: str
+    #: The setting naming it.
+    setting: str
+    #: The path its files are registered under; "" for the root's own folder.
+    path: str = ""
+
+
+@dataclass(frozen=True)
+class LibraryRoot:
+    """One library: its ``library_root_id`` and the folders listed under it."""
+
+    #: "main" or "fx".
+    key: str
+    root_id: str
+    folders: tuple[LibraryFolder, ...]
+
+    @property
+    def folder_ids(self) -> list[str]:
+        """Its folders' ids, the root's own first."""
+        return [folder.folder_id for folder in self.folders]
+
+    @property
+    def label(self) -> str:
+        """The settings naming its folders, for a report."""
+        return " and ".join(folder.setting for folder in self.folders)
+
+
+@dataclass(frozen=True)
 class BackfillSettings:
     """The backfill's settings, read from the environment at the start of a run."""
 
@@ -188,6 +231,27 @@ class BackfillSettings:
     chunk_size: int
     skip_ids: frozenset[str]
     reserve_seconds: int = DEFAULT_RESERVE_SECONDS
+    #: New Music, listed with the main library; "" when unset.
+    new_music: str = ""
+    #: FX Music's root; "" when unset.
+    fx_root: str = ""
+
+    @property
+    def roots(self) -> tuple[LibraryRoot, ...]:
+        """The library roots: the main library (its folder, and New Music
+        when set), then FX Music when set."""
+        main = [LibraryFolder(self.root, ROOT_FOLDER_VAR)]
+        if self.new_music:
+            main.append(
+                LibraryFolder(
+                    self.new_music, NEW_MUSIC_FOLDER_VAR, NEW_MUSIC_PATH_PREFIX
+                )
+            )
+        roots = [LibraryRoot("main", self.root, tuple(main))]
+        if self.fx_root:
+            fx = LibraryFolder(self.fx_root, FX_ROOT_FOLDER_VAR)
+            roots.append(LibraryRoot("fx", self.fx_root, (fx,)))
+        return tuple(roots)
 
     @classmethod
     def from_env(cls) -> tuple[BackfillSettings | None, list[str]]:
@@ -203,6 +267,19 @@ class BackfillSettings:
             problems.append(
                 f"{ROOT_FOLDER_VAR} and {STATE_FOLDER_VAR} must be different folders"
             )
+        new_music = os.getenv(NEW_MUSIC_FOLDER_VAR, "").strip()
+        fx_root = os.getenv(FX_ROOT_FOLDER_VAR, "").strip()
+        named = [(ROOT_FOLDER_VAR, root), (STATE_FOLDER_VAR, state)]
+        for var, value in (
+            (NEW_MUSIC_FOLDER_VAR, new_music),
+            (FX_ROOT_FOLDER_VAR, fx_root),
+        ):
+            if not value:
+                continue
+            for other, other_value in named:
+                if value == other_value:
+                    problems.append(f"{var} and {other} must be different folders")
+            named.append((var, value))
         raw = os.getenv(CHUNK_SIZE_VAR, "").strip()
         chunk_size = DEFAULT_CHUNK_SIZE
         if raw:
@@ -232,7 +309,15 @@ class BackfillSettings:
                 )
         if problems:
             return None, problems
-        return cls(root, state, chunk_size, skip_ids, reserve), []
+        return cls(
+            root,
+            state,
+            chunk_size,
+            skip_ids,
+            reserve,
+            new_music=new_music,
+            fx_root=fx_root,
+        ), []
 
 
 def chunk_size_setting() -> int | str:

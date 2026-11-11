@@ -440,13 +440,36 @@ downloads a file**. Off unless the `flags.deejay_cog.library_scan` flag is `dry-
 (see [CONFIGURATION.md](CONFIGURATION.md#library-scan)). A scan that fails is
 reported as an ERROR finding and the backfill's chunk runs anyway.
 
-**The listing** is the backfill's kind of listing (breadth first, the state
-folder and shortcuts left out), kept in `library-scan-listing.json` in the
-state folder. A run lists for at most `LIBRARY_SCAN_LISTING_SECONDS`; an
-unfinished listing is saved and the next run carries on. Only a complete
-listing is compared, and the run after a comparison lists afresh.
+**Two libraries**
+([ADR-0009](decisions/ADR-0009-library-folders.md)), each listed, compared
+and registered on its own:
 
-**The comparison**, against every registry row under the library root:
+- **The main library** — `LIBRARY_ROOT_FOLDER_ID` and, when
+  `NEW_MUSIC_DESTINATION_FOLDER_ID` is set, New Music. Both folders' files
+  are registered under the main folder's id as their library root. A New
+  Music file's path is its path under New Music prefixed with `/New Music`
+  (`/New Music/Week 1/song.mp3`), which no path in the main folder starts
+  with. A file moved between the main folder and New Music, either way, is
+  **moved**: it keeps its row, link and plays.
+- **FX Music** — `FX_LIBRARY_ROOT_FOLDER_ID`, when set: a library root of
+  its own, its id the FX Music folder's. The backfill does not list it, so
+  none of its files are left to the backfill.
+
+With only `LIBRARY_ROOT_FOLDER_ID` set, the scan is the one-folder scan it
+always was. Only MP3s are compared, in either library.
+
+**The listing** is the backfill's kind of listing (breadth first, the state
+folder, shortcuts and the other library's folders left out), kept in the
+state folder: `library-scan-listing.json` for the main library,
+`library-scan-fx-listing.json` for FX Music. A run lists for at most
+`LIBRARY_SCAN_LISTING_SECONDS` across both, the main library first; an
+unfinished listing is saved and the next run carries on. A listing whose
+library's folders have changed since it started is started afresh. Only a
+complete listing is compared, and the run after a comparison lists that
+library afresh.
+
+**The comparison**, for each library against every registry row under its
+root:
 
 - **added** — an MP3 the registry has never seen is registered
   `unidentified`, with its path. A file the backfill's manifest lists but
@@ -464,13 +487,18 @@ listing is compared, and the run after a comparison lists afresh.
 
 **Safety:** a listing with no MP3s while the registry has present files, or
 one that would mark more than half of the present files not present,
-changes nothing and is a WARN (`refused`): a wrong root or a Drive problem
-is far likelier than the library emptying overnight. A dry run compares and
+changes nothing in that library and is a WARN (`refused`, naming the
+library's settings): a wrong root or a Drive problem is far likelier than
+the library emptying overnight. Each library is judged on its own listing
+and rows, so one library's listing never makes the other's files look
+removed, and a refusal in one does not stop the other. A dry run compares and
 names each would-be change (`would_add`, `would_mark_back`, `would_move`,
 `would_remove`) and changes nothing.
 
 **Report:** counts for `listed`, `added`, `back`, `moved`, `removed`,
-`left_for_backfill`, `unchanged` and `failed`, with every file by its path.
+`left_for_backfill`, `unchanged` and `failed` across both libraries, with
+every file by its path; a refused library's would-be changes are not
+counted.
 
 ## library-identify
 
