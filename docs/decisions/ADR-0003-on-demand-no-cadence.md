@@ -4,7 +4,7 @@ Date: 2026-04-23
 
 ## Status
 
-Accepted, amended (Oct 2026; 2026-11-03).
+Accepted, amended (Oct 2026; 2026-11-03; 2026-11-10).
 
 > **Amended (Oct 2026).** The two observability channels named in Decision
 > are gone with Prefect ([ADR-0006](./ADR-0006-lambda-behind-sqs.md)). A run
@@ -35,6 +35,15 @@ Accepted, amended (Oct 2026; 2026-11-03).
 > `LIBRARY_BACKFILL_MODE` may be `off` for long stretches. The conclusion
 > — no Healthchecks.io ping — stands; a missed night is seen as the
 > backfill's `remaining` count not falling in its reports.
+
+> **Amended 2026-11-10 (owner): the library jobs run often and act only on
+> change.** The library job (`library-backfill`) and the reconcile
+> (`library-reconcile`) each run several times a day, so a change in Drive
+> or the catalog resolves within the hour. Each step acts only on what
+> changed and sends no report when it has nothing to do
+> ([ADR-0008, decided 2026-11-10](./ADR-0008-catalog-source-of-truth.md#decided-with-the-owner-2026-11-10-a-stable-library-is-quiet)),
+> so the cadence still says nothing about liveness, and the conclusion — no
+> Healthchecks.io ping — stands.
 
 ## Context
 

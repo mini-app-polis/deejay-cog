@@ -1,41 +1,39 @@
-"""The ``library-reconcile`` step of the nightly library run: compare each
+"""The ``library-reconcile`` worker mode, on its own schedule: compare each
 linked library file's owned fields with what its catalog entry says they
 should be, and group every difference by kind (ADR-0008, step 3 and
 decision 15).
 
 **A dry run reads only.** Nothing is written to any music file, and
 nothing in the catalog or the registry changes: the run writes only its
-cursor and its record in ``MUSIC_TAGGING_STATE_FOLDER_ID``, and sends its
+what it compared and its record in ``MUSIC_TAGGING_STATE_FOLDER_ID``, and sends its
 differences to the owner's review (below). A **write** run
 compares the same way, then applies only what the owner approved (below),
 with the catalog winning.
 
-**Which files.** Registered files under ``LIBRARY_ROOT_FOLDER_ID`` that are
-present and identified (linked to a catalog entry), in the registry's own
-order (``GET /v1/catalog/library/files``, oldest first). Each run takes the
-next ``LIBRARY_RECONCILE_CHUNK_SIZE`` files (default 50) after its own
-cursor, ``library-reconcile-cursor.json``, kept apart from the backfill's.
-A dry run moves this cursor: repeated dry runs step through the whole
-library, and after the last file the next run starts again from the first.
-The cursor names the last file compared (``after``, its registry id), and
-the next run asks for the files after that one. So a file linked, unlinked
-or marked not present between runs, earlier in the order, neither repeats
-nor skips a file; ``position`` only counts the files compared this pass,
-for the report. A cursor with no ``after`` (moved by hand) starts at its
-``position`` once; one naming a file the registry does not have starts
-the next pass.
-Past the run's deadline the run stops between files and saves where it got
-to.
+**Which files: only those that changed.** Registered files under
+``LIBRARY_ROOT_FOLDER_ID`` that are present and identified (linked to a
+catalog entry), in the registry's own order (``GET
+/v1/catalog/library/files``). ``library-reconcile-seen.json`` in the state
+folder keeps, for each file, what it was when it was last compared: when
+Drive last saw it change (from the scan's listing,
+``library-scan-listing.json``), when its entry's display last changed
+(``changed_at`` from ``POST /v1/catalog/display``, which a display-rule
+change moves too) and the entry it was linked to. A run compares a file only
+when one of those has moved since, or it was never compared; up to
+``LIBRARY_RECONCILE_CHUNK_SIZE`` of them, the rest on the next run
+(``changed_left``). A library where nothing changed is not read at all. To
+compare every file again (after a change to the reconcile's own rules),
+trash ``library-reconcile-seen.json``: every file is then new to it, and the
+runs work through the library a chunk at a time. Past the run's deadline the
+run stops between files and saves what it compared.
 
 **Approved files first.** A write run first compares the files that have
 an open difference the owner has approved (from ``library-reconcile-open.json``
 and the approvals), up to ``LIBRARY_RECONCILE_CHUNK_SIZE`` of them, so an
-approval settles on the next run rather than when the cursor comes round.
-An approved difference a write run tried and left open (a fill-up the
-catalog refused, a value the API held) is marked ``tried`` and not put first
-again; the cursor still comes round to it.
-They do not move the cursor; the run then carries on from it as usual, and
-a file it already compared first is passed over.
+approval settles on the next run. An approved difference a write run tried
+and left open (a fill-up the catalog refused, a value the API held) is
+marked ``tried`` and not put first again; the file is compared again when it
+changes.
 
 **What is compared.** The owned fields (title with its version, artist,
 year, genre, BPM, label) as the file's ID3 tags hold them, against the
@@ -87,9 +85,9 @@ and carries on; the next pass sends them again.
 folder keeps when each open difference was first seen (a difference whose
 values change starts again). Every run counts those open longer than
 ``LONG_OPEN_DAYS`` (``long_open``), leaving out an approved fill-up a run
-tried and the catalog refused (the file keeps that value on purpose): by then a full pass has had the chance
-to settle them, so each has no decision or one that cannot apply. The first
-run to find any warns (``long_open``, with the count by kind); it warns
+tried and the catalog refused (the file keeps that value on purpose): by
+then each has had the chance to settle, so each has no decision or one
+that cannot apply. The first run to find any warns (``long_open``, with the count by kind); it warns
 again only after the count has been back to zero.
 
 **Approvals** are the owner's, set on the review page and read from the API
@@ -122,8 +120,8 @@ the API holds (a title or artist that does not split into parts cleanly, a
 genre off the vocabulary) stays open on the review page, with the reason in
 the report. Anything not approved is left as it is and counted. Until any approvals are set a write
 run writes nothing. Genre is written; subgenre is not (no frame for it is
-decided). An audio mismatch stops the run with an ERROR finding and leaves
-the cursor on that file.
+decided). An audio mismatch stops the run with an ERROR finding; that file
+is not marked compared, so the next run takes it again.
 
 **Safety:** ``flags.deejay_cog.library_reconcile`` is ``off`` unless ``dry-run`` or
 ``write``. The comment frame and VirtualDJ's frames are never written.
@@ -141,7 +139,6 @@ from time import monotonic
 from typing import Any, Protocol, cast
 
 from mini_app_polis import logger as logger_mod
-from mini_app_polis.api import ApiUnavailable, KaianoApiError
 from mini_app_polis.api.contract import (
     CATALOG_DISPLAY_MAX_IDS,
     CatalogDisplay,
@@ -173,6 +170,7 @@ from deejay_cog.library_backfill import (
     StateFile,
     StateProblem,
 )
+from deejay_cog.library_scan import LISTING_NAME as SCAN_LISTING_NAME
 from deejay_cog.music_safety import (
     AudioChanged,
     FlowMode,
@@ -202,7 +200,9 @@ MODE_FLAG = "flags.deejay_cog.library_reconcile"
 CHUNK_SIZE_VAR = "LIBRARY_RECONCILE_CHUNK_SIZE"
 DEFAULT_CHUNK_SIZE = 50
 
-CURSOR_NAME = f"{FLOW_NAME}-cursor.json"
+#: What each file was when it was last compared: its Drive modified time
+#: (from the scan's listing) and when its entry's display last changed.
+SEEN_NAME = f"{FLOW_NAME}-seen.json"
 #: Every open difference and when it was first seen open, across runs.
 OPEN_NAME = f"{FLOW_NAME}-open.json"
 
@@ -641,11 +641,9 @@ class ReconcileSummary:
     mode: FlowMode
     problems: list[str] = field(default_factory=list)
     record_name: str = ""
-    start: int = 0
-    position: int = 0
-    after: str = ""
-    total: int = 0
-    wrapped: bool = False
+    #: Files that changed since they were last compared, beyond this run's
+    #: chunk: compared on a later run.
+    changed_left: int = 0
     compared: int = 0
     matching: int = 0
     stopped: str = ""
@@ -716,7 +714,7 @@ def _approved_open(
 ) -> list[LibraryFile]:
     """The registry rows of the files with an open difference the owner has
     approved, in the registry's order, at most ``limit``. Empty when the
-    open-differences file cannot be read (the run goes on with its cursor)."""
+    open-differences file cannot be read (the run goes on with the changed files)."""
     try:
         held = StateFile(drive, settings.state, OPEN_NAME).load() or {}
     except StateProblem:
@@ -734,7 +732,7 @@ def _approved_open(
             str(value.get("kind") or "other"),
         )
         if value.get("tried"):
-            # A run already tried it and it stayed open: the cursor gets to it.
+            # A run already tried it and it stayed open: compared again on a change.
             continue
         if approvals.approves(diff):
             ids.add(file_id)
@@ -751,22 +749,60 @@ def _approved_open(
     return found[:limit]
 
 
-def _resume(
-    api: Catalog, root: str, limit: int, cursor: dict[str, Any]
-) -> tuple[list[LibraryFile], bool]:
-    """The next chunk after the cursor, and whether it wrapped to the first
-    file: past the last file, or after a file the registry does not have."""
-    after = str(cursor.get("after") or "")
-    position = int(cursor.get("position", 0))
-    try:
-        rows = _page(api, root, limit, offset=position, after=after)
-    except KaianoApiError as exc:
-        if not after or isinstance(exc, ApiUnavailable) or exc.status_code != 404:
-            raise
-        rows = []
-    if rows or not (after or position):
-        return rows, False
-    return _page(api, root, limit), True
+def _all_rows(api: Catalog, root: str) -> list[LibraryFile]:
+    """Every present, identified registry row under the root, in order."""
+    rows: list[LibraryFile] = []
+    while True:
+        page = _page(api, root, REGISTRY_PAGE, offset=len(rows))
+        rows.extend(page)
+        if len(page) < REGISTRY_PAGE:
+            return rows
+
+
+def _drive_modified(drive: Any, settings: BackfillSettings) -> dict[str, str]:
+    """When Drive last saw each library file change, from the scan's listing."""
+    listing = StateFile(drive, settings.state, SCAN_LISTING_NAME).load() or {}
+    return {
+        str(item["id"]): str(item.get("modified") or "")
+        for item in listing.get("files") or []
+    }
+
+
+def _stamp(modified: dict[str, str], row: LibraryFile, display: Any) -> dict[str, str]:
+    """What a file is now, as the seen record keeps it."""
+    shown = getattr(display, "changed_at", None)
+    return {
+        "modified": modified.get(row.drive_file_id, ""),
+        "shown": shown.isoformat() if shown is not None else "",
+        "catalog_id": str(row.catalog_id or ""),
+    }
+
+
+def baseline(drive: Any, api: Catalog, settings: BackfillSettings) -> int:
+    """Record every present, identified file as compared as it is now,
+    without reading one, so the next runs compare only what changes after.
+    For a library just reconciled in full. Returns how many files it
+    recorded."""
+    every = _all_rows(api, settings.root)
+    shown = _displays(api, every) if every else {}
+    modified = _drive_modified(drive, settings)
+    store = StateFile(drive, settings.state, SEEN_NAME)
+    store.load()
+    store.save(
+        {
+            "flow": FLOW_NAME,
+            "version": 1,
+            "root_folder_id": settings.root,
+            "files": {
+                row.drive_file_id: _stamp(
+                    modified, row, shown.get(row.catalog_id) if row.catalog_id else None
+                )
+                for row in every
+            },
+            "updated_at": _now(),
+        }
+    )
+    return len(every)
 
 
 def _displays(api: Catalog, rows: list[LibraryFile]) -> dict[uuid.UUID, CatalogDisplay]:
@@ -959,22 +995,26 @@ def _reconcile(
     run_id: str,
     summary: ReconcileSummary,
 ) -> None:
-    cursor_store = StateFile(drive, settings.state, CURSOR_NAME)
+    seen_store = StateFile(drive, settings.state, SEEN_NAME)
     try:
-        cursor = cursor_store.load() or {}
+        held = seen_store.load() or {}
+        modified = _drive_modified(drive, settings)
     except StateProblem as exc:
         summary.problems.append(str(exc))
         return
-    if cursor.get("root_folder_id") not in (None, settings.root):
-        cursor = {}
-    position = int(cursor.get("position", 0))
-    rows, summary.wrapped = _resume(api, settings.root, chunk_size, cursor)
-    if summary.wrapped:
-        # Past the last file: the next pass starts from the first.
-        position = 0
-    else:
-        summary.after = str(cursor.get("after") or "")
-    summary.start = summary.position = position
+    if held.get("root_folder_id") not in (None, settings.root):
+        held = {}
+    seen: dict[str, dict[str, str]] = dict(held.get("files") or {})
+    every = _all_rows(api, settings.root)
+    shown = _displays(api, every) if every else {}
+    changed = [
+        row
+        for row in every
+        if seen.get(row.drive_file_id)
+        != _stamp(modified, row, shown.get(row.catalog_id) if row.catalog_id else None)
+    ]
+    rows = changed[:chunk_size]
+    summary.changed_left = len(changed) - len(rows)
     approvals = Approvals()
     record: RunRecord | None = None
     if summary.mode.writes:
@@ -993,7 +1033,7 @@ def _reconcile(
             FLOW_NAME,
             run_id,
             summary.mode,
-            stage=f"identified files from {position + 1}",
+            stage=f"{len(rows)} changed files",
             folders={"root": settings.root, "state": settings.state},
         ).attach(drive, settings.state)
     first: list[LibraryFile] = []
@@ -1001,17 +1041,14 @@ def _reconcile(
         first = _approved_open(drive, api, settings, approvals, chunk_size)
     summary.approved_first = len(first)
     done_first = {row.drive_file_id for row in first}
-    queue = [(row, True) for row in first] + [(row, False) for row in rows]
-    displays = _displays(api, first + rows) if queue else {}
+    queue = [(row, True) for row in first] + [
+        (row, False) for row in rows if row.drive_file_id not in done_first
+    ]
+    displays = shown
 
     status = "complete"
     try:
-        for row, is_first in queue:
-            if not is_first and row.drive_file_id in done_first:
-                # Compared first in this run: only the cursor moves past it.
-                summary.position += 1
-                summary.after = str(row.id)
-                continue
+        for row, _is_first in queue:
             if shared_deadline_passed():
                 summary.stopped = f"run deadline reached before {row.path}"
                 status = "stopped"
@@ -1031,12 +1068,14 @@ def _reconcile(
                         if approvals.approves(d) and d.field not in settled
                     }
                 if compared is not None:
+                    display = displays.get(row.catalog_id) if row.catalog_id else None
+                    seen[row.drive_file_id] = _stamp(modified, row, display)
                     summary.reviewed.append(row.drive_file_id)
                     summary.open.extend(
                         d for d in compared[2] if d.field not in settled
                     )
             except AudioChanged as exc:
-                # The cursor stays on this file: the run stops here.
+                # Not marked seen: the next run compares it again first.
                 summary.aborted = f"{row.path}: {exc}"
                 status = "aborted"
                 break
@@ -1047,15 +1086,24 @@ def _reconcile(
                     break
                 log.exception("library-reconcile: failed on %s", row.path)
                 summary.failed.append(f"{row.path} ({type(exc).__name__}: {exc})")
-            if not is_first:
-                summary.position += 1
-                summary.after = str(row.id)
     finally:
         # Saved even past the deadline: the next run must carry on from here.
         with without_run_deadline():
             if record is not None and record.entries:
                 record.finish(status)
-            _save_state(cursor_store, cursor, drive, settings, run_id, summary)
+            present = {row.drive_file_id for row in every}
+            seen_store.save(
+                {
+                    "flow": FLOW_NAME,
+                    "version": 1,
+                    "root_folder_id": settings.root,
+                    "files": {k: v for k, v in seen.items() if k in present},
+                    "updated_at": _now(),
+                }
+            )
+            if summary.compared or summary.failed:
+                # A run that compared nothing leaves no record.
+                _save_record(drive, settings.state, run_id, summary)
             _send_review(api, run_id, summary)
             _track_open(drive, settings, summary)
     if summary.aborted:
@@ -1069,33 +1117,11 @@ def _report_abort(run_id: str, summary: ReconcileSummary) -> None:
             "ERROR",
             "library-reconcile stopped: a file's audio would not stay "
             f"byte-identical ({summary.aborted}). The file is unchanged (or "
-            "restored); the cursor stays on it.",
+            "restored) and is compared again first next run.",
             run_id=run_id,
         )
     except Exception:  # noqa: BLE001 — the notification is not the job
         log.exception("library-reconcile: could not report the stop")
-
-
-def _save_state(
-    cursor_store: StateFile,
-    cursor: dict[str, Any],
-    drive: Any,
-    settings: BackfillSettings,
-    run_id: str,
-    summary: ReconcileSummary,
-) -> None:
-    cursor_store.save(
-        {
-            "flow": FLOW_NAME,
-            "version": 1,
-            "root_folder_id": settings.root,
-            "position": summary.position,
-            "after": summary.after,
-            "passes": int(cursor.get("passes", 0)) + (1 if summary.wrapped else 0),
-            "updated_at": _now(),
-        }
-    )
-    _save_record(drive, settings.state, run_id, summary)
 
 
 def _open_key(diff: Difference) -> str:
@@ -1174,7 +1200,7 @@ def _save_record(
         "run_id": run_id,
         "mode": summary.mode.value,
         "saved_at": _now(),
-        "files": f"{summary.start + 1}-{summary.position} of the identified files",
+        "changed_left": summary.changed_left,
         "compared": summary.compared,
         "matching": summary.matching,
         "counts": {kind: len(summary.differences[kind]) for kind in KINDS},
@@ -1201,7 +1227,7 @@ def run_reconcile(
     drive: Any | None = None,
     api: Catalog | None = None,
 ) -> ReconcileSummary:
-    """One run: the mode, settings, cursor, comparison, record and report."""
+    """One run: the mode, settings, changed files, comparison, record and report."""
     started_at = monotonic()
     run_id = run_id or local_run_id()
     summary = ReconcileSummary(mode)
@@ -1210,7 +1236,7 @@ def run_reconcile(
     with run_report(
         FLOW_NAME,
         repo=REPO,
-        notable=True,
+        notable=False,
         run_id=run_id,
         version=__version__,
         list_all=True,
@@ -1260,10 +1286,6 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
             "reads only: no music, catalog or registry value was changed; "
             f"record {summary.record_name or '(none)'}",
         )
-    if summary.wrapped:
-        report.notice(
-            "pass_complete", "every identified file was compared; starting again"
-        )
     if summary.stopped:
         report.notice("stopped", summary.stopped)
     if summary.review_problem:
@@ -1288,11 +1310,24 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
         )
     report.count("long_open", long_open)
     report.count("compared", summary.compared)
+    report.count("changed_left", summary.changed_left)
     report.count("approved_first", summary.approved_first)
     report.count("matching", summary.matching)
     report.count("with_differences", summary.files_with_differences)
+    refused = (
+        {
+            _open_key(d)
+            for d in summary.differences["fill_up"]
+            if _open_key(d) in summary.tried
+        }
+        if summary.tried
+        else set()
+    )
+    refused_count = len(refused)
     for kind in KINDS:
-        report.count(kind, len(summary.differences[kind]))
+        n = len(summary.differences[kind])
+        report.count(kind, n - refused_count if kind == "fill_up" else n)
+    report.count("fill_up_kept_by_file", refused_count)
     report.count("failed", len(summary.failed))
     if summary.mode.writes:
         report.count("written", len(summary.written))
@@ -1311,6 +1346,8 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
         report.issue("audio_changed_run_stopped", summary.aborted)
     for kind in KINDS:
         diffs = summary.differences[kind]
+        if refused:
+            diffs = [d for d in diffs if _open_key(d) not in refused]
         shown = diffs if kind == "other" else diffs[:REPORT_EXAMPLES]
         for diff in shown:
             report.notice(kind, diff.example())

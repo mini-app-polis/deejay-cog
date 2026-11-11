@@ -1,4 +1,4 @@
-"""The nightly ``library-backfill`` job: six steps over the music library,
+"""The ``library-backfill`` library job: six steps over the music library,
 each with its own mode, settings and report. The library reconcile is not
 one of them: it is its own worker mode, ``library-reconcile``, on its own
 schedule, so it has the run's whole time to write in.
@@ -60,13 +60,13 @@ def _step(flow_name: str, step: Callable[..., Any], run_id: str | None) -> None:
     except (RunOutOfTime, RunDeadlineReached):
         raise
     except Exception as exc:  # noqa: BLE001 — the next step still runs
-        log.exception("%s: failed; the nightly job carries on", flow_name)
+        log.exception("%s: failed; the library job carries on", flow_name)
         try:
             post_run_finding(
                 flow_name,
                 "ERROR",
                 f"{flow_name} failed ({type(exc).__name__}: {exc}); "
-                "the rest of the nightly library run carried on",
+                "the rest of the library job carried on",
                 run_id=run_id,
             )
         except Exception:  # noqa: BLE001 — the notification is not the job

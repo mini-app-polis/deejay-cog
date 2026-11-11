@@ -1,8 +1,8 @@
-"""The ``library-scan`` step of the nightly library run: notice files added
+"""The ``library-scan`` step of the library job: notice files added
 to and removed from the library, and keep the library registry in step
 (ADR-0008, decisions 5 and 16).
 
-Each night, before the backfill's chunk, the library is listed again,
+Each run, before the backfill's chunk, the library is listed again,
 metadata only (no downloads), and compared with the API's library registry:
 
 - **Added.** An MP3 the registry has never seen is registered as
@@ -24,8 +24,8 @@ changes.
 **Position.** The listing is the backfill's resumable listing, kept in
 ``library-scan-listing.json`` in ``MUSIC_TAGGING_STATE_FOLDER_ID``. A run
 lists for at most ``LIBRARY_SCAN_LISTING_SECONDS`` (default 90), so the
-backfill's chunk still fits in the run, and the next night carries on where
-it stopped. Once a listing is complete it is compared, and the next night
+backfill's chunk still fits in the run, and the next run carries on where
+it stopped. Once a listing is complete it is compared, and the next run
 starts a new one.
 
 **Safety:** ``flags.deejay_cog.library_scan`` is ``off`` unless ``dry-run`` or
@@ -322,7 +322,7 @@ def _apply(
             api.mark_library_files_absent(
                 LibraryFilesAbsentRequest(drive_file_ids=batch)
             )
-        except Exception as exc:  # noqa: BLE001 — reported; the next night retries
+        except Exception as exc:  # noqa: BLE001 — reported; the next run retries
             if shared_deadline_passed():
                 raise
             log.warning(
@@ -373,7 +373,7 @@ def _scan(
         summary.compared = True
         if summary.mode.writes:
             _apply(client, registrations, gone, summary)
-    # Compared (or refused): the next night lists the library afresh.
+    # Compared (or refused): the next run lists the library afresh.
     listing["compared_at"] = _now()
     store.save(listing)
 
@@ -395,7 +395,7 @@ def run_scan(
     with run_report(
         FLOW_NAME,
         repo=REPO,
-        notable=True,
+        notable=False,
         run_id=run_id,
         version=__version__,
         list_all=True,  # every added and removed file is named

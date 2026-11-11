@@ -34,6 +34,7 @@ from mutagen.id3 import COMM, TBPM, TCON, TDRC, TIT2, TPE1, TPUB, TXXX
 
 from deejay_cog import library_backfill as backfill
 from deejay_cog import library_reconcile as rec
+from deejay_cog import library_scan as scan
 from deejay_cog.library_backfill import StateFile
 from deejay_cog.music_safety import FlowMode
 from flag_fakes import FLAGS
@@ -439,81 +440,120 @@ def test_the_comment_frame_is_never_compared(settings, wired, drive, catalog) ->
     assert all(d.field != "comment" for ds in summary.differences.values() for d in ds)
 
 
-def test_a_file_linked_earlier_in_the_order_does_not_repeat_one(
-    settings, wired, drive, catalog, monkeypatch
+def _forget_seen(drive: FakeDrive) -> None:
+    """Empty the seen record, as ``reconcile_admin full --apply`` does."""
+    store = StateFile(drive, STATE, rec.SEEN_NAME)
+    store.load()
+    store.save({"files": {}})
+
+
+def _listed(drive: FakeDrive, modified: dict[str, str]) -> None:
+    """The scan's listing, with when Drive last saw each file change."""
+    found = [i for i in drive.in_folder(STATE) if i.name == scan.LISTING_NAME]
+    data = json.dumps(
+        {"files": [{"id": k, "modified": v} for k, v in modified.items()]}
+    ).encode()
+    if found:
+        found[0].data = data
+    else:
+        drive.add(scan.LISTING_NAME, STATE, data, mime_type="application/json")
+
+
+def test_each_run_takes_the_changed_files_a_chunk_at_a_time(
+    settings, wired, drive, catalog, posted, monkeypatch
 ) -> None:
     monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "2")
-    _library(drive, catalog, [{}, {}, {}])
-    rec.library_reconcile(run_id="r-1")
-    # Linked between runs, but first seen before them all.
-    _library(drive, catalog, [{}])
-    catalog.rows.insert(0, catalog.rows.pop())
-
-    second = rec.library_reconcile(run_id="r-2")
-
-    assert second.reviewed == [catalog.rows[3].drive_file_id]
-    assert catalog.pages[-1]["after"] == catalog.rows[2].id
-    assert _state(drive, rec.CURSOR_NAME)["after"] == str(catalog.rows[3].id)
-
-
-def test_a_file_gone_earlier_in_the_order_does_not_skip_one(
-    settings, wired, drive, catalog, monkeypatch
-) -> None:
-    monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "2")
-    _library(drive, catalog, [{}, {}, {}])
-    rec.library_reconcile(run_id="r-1")
-    catalog.rows[0] = catalog.rows[0].model_copy(update={"present": False})
-
-    second = rec.library_reconcile(run_id="r-2")
-
-    assert second.reviewed == [catalog.rows[2].drive_file_id]
-
-
-def test_a_cursor_whose_file_is_gone_starts_the_next_pass(
-    settings, wired, drive, catalog
-) -> None:
-    _library(drive, catalog, [{}, {}])
-    rec.library_reconcile(run_id="r-1")
-    catalog.rows.pop()
-
-    second = rec.library_reconcile(run_id="r-2")
-
-    assert second.wrapped and second.start == 0
-    assert second.reviewed == [catalog.rows[0].drive_file_id]
-
-
-def test_a_cursor_moved_by_hand_starts_at_its_position(
-    settings, wired, drive, catalog, monkeypatch
-) -> None:
-    monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "1")
-    _library(drive, catalog, [{}, {}, {}])
-    StateFile(drive, STATE, rec.CURSOR_NAME).save({"position": 2})
-
-    summary = rec.library_reconcile(run_id="r-1")
-
-    assert summary.start == 2
-    assert summary.reviewed == [catalog.rows[2].drive_file_id]
-    assert catalog.pages[-1]["offset"] == 2
-
-
-def test_each_run_takes_the_next_chunk_and_wraps_at_the_end(
-    settings, wired, drive, catalog, monkeypatch
-) -> None:
-    monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "2")
-    _library(drive, catalog, [{}, {}, {}])
+    ids = _library(drive, catalog, [{}, {}, {}])
 
     first = rec.library_reconcile(run_id="r-1")
     second = rec.library_reconcile(run_id="r-2")
     third = rec.library_reconcile(run_id="r-3")
 
-    assert (first.start, first.position) == (0, 2)
-    assert (second.start, second.position) == (2, 3)
-    assert third.wrapped
-    assert (third.start, third.position) == (0, 2)
-    cursor = _state(drive, rec.CURSOR_NAME)
-    assert cursor["position"] == 2 and cursor["passes"] == 1
-    # Its own cursor, apart from the backfill's.
-    assert _state(drive, backfill.CURSOR_NAME) is None
+    assert first.reviewed == ids[:2] and first.changed_left == 1
+    assert second.reviewed == ids[2:] and second.changed_left == 0
+    # Nothing changed since: nothing read, and the run stays quiet.
+    assert third.compared == 0 and third.reviewed == []
+    assert sorted(_state(drive, rec.SEEN_NAME)["files"]) == sorted(ids)
+
+
+def test_a_write_run_with_nothing_changed_is_quiet(
+    settings, writing, drive, posted
+) -> None:
+    _library(drive, writing, [{}])
+    _approve(writing, kinds=["genre_remapped"])
+    rec.library_reconcile(run_id="r-1")
+
+    again = rec.library_reconcile(run_id="r-2")
+
+    assert again.compared == 0
+    assert _state(drive, "library-reconcile-r-2.differences.json") is None
+    assert posted.call_args.kwargs["notable"] is False
+    assert "Run complete" in _text(posted)  # no notices, nothing to name
+
+
+def test_a_file_drive_saw_change_is_compared_again(
+    settings, wired, drive, catalog
+) -> None:
+    ids = _library(drive, catalog, [{}, {}])
+    _listed(drive, dict.fromkeys(ids, "2026-11-07T00:00:00.000Z"))
+    rec.library_reconcile(run_id="r-1")
+    _listed(
+        drive, {ids[0]: "2026-11-07T00:00:00.000Z", ids[1]: "2026-11-08T09:30:00.000Z"}
+    )
+
+    again = rec.library_reconcile(run_id="r-2")
+
+    assert again.reviewed == [ids[1]]
+
+
+def test_an_entry_whose_display_changed_has_its_files_compared_again(
+    settings, wired, drive, catalog
+) -> None:
+    ids = _library(drive, catalog, [{}, {}])
+    rec.library_reconcile(run_id="r-1")
+    entry = catalog.rows[0].catalog_id
+    catalog.displays[entry] = catalog.displays[entry].model_copy(
+        update={"changed_at": _NOW + dt.timedelta(days=1)}
+    )
+
+    again = rec.library_reconcile(run_id="r-2")
+
+    assert again.reviewed == [ids[0]]
+
+
+def test_a_file_new_to_the_library_is_compared(settings, wired, drive, catalog) -> None:
+    ids = _library(drive, catalog, [{}])
+    rec.library_reconcile(run_id="r-1")
+    [new] = _library(drive, catalog, [{}])
+
+    again = rec.library_reconcile(run_id="r-2")
+
+    assert again.reviewed == [new] and new not in ids
+
+
+def test_an_emptied_seen_record_compares_every_file_again(
+    settings, wired, drive, catalog
+) -> None:
+    ids = _library(drive, catalog, [{}, {}])
+    rec.library_reconcile(run_id="r-1")
+    _forget_seen(drive)
+
+    again = rec.library_reconcile(run_id="r-2")
+
+    assert again.reviewed == ids
+
+
+def test_a_file_gone_from_the_library_leaves_the_seen_record(
+    settings, wired, drive, catalog
+) -> None:
+    ids = _library(drive, catalog, [{}, {}])
+    rec.library_reconcile(run_id="r-1")
+    catalog.rows[0] = catalog.rows[0].model_copy(update={"present": False})
+
+    again = rec.library_reconcile(run_id="r-2")
+
+    assert again.reviewed == []
+    assert list(_state(drive, rec.SEEN_NAME)["files"]) == [ids[1]]
 
 
 def test_a_file_linked_to_another_entry_is_other(
@@ -548,7 +588,8 @@ def test_a_failing_file_is_named_and_the_run_carries_on(
 
     assert summary.compared == 1
     assert summary.failed and "drive hiccup" in summary.failed[0]
-    assert summary.position == 2
+    # Not marked compared: the next run takes it again.
+    assert list(_state(drive, rec.SEEN_NAME)["files"]) == [ids[1]]
 
 
 def test_a_bad_chunk_size_does_nothing(
@@ -628,9 +669,9 @@ def test_after_a_write_a_dry_run_shows_no_approved_difference_left(
     rec.library_reconcile(run_id="r-1")
 
     monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "dry-run")
+    _forget_seen(drive)  # compared again, as a full pass does
     again = rec.run_reconcile(run_id="r-2", mode=FlowMode.DRY_RUN, api=writing)
 
-    # The cursor wrapped to the same file: compared again, nothing left.
     assert again.compared == 1 and again.matching == 1
 
 
@@ -686,6 +727,7 @@ def test_a_kind_approved_for_the_file_goes_up_and_the_file_is_unchanged(
     assert "catalog took the file's value" in _text(posted)
 
     monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "dry-run")
+    _forget_seen(drive)
     again = rec.run_reconcile(run_id="r-2", mode=FlowMode.DRY_RUN, api=writing)
     assert again.compared == 1 and again.matching == 1
 
@@ -781,7 +823,7 @@ def test_approvals_that_cannot_be_read_stop_the_run(
     assert summary.problems
     assert drive.items[drive_id].data == before
     assert writing.fills == [] and writing.registrations == []
-    assert _state(drive, rec.CURSOR_NAME) is None  # the cursor did not move
+    assert _state(drive, rec.SEEN_NAME) is None  # nothing marked compared
 
 
 # ---------------------------------------------------------------------------
@@ -837,7 +879,6 @@ def test_a_review_that_cannot_be_sent_is_reported_and_the_run_carries_on(
     summary = rec.library_reconcile(run_id="r-1")
 
     assert summary.compared == 1 and "API down" in summary.review_problem
-    assert _state(drive, rec.CURSOR_NAME)["position"] == 1
     assert "review_not_sent" in _text(posted)
 
 
@@ -858,8 +899,9 @@ def test_audio_that_would_change_stops_the_write_and_keeps_the_cursor(
 
     summary = rec.library_reconcile(run_id="r-1")
 
-    assert summary.aborted and summary.position == 0
-    assert _state(drive, rec.CURSOR_NAME)["position"] == 0
+    assert summary.aborted
+    # Not marked compared: the next run takes it again first.
+    assert _state(drive, rec.SEEN_NAME)["files"] == {}
     assert drive.writes(except_folder=STATE) == []
     assert finding.call_args.args[1] == "ERROR"
 
@@ -898,7 +940,7 @@ def _held_open(drive: FakeDrive, drive_id: str, name: str, kind: str) -> None:
     )
 
 
-def test_a_file_with_an_approved_difference_is_settled_before_the_cursor(
+def test_a_file_with_an_approved_difference_is_settled_first(
     settings, writing, drive, monkeypatch
 ) -> None:
     monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "1")
@@ -910,13 +952,13 @@ def test_a_file_with_an_approved_difference_is_settled_before_the_cursor(
 
     assert summary.approved_first == 1
     assert _frames(drive.items[ids[2]].data)["TCON"] == "Pop"
-    # The cursor still took its own next file, and moved past that one only.
+    # Then the changed files, a chunk's worth: the rest wait for later runs.
     assert summary.reviewed == [ids[2], ids[0]]
-    assert _state(drive, rec.CURSOR_NAME)["position"] == 1
+    assert summary.changed_left == 2
     assert f"{ids[2]}|genre" not in _state(drive, rec.OPEN_NAME)["open"]
 
 
-def test_a_cursor_file_already_settled_first_is_passed_over(
+def test_a_changed_file_already_settled_first_is_compared_once(
     settings, writing, drive, monkeypatch
 ) -> None:
     monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "1")
@@ -927,7 +969,7 @@ def test_a_cursor_file_already_settled_first_is_passed_over(
     summary = rec.library_reconcile(run_id="r-1")
 
     assert summary.approved_first == 1 and summary.compared == 1
-    assert _state(drive, rec.CURSOR_NAME)["position"] == 1
+    assert summary.changed_left == 1
 
 
 def test_an_approved_difference_that_stays_open_is_not_put_first_again(
@@ -1022,7 +1064,9 @@ def test_a_difference_whose_values_change_starts_again(
     rec.library_reconcile(run_id="r-1")
     _age_open(drive, rec.LONG_OPEN_DAYS + 1)
     entry = catalog.rows[0].catalog_id
-    catalog.displays[entry] = _display(entry, genre="R&B/Soul")
+    catalog.displays[entry] = _display(
+        entry, genre="R&B/Soul", changed_at=_NOW + dt.timedelta(days=1)
+    )
 
     summary = rec.library_reconcile(run_id="r-2")
 
@@ -1060,3 +1104,17 @@ def test_a_tracker_that_fails_is_reported_and_the_run_carries_on(
 
     assert summary.compared == 1 and "unreadable" in summary.open_problem
     assert "open_not_tracked" in _text(posted)
+
+
+def test_a_baseline_records_every_file_and_the_next_run_reads_none(
+    settings, wired, drive, catalog
+) -> None:
+    ids = _library(drive, catalog, [{"genre": "Neo Soul"}, {}])
+    settings_now, _ = backfill.BackfillSettings.from_env()
+
+    assert rec.baseline(drive, catalog, settings_now) == 2
+
+    again = rec.library_reconcile(run_id="r-1")
+
+    assert again.compared == 0
+    assert sorted(_state(drive, rec.SEEN_NAME)["files"]) == sorted(ids)

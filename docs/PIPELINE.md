@@ -33,8 +33,9 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
 - **library-backfill** and **library-reconcile** are the modes meant to run
   on a schedule ([ADR-0003](decisions/ADR-0003-on-demand-no-cadence.md),
   amended 2026-11-03), each on its own, so the reconcile has a whole run's
-  time to write in: `library-backfill` nightly (the
-  [library job](#the-library-jobs)), `library-reconcile` through the day.
+  time to write in: `library-backfill` (the
+  [library job](#the-library-jobs)) and `library-reconcile`, each several
+  times a day.
   watcher-cog's scheduled jobs send them; the schedules are declared in
   `mini-app-polis/infra`. Either can also be run on demand
   ([below](#running-a-library-job-on-demand)).
@@ -240,7 +241,7 @@ is a WARN naming it.
 Two worker modes keep the music library and the catalog in step
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md)):
 
-- **`library-backfill`, the nightly library job** (`library_nightly.py`),
+- **`library-backfill`, the library job** (`library_nightly.py`),
   runs six steps in order, each with its own flag, settings and report:
   [library-scan](#library-scan) (files added or removed reach the
   registry), [library-trash](#library-trash) (the copies the owner chose
@@ -259,11 +260,25 @@ Two worker modes keep the music library and the catalog in step
   compares linked files with their entries and writes only what the owner
   approved on the WCS review page.
 
+**They act only on change.** In a library where nothing changed, each step
+finds nothing to do and the run reads no music file: the scan lists Drive's
+metadata, identify has no unidentified file, the backfill is done, the sync
+has no file needing a sync and no edit made in a file, the duplicates are
+the groups already open, and the reconcile has no file that changed since
+it last compared it. A change is picked up on the next run of the job that
+handles it.
+
+**They are quiet when idle.** A step sends its run report only when it
+wrote, linked, moved or sent something, found something new (a difference,
+a duplicate group, an edit held), stopped early, or hit a problem. A step
+with nothing to do logs its counts and sends nothing, so a stable library
+sends no reports at all.
+
 **How a file moves through them.** A new file is registered by the scan,
 linked by identify (only its `TXXX:CATALOG_ID` is written), and brought in
 step with its entry by the reconcile, field by field as the owner approves.
 From then on the sync keeps it in step: a catalog edit or display-rule
-change is written to the file on the next nightly run, and a tag edited in
+change is written to the file on the next library job run, and a tag edited in
 VirtualDJ goes up to the entry. The sync writes a file only once it has
 recorded what the file was last synced with; until then (a file just
 linked, written by the reconcile, or restored) it records those values and
@@ -330,8 +345,8 @@ survives redeploys:
 
 **Each run** takes the next `LIBRARY_BACKFILL_CHUNK_SIZE` files (10 by
 default) after the cursor. The whole library is never rescanned. When the
-cursor reaches the end, every later run reports `library_done` and does
-nothing. **To start over** (files added to the library since, or another
+cursor reaches the end, the run that got there reports `library_done`; every
+later run does nothing and sends no report. **To start over** (files added to the library since, or another
 root), move `library-backfill-manifest.json` to the Drive trash: the next
 run lists the library again and starts from its first file; files whose
 tags already match are read but not written. A manifest of another root
@@ -396,7 +411,7 @@ deadline: it stops cleanly, reported as `paused`, so the sync and
 duplicate report after it still run, and the next run carries on from the
 cursor. The run record and the cursor are saved after each file even past
 the deadline, so a written file is never done twice. A written file takes
-about 20 s, so with the function's 600 s timeout a night writes about 15 to
+about 20 s, so with the function's 600 s timeout a run writes about 15 to
 20 files whatever `LIBRARY_BACKFILL_CHUNK_SIZE` says.
 
 **Dry run** writes nothing to any music file and **does not move the
@@ -417,7 +432,7 @@ the cursor; to retag those files again, start over as above.
 
 ## library-scan
 
-The first step of the nightly `library-backfill` job
+The first step of the `library-backfill` library job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decisions 5 and
 16): files added to and removed from the library reach the API's library
 registry. It reads metadata only and **never renames, moves, deletes or
@@ -428,8 +443,8 @@ reported as an ERROR finding and the backfill's chunk runs anyway.
 **The listing** is the backfill's kind of listing (breadth first, the state
 folder and shortcuts left out), kept in `library-scan-listing.json` in the
 state folder. A run lists for at most `LIBRARY_SCAN_LISTING_SECONDS`; an
-unfinished listing is saved and the next night carries on. Only a complete
-listing is compared, and the night after a comparison lists afresh.
+unfinished listing is saved and the next run carries on. Only a complete
+listing is compared, and the run after a comparison lists afresh.
 
 **The comparison**, against every registry row under the library root:
 
@@ -459,7 +474,7 @@ names each would-be change (`would_add`, `would_mark_back`, `would_move`,
 
 ## library-identify
 
-The third step of the nightly `library-backfill` job
+The third step of the `library-backfill` library job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decisions 2 and
 5): the library files the registry holds as `unidentified` (new to the
 library, or ones the backfill could not match) are identified and linked to
@@ -471,7 +486,7 @@ the `flags.deejay_cog.library_identify` flag is `dry-run` or `write` (see
 **Each run** takes the next `LIBRARY_IDENTIFY_CHUNK_SIZE` present,
 unidentified files it has not tried before. Every file tried, and its
 outcome, is kept in `library-identify-tried.json` in the state folder, so a
-file is not fingerprinted again every night; remove an id from it (or trash
+file is not fingerprinted again every run; remove an id from it (or trash
 it) to try again.
 
 **Per file:**
@@ -548,28 +563,33 @@ Its own worker mode, `library-reconcile`, on its own schedule
 decision 15): each linked file's owned fields are compared with what its
 catalog entry says they should be, and every difference is filed under a
 kind for the owner to approve. **A dry run reads only**: no music file,
-catalog entry or registry row changes, only its cursor and record in the
+catalog entry or registry row changes, only its seen record and record in the
 state folder. A **write** run applies what the owner approved (below). Off
 unless the `flags.deejay_cog.library_reconcile` flag is `dry-run` or `write` (see
 [CONFIGURATION.md](CONFIGURATION.md#library-reconcile)).
 
-**Which files:** present, identified registry rows under the library root,
-in the registry's order, the next `LIBRARY_RECONCILE_CHUNK_SIZE` after
-`library-reconcile-cursor.json` (its own, apart from the backfill's). A dry
-run moves this cursor, so repeated runs step through the library; after the
-last file the next run starts a new pass. The cursor names the last file
-compared, and the next run lists the files after it
-(`GET /v1/catalog/library/files?after=`), so a file linked, unlinked or gone
-earlier in the order between runs neither repeats nor skips one.
+**Which files: those that changed.** Present, identified registry rows under
+the library root. `library-reconcile-seen.json` in the state folder keeps,
+for each file, what it was when last compared: when Drive last saw it change
+(the scan's listing, `library-scan-listing.json`), when its entry's display
+last changed (`changed_at` from `POST /v1/catalog/display`, which a
+display-rule change also moves) and the entry it was linked to. A run
+compares only the files where one of these moved, or that it never
+compared, in the registry's order, up to `LIBRARY_RECONCILE_CHUNK_SIZE`; the
+rest wait for the next run (`changed_left`). A file whose comparison failed,
+or that stopped the run, is not marked compared, so the next run takes it
+again. In a library where nothing changed, a run reads nothing. **A full
+pass** (after a change to the reconcile's own rules, the one thing that can
+surface differences on unchanged files) is `reconcile_admin full --apply`
+(below), which empties the seen record so every file is new to it.
 
 **Approved files first:** a write run first compares the files with an open
 difference the owner has approved (read from `library-reconcile-open.json`
 and the approvals), up to `LIBRARY_RECONCILE_CHUNK_SIZE` of them, so an
-approval settles on the next run instead of when the cursor comes round.
-They do not move the cursor; the report counts them as `approved_first`.
-An approved difference a write run tried and left open (a fill-up the
-catalog refused, a value the API held) is marked `tried` and is not put
-first again; the cursor still comes round to it.
+approval settles on the next run. The report counts them as
+`approved_first`. An approved difference a write run tried and left open (a
+fill-up the catalog refused, a value the API held) is marked `tried` and is
+not put first again; its file is compared again when it changes.
 
 **What is compared:** title (with its version), artist, year, genre, BPM and
 label in the file's ID3 tags, against `POST /v1/catalog/display`. The
@@ -652,12 +672,16 @@ API holds (a title or artist that does not split into parts cleanly, a
 genre off the vocabulary, a one-character label) stays open on the review
 page and is reported under `kept_held` with the reason. Differences not
 approved are left and counted (`not_approved`). Genre is written; subgenre is not, as no frame for it is
-decided. An audio mismatch stops the run with an ERROR finding and leaves
-the cursor on that file. After a write run, a dry run over the same files
-shows no approved difference left.
+decided. An audio mismatch stops the run with an ERROR finding; that file
+is not marked compared, so the next run takes it again. After a write run,
+a full-pass dry run shows no approved difference left.
 
-**Report** (write run): counts for `written`, `filled_up`,
-`kept_from_file` and `not_approved`, with every file by its path.
+**Report:** counts for `compared`, `changed_left`, `approved_first`,
+`matching`, each kind, and in a write run `written`, `filled_up`,
+`kept_from_file` and `not_approved`, with every file by its path. A fill-up
+the catalog refused (one a write run tried) is counted as
+`fill_up_kept_by_file` and not listed: the file keeps that value on
+purpose.
 
 **Long-open differences:** `library-reconcile-open.json` in the state folder
 keeps when each open difference was first seen; a difference whose values
@@ -687,19 +711,23 @@ The API's approvals hold the current choices.
 - `seed [--apply]` carries `library-reconcile-approvals.json` over to the
   API, checked as a write run read it; sent only with `--apply`. Once the
   API holds approvals it sends nothing and says so.
-- `cursor` prints the cursor; `cursor --position <n> --apply` moves it
-  (0 starts the next run from the first identified file) and drops the
-  file it last compared, so the next run starts at that position.
+- `full` says how many files the seen record holds; `full --apply`
+  empties it, so the next runs compare every file again, a chunk at a
+  time (a full pass).
+- `baseline --apply` is the opposite: it records every present, identified
+  file as compared as it is now, reading none, so the next runs compare
+  only what changes after. For a library just reconciled in full (the
+  review page at zero).
 - `run [--mode dry-run|write] [--chunk <n>]` runs the reconcile once,
   locally, writing exactly as the scheduled run does. Without `--mode` it
   runs in the mode `flags.deejay_cog.library_reconcile` sets; `--mode`
   applies to the local run only and leaves the flag as it is. Turn the
-  flag off while a local run goes, so the two do not move the cursor at
-  once.
+  flag off while a local run goes, so the two do not compare the same
+  files at once.
 
 ## library-sync
 
-The fifth step of the nightly `library-backfill` job
+The fifth step of the `library-backfill` library job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), step 4 and
 decision 5, edit): catalog edits and display-rule changes reach the files
 they affect. Off unless the `flags.deejay_cog.library_sync` flag is
@@ -818,7 +846,7 @@ many files each entry's change reached.
 
 ## library-trash
 
-The second step of the nightly `library-backfill` job
+The second step of the `library-backfill` library job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decision 7).
 Off unless the `flags.deejay_cog.library_trash` flag is `dry-run` or `write`.
 
@@ -837,7 +865,7 @@ and changes nothing.
 
 ## library-duplicates
 
-The last step of the nightly `library-backfill` job
+The last step of the `library-backfill` library job
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), decision 7).
 Off unless the `flags.deejay_cog.library_duplicates` flag is `dry-run` or `write`. Read-only: it
 never writes, renames, moves or deletes a music file.
@@ -863,7 +891,8 @@ a dry run only reports them.
 
 **Report:** counts for `files` and `groups` (and, in write, the API's
 `open_groups`, `added` and `dropped`), and every group with its reasons and
-files by path.
+files by path, when the groups changed (or in a dry run). Open groups the
+same as last run wait on the duplicates page and are not named again.
 
 ### Run records
 
@@ -895,7 +924,7 @@ revision at or before it gets that revision's value back; a field the old
 revision leaves empty is not emptied. Each write is recorded as a
 `library-restore` run that `music_rollback` undoes. The registry then
 forgets the restored files' synced values, so the sync records them afresh
-rather than reading the restore as edits: until it has (a few nightly runs
+rather than reading the restore as edits: until it has (a few runs
 for a large restore, at `LIBRARY_SYNC_CHUNK_SIZE` files a run), catalog
 edits do not reach those files.
 
@@ -942,7 +971,7 @@ Step 4 above, for the files already on the owner's page: every
 unidentified file whose note is the fingerprint's "no match" or "no
 confident match" is linked by its own tags, as step 4 does. The dry run
 reads the tags the registry holds and downloads nothing; `--apply` reads
-each file, links it the nightly run's way, and records a
+each file, links it the library job's way, and records a
 `library-link-by-tags` run that `music_rollback` can undo. A file whose
 tags name no song is left for the owner.
 

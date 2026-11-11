@@ -1,4 +1,4 @@
-"""The ``library-duplicates`` step of the nightly library run: report the
+"""The ``library-duplicates`` step of the library job: report the
 library files that look like copies of one song (ADR-0008, decision 7).
 
 Read-only: it never writes, renames, moves or deletes a music file, and
@@ -24,7 +24,7 @@ group, and the files of the song's other edits are shown in it marked kept
 on purpose, with why, so they can never be sent to the trash through it.
 
 Each group has a key made from its files, so an unchanged library reports
-the same groups every night. With ``flags.deejay_cog.library_duplicates`` at ``write`` the
+the same groups every run. With ``flags.deejay_cog.library_duplicates`` at ``write`` the
 groups go to the API (``POST /v1/catalog/library/duplicates``), where the
 WCS duplicates page shows them; they replace the open groups for the root.
 A dry run lists the groups in the run report only.
@@ -301,7 +301,7 @@ def run_duplicates(
     with run_report(
         FLOW_NAME,
         repo=REPO,
-        notable=True,
+        notable=False,
         run_id=run_id,
         version=__version__,
         list_all=True,
@@ -358,7 +358,14 @@ def _record(report: Any, summary: DuplicatesSummary, duration_sec: float) -> Non
         report.count("open_groups", summary.result.open_groups)
         report.count("added", summary.result.added)
         report.count("dropped", summary.result.dropped)
-    for group in summary.groups:
+    unchanged = (
+        summary.result is not None
+        and not summary.result.added
+        and not summary.result.dropped
+    )
+    for group in [] if unchanged else summary.groups:
+        # The groups are named when they change (or in a dry run); open
+        # groups that are the same as last run wait on the page, unrepeated.
         parts = []
         for m in group.files:
             path = summary.paths.get(m.drive_file_id, m.drive_file_id)

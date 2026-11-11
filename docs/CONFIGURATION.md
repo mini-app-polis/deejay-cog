@@ -123,15 +123,15 @@ The **library-backfill** worker mode reads:
 | `LIBRARY_ROOT_FOLDER_ID` | none | The music library's root folder, listed recursively. |
 | `MUSIC_TAGGING_STATE_FOLDER_ID` | none | Holds the manifest, the cursor and the run records (shared with new-music). |
 | `LIBRARY_BACKFILL_CHUNK_SIZE` | `10` | Files per run at most; a whole number of at least 1. A written file takes about 20 s (download, upload, audio check, record and cursor saved). |
-| `LIBRARY_BACKFILL_RESERVE_SECONDS` | `120` | Seconds left for the nightly steps after the backfill: it starts no file with less than this left before the run deadline, and the next run carries on from the cursor. |
+| `LIBRARY_BACKFILL_RESERVE_SECONDS` | `120` | Seconds left for the library job's steps after the backfill: it starts no file with less than this left before the run deadline, and the next run carries on from the cursor. |
 | `LIBRARY_BACKFILL_SKIP_FILE_IDS` | empty | Comma-separated Drive file ids to pass over, named in the report: how a file whose audio check fails is passed. |
 
 With either folder unset, the two the same folder, or a chunk size that is
 not a whole number of at least 1 (or a reserve that is not a whole number
 of seconds), the run does nothing and its report
 (WARN) names the problem. The settings are read at the start of each run,
-so a change in Doppler applies to the next night. The nightly trigger is
-not configured here: what sends the `library-backfill` job each night is
+so a change in Doppler applies to the next run. The schedule is
+not configured here: what sends the `library-backfill` job on its schedule is
 wired outside this repo.
 
 To start the backfill over, move `library-backfill-manifest.json` in the
@@ -140,7 +140,7 @@ state folder to the Drive trash; see
 
 ## Library scan
 
-The same nightly job first runs the **library-scan** step, which keeps the
+The same library job first runs the **library-scan** step, which keeps the
 library registry in step with what is in the library. It reads
 `LIBRARY_ROOT_FOLDER_ID`, `MUSIC_TAGGING_STATE_FOLDER_ID` and
 `LIBRARY_BACKFILL_CHUNK_SIZE` as the backfill does, and:
@@ -154,7 +154,7 @@ regardless. See [PIPELINE.md](PIPELINE.md#library-scan).
 
 ## Library identify
 
-Between the scan and the backfill's chunk the nightly job runs the
+Between the scan and the backfill's chunk the library job runs the
 **library-identify** step: unidentified library files are identified (by
 their tags, else by the fingerprint function) and linked to the catalog;
 only the link is written to the file. It reads `LIBRARY_ROOT_FOLDER_ID` and
@@ -171,19 +171,19 @@ The fingerprint function's confidence threshold is `RETAG_MIN_CONFIDENCE`
 ## Library reconcile
 
 The **library-reconcile** worker mode, scheduled on its own rather than as
-a step of the nightly job, compares linked library files with the
+a step of the library job, compares linked library files with the
 catalog; a dry run reads only, a write run applies what the owner approved. It reads `LIBRARY_ROOT_FOLDER_ID` and
 `MUSIC_TAGGING_STATE_FOLDER_ID` as the backfill does, and:
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_RECONCILE_CHUNK_SIZE` | `50` | Linked files compared per run after the cursor, and at most as many files with an approved difference settled first; a whole number of at least 1. Each is downloaded to read its tags, so the chunk is bounded by the worker's timeout. |
+| `LIBRARY_RECONCILE_CHUNK_SIZE` | `50` | Changed files compared per run (the rest wait for the next run), and at most as many files with an approved difference settled first; a whole number of at least 1. Each is downloaded to read its tags, so the chunk is bounded by the worker's timeout. |
 
 See [PIPELINE.md](PIPELINE.md#library-reconcile).
 
 ## Library sync
 
-The fifth step of the nightly job, **library-sync**, writes catalog edits
+The fifth step of the library job, **library-sync**, writes catalog edits
 and display-rule changes to the files they affect. It reads
 `LIBRARY_ROOT_FOLDER_ID` and `MUSIC_TAGGING_STATE_FOLDER_ID` as the
 backfill does, and:
@@ -197,7 +197,7 @@ See [PIPELINE.md](PIPELINE.md#library-sync).
 
 ## Library trash and duplicates
 
-Two more steps of the nightly job handle duplicate files. Both read
+Two more steps of the library job handle duplicate files. Both read
 `LIBRARY_ROOT_FOLDER_ID` and `MUSIC_TAGGING_STATE_FOLDER_ID` as the
 backfill does, and have no settings of their own: their modes are the
 `flags.deejay_cog.library_trash` and `flags.deejay_cog.library_duplicates`
