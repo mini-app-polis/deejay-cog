@@ -1,3 +1,16 @@
+# [2.52.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.51.0...v2.52.0) (2026-11-11)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 9.6.0 ([d3482fd](https://github.com/mini-app-polis/deejay-cog/commit/d3482fd44d0c0a599853e29f074447fa573e20d7))
+
+
+### Features
+
+* **library-duplicates:** group duplicates per library root, with FX Music's folder rules ([126c91e](https://github.com/mini-app-polis/deejay-cog/commit/126c91e2e85b956ac91801afd7ce15b1999ae3ad))
+* **library:** take owner edits in on owner-edit entries of their own ([05b0000](https://github.com/mini-app-polis/deejay-cog/commit/05b0000744eed05e27592963cdbcd667106653c3))
+
 # [2.51.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.50.1...v2.51.0) (2026-11-11)
 
 
