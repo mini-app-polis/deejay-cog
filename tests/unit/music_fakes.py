@@ -14,6 +14,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httplib2
+from googleapiclient.errors import HttpError
 from mutagen.id3 import ID3
 
 #: One MPEG-1 Layer III frame, repeated: enough audio for mutagen.
@@ -72,6 +74,31 @@ class _Request:
         return self._fn()
 
 
+class _MediaRequest:
+    """``files().get_media``: the file's bytes, or the range its ``Range``
+    header names (``bytes=A-B`` or ``bytes=-N``), as Drive serves them."""
+
+    def __init__(self, drive: FakeDrive, file_id: str) -> None:
+        self._drive = drive
+        self._file_id = file_id
+        self.headers: dict[str, str] = {}
+
+    def execute(self) -> bytes:
+        data = self._drive.items[self._file_id].data
+        span = self.headers.get("Range")
+        self._drive.ranges.append((self._file_id, span))
+        if span is None:
+            return data
+        if not data:
+            raise HttpError(
+                httplib2.Response({"status": 416}), b"range not satisfiable"
+            )
+        first, _, last = span.removeprefix("bytes=").partition("-")
+        if not first:
+            return data[-int(last) :]
+        return data[int(first) : int(last) + 1]
+
+
 class FakeDrive:
     """Files by id, each in its folders, with the facade's methods."""
 
@@ -81,8 +108,12 @@ class FakeDrive:
         self._ids = itertools.count(1)
         #: Set to alter what an upload stores, to fake a corrupted write.
         self.corrupt_uploads = False
+        #: The file ids downloaded whole, and the ranged reads made (file id
+        #: and Range header), in order.
+        self.downloads: list[str] = []
+        self.ranges: list[tuple[str, str | None]] = []
         self.service = SimpleNamespace(
-            files=lambda: SimpleNamespace(get=self._svc_get),
+            files=lambda: SimpleNamespace(get=self._svc_get, get_media=self._svc_media),
             revisions=lambda: SimpleNamespace(
                 update=self._svc_rev_update,
                 get_media=self._svc_rev_get,
@@ -165,6 +196,7 @@ class FakeDrive:
         return out
 
     def download_file_bytes(self, file_id: str) -> SimpleNamespace:
+        self.downloads.append(file_id)
         i = self.items[file_id]
         return SimpleNamespace(
             file_id=file_id, name=i.name, mime_type=i.mime_type, data=i.data
@@ -204,6 +236,10 @@ class FakeDrive:
             }
 
         return _Request(meta)
+
+    def _svc_media(self, fileId: str, supportsAllDrives: bool) -> _MediaRequest:  # noqa: N803
+        del supportsAllDrives
+        return _MediaRequest(self, fileId)
 
     def _svc_rev_update(self, fileId: str, revisionId: str, body: dict) -> _Request:  # noqa: N803
         def run() -> dict:

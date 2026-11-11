@@ -602,6 +602,14 @@ over the tag (that frame only). This is how a catalog merge's repointed
 files are brought in step, as the merge changes the rows and not the files.
 The library-sync step does not compare that tag, so it reads no extra file.
 
+**Tags are read from a ranged download.** Each comparison downloads only
+the start of the file (`TAG_HEAD_BYTES` in `music_safety.py`) and its last
+few bytes, where an ID3v1 block sits, so the tags read and the differences
+found are those of the whole file. The whole file is downloaded only when
+its ID3v2 tag runs past the start read, when a range cannot be read (an
+empty file), or when an approved difference is written over it: a write and
+its audio check are always made on the whole file.
+
 **A kind approval covers every file of that kind.** There is no per-file
 exception to it: with `year_later` approved for the file, any file whose
 year is older than its entry's sends that year up, even when the entry's
@@ -774,7 +782,10 @@ edit made in VirtualDJ goes up). Before the chunk above, each present,
 linked file with recorded values that Drive saw change after its last sync
 (the scan's listing, `library-scan-listing.json`, keeps when Drive last saw
 each file change) is read, and its owned fields are sent to the API
-(`POST /v1/catalog/library/files/edited`). A field the file changed and its
+(`POST /v1/catalog/library/files/edited`). Its tags are read from a ranged
+download of its start and end, as the reconcile reads them; the whole file
+is downloaded only when its ID3v2 tag runs past the start read, or when a
+stale field is put back (below). A field the file changed and its
 entry did not goes up to the entry as a catalog revision, so the chunk then
 carries it to the entry's other files. A field the catalog changed too stays
 the catalog's and is written back. A BPM within 1.5 of the recorded one (or

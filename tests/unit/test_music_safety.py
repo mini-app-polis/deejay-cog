@@ -426,3 +426,125 @@ def test_in_place_restores_the_original_when_the_write_changed_the_audio(
     assert library.data == original
     saved = json.loads(drive.in_folder("state")[0].data)
     assert saved["entries"][0]["state"] == "restored"
+
+
+# -- reading tags from the start and end of a file ----------------------------
+
+
+def _v1(title: str, artist: str) -> bytes:
+    """An ID3v1 block, as some taggers append one."""
+    return (
+        b"TAG"
+        + title.encode().ljust(30, b"\0")
+        + artist.encode().ljust(30, b"\0")
+        + b"\0" * 30  # album
+        + b"2019"
+        + b"\0" * 30  # comment
+        + b"\xff"  # no genre
+    )
+
+
+def _tagged() -> bytes:
+    """An ID3v2-tagged file that also ends in an ID3v1 block."""
+    return mp3(TIT2(encoding=3, text=["Honesty"])) + _v1("Old Title", "Pink Sweat$")
+
+
+def _same_tags(read: bytes, whole: bytes) -> None:
+    from deejay_cog.music_tags import linked_catalog_id, read_tag_row
+
+    assert read_tag_row(read) == read_tag_row(whole)
+    assert linked_catalog_id(read) == linked_catalog_id(whole)
+    assert safety.tag_snapshot(read) == safety.tag_snapshot(whole)
+
+
+def test_a_tag_inside_the_start_is_read_without_the_whole_file(
+    drive: FakeDrive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _tagged()
+    tag_length = safety.id3v2_length(data)
+    assert tag_length is not None
+    monkeypatch.setattr(safety, "TAG_HEAD_BYTES", tag_length + 16)
+    file_id = drive.add("a.mp3", "library", data)
+
+    read = safety.read_tag_bytes(drive, file_id)
+
+    assert not read.whole and len(read.data) < len(data)
+    assert drive.downloads == []
+    assert drive.ranges == [
+        (file_id, f"bytes=0-{tag_length + 15}"),
+        (file_id, f"bytes=-{safety.TAG_TAIL_BYTES}"),
+    ]
+    _same_tags(read.data, data)
+    # The ID3v1 block at the end is read too: its artist fills the frame
+    # the ID3v2 tag lacks.
+    from deejay_cog.music_tags import read_tag_row
+
+    assert read_tag_row(read.data)["artist"] == "Pink Sweat$"
+    assert safety.whole_bytes(drive, file_id, read) == data
+    assert drive.downloads == [file_id]
+
+
+def test_a_tag_that_runs_past_the_start_reads_the_whole_file(
+    drive: FakeDrive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _tagged()
+    tag_length = safety.id3v2_length(data)
+    assert tag_length is not None
+    monkeypatch.setattr(safety, "TAG_HEAD_BYTES", tag_length - 1)
+    file_id = drive.add("a.mp3", "library", data)
+
+    read = safety.read_tag_bytes(drive, file_id)
+
+    assert read.whole and read.data == data
+    assert drive.downloads == [file_id]
+    _same_tags(read.data, data)
+    assert safety.whole_bytes(drive, file_id, read) == data
+    assert drive.downloads == [file_id]  # not downloaded again
+
+
+@pytest.mark.parametrize(
+    "data", [AUDIO, AUDIO + _v1("Honesty", "Pink Sweat$")], ids=["bare", "v1-only"]
+)
+def test_a_file_with_no_id3v2_tag_reads_as_before(
+    drive: FakeDrive, monkeypatch: pytest.MonkeyPatch, data: bytes
+) -> None:
+    monkeypatch.setattr(safety, "TAG_HEAD_BYTES", 64)
+    file_id = drive.add("a.mp3", "library", data)
+
+    read = safety.read_tag_bytes(drive, file_id)
+
+    assert not read.whole and drive.downloads == []
+    _same_tags(read.data, data)
+
+
+def test_a_small_file_is_read_whole_in_one_range(drive: FakeDrive) -> None:
+    data = _tagged()
+    file_id = drive.add("a.mp3", "library", data)
+
+    read = safety.read_tag_bytes(drive, file_id)
+
+    assert read.whole and read.data == data
+    assert drive.downloads == [] and len(drive.ranges) == 1
+
+
+def test_an_empty_file_falls_back_to_the_whole_file(drive: FakeDrive) -> None:
+    file_id = drive.add("a.mp3", "library", b"")
+
+    read = safety.read_tag_bytes(drive, file_id)
+
+    assert read.whole and read.data == b""
+    assert drive.downloads == [file_id]
+
+
+@pytest.mark.parametrize(
+    ("head", "length"),
+    [
+        (b"\xff\xfb\x90\x64" + b"\0" * 6, 0),
+        (b"ID3\x04\x00\x00" + _syncsafe(1000), 1010),
+        (b"ID3\x04\x00\x10" + _syncsafe(1000), 1020),  # with a footer
+        (b"ID3\x04\x00\x00\x00\x00\x80\x00", None),  # size not synchsafe
+        (b"ID3\x04", None),  # cut short
+    ],
+)
+def test_the_id3v2_length_is_read_from_its_header(head, length) -> None:
+    assert safety.id3v2_length(head) == length

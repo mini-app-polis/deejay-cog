@@ -575,14 +575,14 @@ def test_a_failing_file_is_named_and_the_run_carries_on(
     settings, wired, drive, catalog, monkeypatch
 ) -> None:
     ids = _library(drive, catalog, [{}, {}])
-    real = drive.download_file_bytes
+    real = rec.read_tag_bytes
 
-    def flaky(file_id: str):
+    def flaky(drive_: FakeDrive, file_id: str):
         if file_id == ids[0]:
             raise OSError("drive hiccup")
-        return real(file_id)
+        return real(drive_, file_id)
 
-    monkeypatch.setattr(drive, "download_file_bytes", flaky)
+    monkeypatch.setattr(rec, "read_tag_bytes", flaky)
 
     summary = rec.library_reconcile(run_id="r-1")
 
@@ -946,6 +946,114 @@ def test_audio_that_would_change_stops_the_write_and_keeps_the_cursor(
     assert _state(drive, rec.SEEN_NAME)["files"] == {}
     assert drive.writes(except_folder=STATE) == []
     assert finding.call_args.args[1] == "ERROR"
+
+
+# ---------------------------------------------------------------------------
+# Tags read from the start and end of the file
+# ---------------------------------------------------------------------------
+
+
+def _head(monkeypatch: pytest.MonkeyPatch, drive: FakeDrive, ids: list[str], by: int):
+    """Set the start a tag read takes to ``by`` bytes past the longest tag
+    of ``ids`` (every tag fits), or, when ``by`` is negative, before the
+    shortest (every tag runs past)."""
+    from deejay_cog import music_safety
+
+    lengths = [music_safety.id3v2_length(drive.items[i].data) or 0 for i in ids]
+    edge = max(lengths) if by > 0 else min(lengths)
+    monkeypatch.setattr(music_safety, "TAG_HEAD_BYTES", edge + by)
+
+
+def _found(summary: rec.ReconcileSummary) -> list[tuple[str, str, str, str]]:
+    return sorted(
+        (d.drive_file_id, d.field, d.file_value, d.kind)
+        for diffs in summary.differences.values()
+        for d in diffs
+    )
+
+
+@pytest.mark.parametrize("by", [16, -1], ids=["inside", "past"])
+def test_a_comparison_finds_the_same_differences_from_a_ranged_read(
+    settings, wired, drive, catalog, monkeypatch, by
+) -> None:
+    ids = _library(
+        drive, catalog, [{"genre": "Neo Soul", "year": "2016"}, {"title": "Else"}, {}]
+    )
+    drive.items[ids[2]].data = _song(uuid.uuid4())  # names another entry
+    whole = rec.library_reconcile(run_id="r-0")
+    _forget_seen(drive)
+    drive.downloads.clear()
+    _head(monkeypatch, drive, ids, by)
+
+    ranged = rec.library_reconcile(run_id="r-1")
+
+    assert ranged.compared == whole.compared == 3
+    assert _found(ranged) == _found(whole)
+    assert "catalog_id" in {f for _, f, _, _ in _found(ranged)}
+    # The whole file only when its tag runs past the start read.
+    music = [i for i in drive.downloads if i in ids]
+    assert music == ([] if by > 0 else ids)
+
+
+def test_a_failed_ranged_read_fails_only_that_file(
+    settings, wired, drive, catalog, monkeypatch
+) -> None:
+    ids = _library(drive, catalog, [{}, {}])
+    _head(monkeypatch, drive, ids, 16)
+    real = drive._svc_media
+
+    def media(fileId: str, supportsAllDrives: bool):  # noqa: N803
+        if fileId == ids[0]:
+            raise OSError("drive hiccup")
+        return real(fileId, supportsAllDrives)
+
+    monkeypatch.setattr(drive, "_svc_media", media)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.compared == 1
+    assert summary.failed and "drive hiccup" in summary.failed[0]
+
+
+def test_an_approved_write_is_built_from_the_whole_file(
+    settings, writing, drive, monkeypatch
+) -> None:
+    from deejay_cog import music_safety
+
+    ids = _library(drive, writing, [{"genre": "Neo Soul"}, {"year": "2016"}])
+    before = {i: drive.items[i].data for i in ids}
+    _approve(writing, kinds=["genre_remapped"], file_wins_kinds=["year_later"])
+    _head(monkeypatch, drive, ids, 16)
+    seen: dict[str, list[bytes]] = {"tags": [], "in_place": [], "audio": []}
+    real_tags, real_place = rec.write_owned_fields, rec.write_in_place
+    real_audio = music_safety.check_audio_unchanged
+
+    def tags(data, fields):
+        seen["tags"].append(data)
+        return real_tags(data, fields)
+
+    def in_place(drive_, record, **kw):
+        seen["in_place"].append(kw["original"])
+        return real_place(drive_, record, **kw)
+
+    def audio(original, candidate):
+        seen["audio"].append(original)
+        return real_audio(original, candidate)
+
+    monkeypatch.setattr(rec, "write_owned_fields", tags)
+    monkeypatch.setattr(rec, "write_in_place", in_place)
+    monkeypatch.setattr(music_safety, "check_audio_unchanged", audio)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.written == ["0.mp3 (genre)"]
+    assert summary.kept == ["1.mp3 (year)"]
+    assert seen["tags"] == seen["in_place"] == [before[ids[0]]]
+    assert seen["audio"] and all(o == before[ids[0]] for o in seen["audio"])
+    # Only the file written was downloaded whole (and again by the check
+    # after its upload); the one kept was not.
+    assert {i for i in drive.downloads if i in ids} == {ids[0]}
+    assert _frames(drive.items[ids[0]].data)["TCON"] == "Pop"
 
 
 # ---------------------------------------------------------------------------
