@@ -1,3 +1,15 @@
+## [2.50.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.50.0...v2.50.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* **reconcile:** rewrite a stale CATALOG_ID tag to its row's id without approval ([dd37abe](https://github.com/mini-app-polis/deejay-cog/commit/dd37abe397a5a35c6734fca9ebe8c561738e68c5))
+
+
+### Performance Improvements
+
+* **library:** read reconcile and sync tags from a ranged Drive download ([f393a50](https://github.com/mini-app-polis/deejay-cog/commit/f393a5065d1547502fe034f265c1b2cb06140d80))
+
 # [2.50.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.49.2...v2.50.0) (2026-11-11)
 
 
