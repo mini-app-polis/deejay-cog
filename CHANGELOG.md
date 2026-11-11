@@ -1,3 +1,10 @@
+## [2.49.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.49.1...v2.49.2) (2026-11-11)
+
+
+### Bug Fixes
+
+* **library-reconcile:** leave refused fill-ups out of the long-open count ([6c764ce](https://github.com/mini-app-polis/deejay-cog/commit/6c764ce6febc11e29fd9b956fd22abb292765af1))
+
 ## [2.49.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.49.0...v2.49.1) (2026-11-11)
 
 
