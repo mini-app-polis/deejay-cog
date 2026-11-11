@@ -93,6 +93,17 @@ then each has had the chance to settle, so each has no decision or one
 that cannot apply. The first run to find any warns (``long_open``, with the count by kind); it warns
 again only after the count has been back to zero.
 
+**Owner edits.** A file whose title the owner retitled with a version in
+``< >`` ("Song <Intro Cut>": a cut he made himself) while its entry is the
+published song's, or another owner edit, is not compared: the retitle is the
+owner's choice and goes up to the catalog (ADR-0008, decided 2026-11-11).
+The file is linked to its owner-edit entry, the one the catalog's matching
+finds or one made from its title, artist and year, with only
+``TXXX:CATALOG_ID`` written and the file registered on the new entry. The
+entry it leaves keeps its plays and its other files. This needs no approval;
+a dry run looks up and previews the entry and changes nothing. The next run
+compares the file with its new entry.
+
 **Approvals** are the owner's, set on the review page and read from the API
 by each write run (``GET /v1/catalog/library/reconcile/approvals``)::
 
@@ -148,6 +159,10 @@ from mini_app_polis.api.contract import (
     CatalogDisplayRequest,
     CatalogFillUp,
     CatalogFillUpResult,
+    CatalogLookupRequest,
+    CatalogMatch,
+    LibraryEntryCreate,
+    LibraryEntryCreated,
     LibraryFieldEdit,
     LibraryFile,
     LibraryFileEdited,
@@ -189,7 +204,10 @@ from deejay_cog.music_safety import (
 )
 from deejay_cog.music_tags import (
     duration_secs,
+    edit_label,
+    ingest_track,
     linked_catalog_id,
+    needs_owner_edit_entry,
     read_tag_row,
     write_owned_fields,
 )
@@ -287,6 +305,16 @@ class Catalog(Protocol):
         self, payload: ReconcileReport
     ) -> ReconcileReportResult:
         """The files a run compared and their open differences."""
+        ...
+
+    def lookup_catalog(
+        self, payload: CatalogLookupRequest
+    ) -> list[CatalogMatch | None]:
+        """The catalog entry each track is a play of."""
+        ...
+
+    def create_library_entry(self, payload: LibraryEntryCreate) -> LibraryEntryCreated:
+        """The song's entry, made from the library when the catalog lacks it."""
         ...
 
 
@@ -679,6 +707,9 @@ class ReconcileSummary:
     #: Open-difference keys a write run tried to settle and left open (a
     #: fill-up the catalog refused, a value the API held): not put first again.
     tried: set[str] = field(default_factory=set)
+    #: Files the owner retitled as an owner edit, moved to an owner-edit
+    #: entry (or, in a dry run, that would be): "path: old -> new (title)".
+    owner_edits: list[str] = field(default_factory=list)
 
     @property
     def files_with_differences(self) -> int:
@@ -826,16 +857,30 @@ def _displays(api: Catalog, rows: list[LibraryFile]) -> dict[uuid.UUID, CatalogD
     return found
 
 
+@dataclass(frozen=True)
+class OwnerEditRetitle:
+    """A linked file whose title names an owner edit its entry is not: the
+    owner's choice, which goes up to the catalog as a link to an owner-edit
+    entry rather than as differences."""
+
+    name: str
+    read: TagBytes
+    tags: dict[str, str]
+
+
 def _compare_one(
     drive: Any,
     row: LibraryFile,
     display: CatalogDisplay | None,
     summary: ReconcileSummary,
-) -> tuple[str, TagBytes, list[Difference], dict[str, str]] | None:
+    *,
+    owner_edits: bool = True,
+) -> tuple[str, TagBytes, list[Difference], dict[str, str]] | OwnerEditRetitle | None:
     """Compare one file; return its name, the bytes its tags were read from
     (its start and end, or the whole file when its tag runs past the start
     read), differences and expected values, or None when it could not be
-    compared."""
+    compared. With ``owner_edits``, a file retitled as an owner edit its
+    entry is not is returned as an :class:`OwnerEditRetitle`, uncompared."""
     if display is None:
         summary.failed.append(
             f"{row.path} (its catalog entry {row.catalog_id} is gone)"
@@ -848,6 +893,8 @@ def _compare_one(
     name = str(meta.get("name") or row.path.rsplit("/", 1)[-1])
     read = read_tag_bytes(drive, row.drive_file_id)
     tags = read_tag_row(read.data)
+    if owner_edits and needs_owner_edit_entry(tags["title"], display):
+        return OwnerEditRetitle(name, read, tags)
     wanted = expected(display, row)
     diffs = classify(row.path, row.drive_file_id, tags, wanted)
     link = linked_catalog_id(read.data)
@@ -936,6 +983,102 @@ def _apply_one(
         )
     )
     return settled
+
+
+def _entry_year(text: str) -> int | None:
+    """The year a new entry may take from a file's year tag, or None."""
+    year = _year(text)
+    return year if year is not None and year >= 1000 else None
+
+
+def _take_owner_edit(
+    drive: Any,
+    api: Catalog,
+    record: RunRecord | None,
+    settings: BackfillSettings,
+    row: LibraryFile,
+    retitled: OwnerEditRetitle,
+    summary: ReconcileSummary,
+) -> bool:
+    """Move a file the owner retitled as an owner edit to its owner-edit
+    entry: the catalog's, by the set import's matching, or one made from the
+    file's title, artist and year. Only the link (``TXXX:CATALOG_ID``) is
+    written to the file, and it is registered on the new entry. The entry it
+    leaves keeps its plays and its other files. A dry run (no ``record``)
+    looks up and previews, and changes nothing.
+
+    Returns False when the catalog's answer is the file's own entry: the
+    file is then compared as any other."""
+    tags = retitled.tags
+    track = ingest_track(tags)
+    if track is None:
+        return False
+    match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+    if match is not None and not match.owner_edit:
+        match = None
+    made = "an owner-edit entry it has"
+    if match is None:
+        created = api.create_library_entry(
+            LibraryEntryCreate(
+                title=tags["title"].strip(),
+                artist=tags["artist"].strip(),
+                release_year=_entry_year(tags.get("year") or ""),
+                preview=record is None,
+            )
+        )
+        if not created.entry.owner_edit:
+            summary.failed.append(
+                f"{row.path} (the catalog did not take {tags['title']!r} as an "
+                "owner edit; the file is left on its entry)"
+            )
+            return True
+        match = created.entry
+        if created.created or created.previewed:
+            made = "a new owner-edit entry"
+    if match.id == row.catalog_id:
+        return False
+    line = (
+        f"{row.path}: {row.catalog_id} -> {match.id} "
+        f"({match.artist} - {match.title}, {made})"
+    )
+    if record is None:
+        summary.owner_edits.append(line)
+        return True
+    data = whole_bytes(drive, row.drive_file_id, retitled.read)
+    current = data
+    tagged = write_owned_fields(data, {"catalog_id": str(match.id)})
+    if tagged is not None:
+        entry = write_in_place(
+            drive,
+            record,
+            file_id=row.drive_file_id,
+            name=retitled.name,
+            original=data,
+            tagged=tagged,
+            identified_by="reconcile (owner edit, linked to its own entry)",
+        )
+        if entry.state != "done":
+            summary.failed.append(f"{row.path} (its link was not written)")
+            return True
+        current = tagged
+    api.register_library_file(
+        LibraryFileRegister(
+            drive_file_id=row.drive_file_id,
+            library_root_id=settings.root,
+            path=row.path,
+            size_bytes=len(current),
+            md5=md5(current),
+            duration_secs=duration_secs(current),
+            identification_status="identified",
+            catalog_id=match.id,
+            edit_label=edit_label(tags["title"]),
+            synced_at=datetime.now(UTC),
+        )
+    )
+    summary.owner_edits.append(line)
+    # The review drops what it held for the file under its old entry.
+    summary.reviewed.append(row.drive_file_id)
+    return True
 
 
 def _keep_file(
@@ -1069,6 +1212,18 @@ def _reconcile(
             try:
                 display = displays.get(row.catalog_id) if row.catalog_id else None
                 compared = _compare_one(drive, row, display, summary)
+                if isinstance(compared, OwnerEditRetitle):
+                    if _take_owner_edit(
+                        drive, api, record, settings, row, compared, summary
+                    ):
+                        # Not marked compared: the next run compares the file
+                        # with its new entry (or, after a dry run, links it).
+                        continue
+                    compared = _compare_one(
+                        drive, row, display, summary, owner_edits=False
+                    )
+                    if isinstance(compared, OwnerEditRetitle):  # not with them off
+                        continue
                 settled: set[str] = set()
                 if compared is not None and record is not None:
                     settled = _apply_one(
@@ -1114,7 +1269,7 @@ def _reconcile(
                     "updated_at": _now(),
                 }
             )
-            if summary.compared or summary.failed:
+            if summary.compared or summary.failed or summary.owner_edits:
                 # A run that compared nothing leaves no record.
                 _save_record(drive, settings.state, run_id, summary)
             _send_review(api, run_id, summary)
@@ -1226,6 +1381,7 @@ def _save_record(
         "kept": summary.kept,
         "kept_held": summary.kept_held,
         "not_approved": summary.not_approved,
+        "owner_edits": summary.owner_edits,
     }
     store = StateFile(drive, state, name)
     store.load()  # a redelivered run writes over its own record
@@ -1342,6 +1498,12 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
         report.count(kind, n - refused_count if kind == "fill_up" else n)
     report.count("fill_up_kept_by_file", refused_count)
     report.count("failed", len(summary.failed))
+    report.count("owner_edits", len(summary.owner_edits))
+    for item in summary.owner_edits:
+        if summary.mode.writes:
+            report.updated("owner edit linked to its own entry", item)
+        else:
+            report.notice("would_link_owner_edit", item)
     if summary.mode.writes:
         report.count("written", len(summary.written))
         report.count("filled_up", len(summary.filled))

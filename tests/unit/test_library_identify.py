@@ -1040,3 +1040,131 @@ def test_a_fingerprint_that_agrees_with_the_tags_is_linked(drive, api) -> None:
     )
 
     assert result.outcome == "linked"
+
+
+# ---------------------------------------------------------------------------
+# Owner edits: a version in < >, set by the owner in the file's tags
+# ---------------------------------------------------------------------------
+
+_BABY = "Baby What You Want Me To Do"
+_CUT = uuid.UUID("0e0e0e0e-0000-4000-8000-000000000002")
+
+
+class OwnerEditApi(FakeApi):
+    """A catalog whose new entries for a title in < > are owner edits."""
+
+    def create_library_entry(self, payload: LibraryEntryCreate):
+        self.created.append(payload)
+        owner_edit = "<" in payload.title
+        self.displays[_CUT] = _display(
+            _CUT, title=payload.title, artist=payload.artist, owner_edit=owner_edit
+        )
+        return LibraryEntryCreated(
+            entry=CatalogMatch(
+                id=_CUT,
+                title=payload.title,
+                artist=payload.artist,
+                owner_edit=owner_edit,
+            ),
+            created=not payload.preview,
+            previewed=payload.preview,
+        )
+
+
+@pytest.fixture
+def owner_edit_api(monkeypatch: pytest.MonkeyPatch, wired) -> OwnerEditApi:
+    api = OwnerEditApi(
+        known={
+            _BABY.lower(): CatalogMatch(id=_ENTRY, title=_BABY, artist="Etta James")
+        },
+        displays={_ENTRY: _display(title=_BABY, artist="Etta James")},
+    )
+    monkeypatch.setattr(ident, "api_client", lambda **_: api)
+    return api
+
+
+def test_an_owner_edit_gets_an_owner_edit_entry_of_its_own(
+    settings, owner_edit_api, drive, jobs
+) -> None:
+    api = owner_edit_api
+    title = f"{_BABY} <Intro Cut>"
+    drive_id = _unidentified(drive, api, "baby.mp3", _song(title, "Etta James"))
+
+    summary = ident.library_identify(run_id="i-1")
+
+    [made] = api.created
+    assert made.title == title and made.artist == "Etta James"
+    assert made.preview is False
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TXXX:CATALOG_ID"] == str(_CUT)  # not the published song's
+    assert frames["TIT2"] == title
+    assert frames["COMM::eng"] == "cue: drop at 1:02"
+    [reg] = api.registrations
+    assert reg.catalog_id == _CUT and reg.edit_label is None
+    assert reg.identify_note == ident.OWNER_EDIT_NOTE
+    # The owner's tags are his choice: nothing is sent to fingerprinting.
+    assert jobs.sent == []
+    assert summary.owner_edits == [f"New/baby.mp3 -> Etta James - {title}"]
+    assert _state(drive, ident.TRIED_NAME)["files"][drive_id]["outcome"] == "linked"
+
+
+def test_an_owner_edit_is_linked_to_the_owner_edit_entry_the_catalog_has(
+    settings, owner_edit_api, drive, jobs
+) -> None:
+    api = owner_edit_api
+    title = f"{_BABY} <Intro Cut> (Clean)"
+    existing = uuid.uuid4()
+    api.known[title.lower()] = CatalogMatch(
+        id=existing, title=f"{_BABY} <Intro Cut>", artist="Etta James", owner_edit=True
+    )
+    api.displays[existing] = _display(existing, owner_edit=True)
+    drive_id = _unidentified(drive, api, "baby.mp3", _song(title, "Etta James"))
+
+    ident.library_identify(run_id="i-1")
+
+    assert api.created == [] and jobs.sent == []
+    assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(existing)
+    [reg] = api.registrations
+    assert reg.catalog_id == existing and reg.edit_label == "Clean"
+
+
+def test_an_owner_edit_is_never_linked_to_the_published_songs_entry(
+    settings, owner_edit_api, drive
+) -> None:
+    api = owner_edit_api
+    title = f"{_BABY} <Intro Cut>"
+    # A catalog answering with the published song is not taken.
+    api.known[title.lower()] = api.known[_BABY.lower()]
+    drive_id = _unidentified(drive, api, "baby.mp3", _song(title, "Etta James"))
+
+    ident.library_identify(run_id="i-1")
+
+    assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(_CUT)
+
+
+def test_a_dry_run_previews_an_owner_edit_entry_and_changes_nothing(
+    settings, owner_edit_api, drive, jobs, monkeypatch
+) -> None:
+    monkeypatch.setitem(FLAGS, ident.MODE_FLAG, "dry-run")
+    api = owner_edit_api
+    data = _song(f"{_BABY} <Intro Cut>", "Etta James")
+    drive_id = _unidentified(drive, api, "baby.mp3", data)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert [c.preview for c in api.created] == [True]
+    assert drive.items[drive_id].data == data
+    assert api.registrations == [] and jobs.sent == []
+    assert len(summary.owner_edits) == 1
+
+
+def test_an_unmarked_file_is_linked_to_the_published_song_as_before(
+    settings, owner_edit_api, drive
+) -> None:
+    api = owner_edit_api
+    drive_id = _unidentified(drive, api, "baby.mp3", _song(_BABY, "Etta James"))
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert api.created == [] and summary.owner_edits == []
+    assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(_ENTRY)

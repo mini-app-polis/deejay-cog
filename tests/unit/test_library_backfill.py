@@ -25,6 +25,7 @@ from deejay_cog import library_backfill as flow
 from deejay_cog import library_nightly as nightly
 from deejay_cog import music_rollback as rb
 from deejay_cog.music_safety import tag_snapshot
+from deejay_cog.music_tags import linked_catalog_id
 from flag_fakes import FLAGS
 
 ROOT, STATE = "root", "state"
@@ -970,6 +971,32 @@ def test_a_file_the_catalog_does_not_have_is_registered_unidentified(
     assert api.registry[file_id].identification_status == "unidentified"
     assert api.registry[file_id].catalog_id is None
     assert api.registry[untagged].identification_status == "unidentified"
+
+
+def test_an_owner_edit_is_linked_only_to_an_owner_edit_entry(
+    settings, wired, drive, api: FakeApi
+) -> None:
+    title = "song 0 <Intro Cut>"
+    # The catalog's answer is the published song: not the owner edit's entry.
+    published = drive.add("a.mp3", ROOT, _song(title, "artist"))
+    api.answers[title.lower()] = _match("Song 0", "Artist")
+    # An owner-edit entry the catalog has is linked as any other entry.
+    cut = uuid.uuid4()
+    linked = drive.add("b.mp3", ROOT, _song("song 1 <Intro Cut> (Clean)", "artist"))
+    api.answers["song 1 <intro cut> (clean)"] = CatalogMatch(
+        id=cut, title="Song 1 <Intro Cut>", artist="Artist", owner_edit=True
+    )
+
+    summary = flow.library_backfill(run_id="m-1")
+
+    assert summary.outcomes["not_in_catalog"] == [
+        f"a.mp3 (looked up {title!r} by 'artist')"
+    ]
+    assert api.registry[published].identification_status == "unidentified"
+    assert api.registry[published].catalog_id is None
+    assert linked_catalog_id(drive.items[published].data) == ""
+    assert api.registry[linked].catalog_id == cut
+    assert api.registry[linked].edit_label == "Clean"
 
 
 def test_a_dry_run_registers_files_but_writes_no_music(

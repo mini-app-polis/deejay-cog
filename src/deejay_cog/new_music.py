@@ -16,13 +16,19 @@ run:
    A file with no usable title or artist goes to needs-review. No file is
    fingerprinted (AcoustID is left for a later phase).
 
+An **owner edit** (a version in ``< >`` in its title, "Song <Intro Cut>")
+is taken in on an owner-edit entry, the catalog's or one made from its tags,
+never on the published song's (ADR-0008, decided 2026-11-11).
+
 An identified file is **copied**, never changed: its tagged bytes are
 uploaded as a new file named ``{title}_{artist}.<ext>`` into
 ``NEW_MUSIC_DESTINATION_FOLDER_ID``, and the original is then moved,
 unchanged, to ``NEW_MUSIC_ORIGINALS_FOLDER_ID``. The name carries the main
 artist only (the artist tag up to a feat./ft./featuring credit); when that
 name is already taken, in the destination or by any file in the library
-(the API's library registry), the featured artists are added. A file that
+(the API's library registry), the featured artists are added. Characters
+a file name can't hold are left out, ``<`` and ``>`` among them, so an
+owner edit's name carries its version without them. A file that
 cannot be identified with confidence, whose name is taken even so (or has
 no featured artists to add), or whose name cannot be checked because the
 registry cannot be read, is moved unchanged to ``NEW_MUSIC_REVIEW_FOLDER_ID``. Nothing
@@ -83,6 +89,8 @@ from deejay_cog.music_tags import (
     CatalogLookup,
     edit_label,
     ingest_track,
+    is_owner_edit,
+    owner_edit_fits,
     read_tag_row,
     write_catalog_tags,
 )
@@ -554,6 +562,10 @@ def intake_one(intake: Intake, api: IntakeCatalog, file_id: str) -> None:
         if track is not None
         else None
     )
+    if match is not None and not owner_edit_fits(row.get("title", ""), match):
+        # An owner edit never takes the published song's entry: it gets an
+        # owner-edit entry of its own, made from its tags below.
+        match = None
     if match is not None:
         tagged = write_catalog_tags(data, match, label=label) or data
         intake.deliver(file_id, name, data, tagged, identified_by="catalog")
@@ -568,6 +580,14 @@ def intake_one(intake: Intake, api: IntakeCatalog, file_id: str) -> None:
     made = api.create_library_entry(
         entry_request(track, preview=not intake.mode.writes)
     )
+    if is_owner_edit(track.title) and not made.entry.owner_edit:
+        intake.review(
+            file_id,
+            name,
+            data,
+            "an owner edit (a version in < >) the catalog did not take as one",
+        )
+        return
     if made.created or made.previewed:
         entry = made.entry
         intake.summary.new_entries.append(

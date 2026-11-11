@@ -44,6 +44,14 @@ are read from the start and end of the file (a ranged Drive download); the
 whole file is downloaded only when its ID3v2 tag runs past the start read,
 or when a stale field is put back.
 
+**An owner edit is the reconcile's.** A file the owner retitled with a
+version in ``< >`` ("Song <Intro Cut>") while its entry is the published
+song's (or another owner edit) is not an edit to that entry: nothing of it
+goes up, nothing is written over it, and it is not marked synced; the
+reconcile links it to its owner-edit entry (ADR-0008, decided 2026-11-11).
+An owner-edit entry's displayed title carries its version in ``< >``, and
+the sync writes it so.
+
 **A stale write-back is told by its value.** A changed field that now holds
 a value the pipeline replaced in that file (the old tags of a done, in-place
 write in any library run record) was written back over the pipeline's
@@ -130,6 +138,8 @@ from deejay_cog.music_safety import (
 )
 from deejay_cog.music_tags import (
     display_fields,
+    is_owner_edit,
+    needs_owner_edit_entry,
     read_tag_row,
     write_owned_fields,
 )
@@ -272,6 +282,11 @@ class SyncSummary:
     put_back: list[str] = field(default_factory=list)
     #: Stale fields left as they are, and why.
     stale_left: list[str] = field(default_factory=list)
+    #: Files the owner retitled as an owner edit their entry is not: left
+    #: for the reconcile, which links each to its owner-edit entry.
+    owner_edits: list[str] = field(default_factory=list)
+    #: Their Drive ids: not sent up, written or marked synced in this run.
+    owner_edit_ids: set[str] = field(default_factory=set)
     synced: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     #: Files written (or that would be) per entry, as the entry is shown.
@@ -732,6 +747,13 @@ def _read_edits(
                 # A stale field that could not be put back must not go up.
                 continue
             tags = {k: v or None for k, v in read_tag_row(data).items()}
+            if _retitled_as_owner_edit(api, row, tags.get("title") or ""):
+                summary.owner_edits.append(
+                    f"{row.path}: title {tags.get('title')!r} (an owner edit: "
+                    "the reconcile links it to its own entry)"
+                )
+                summary.owner_edit_ids.add(row.drive_file_id)
+                continue
             result = api.report_library_file_edited(
                 LibraryFileEdited(
                     drive_file_id=row.drive_file_id,
@@ -755,6 +777,17 @@ def _read_edits(
             summary.edits.setdefault(edit.outcome, []).append(_edit_line(row, edit))
 
 
+def _retitled_as_owner_edit(api: Catalog, row: LibraryFile, title: str) -> bool:
+    """Whether the file's title now names an owner edit its entry is not.
+    That retitle is the owner's choice of another entry, not an edit to this
+    one, so it does not go up, and the catalog's title is not written over
+    it (ADR-0008, decided 2026-11-11)."""
+    if not is_owner_edit(title) or row.catalog_id is None:
+        return False
+    [display] = api.read_catalog_display(CatalogDisplayRequest(ids=[row.catalog_id]))
+    return display is not None and needs_owner_edit_entry(title, display)
+
+
 def _sync(
     drive: Any,
     api: Catalog,
@@ -772,7 +805,7 @@ def _sync(
     rows = api.list_library_files_needing_sync(
         library_root_id=settings.root, limit=chunk_size, offset=0
     )
-    left = set(summary.edits_left)
+    left = set(summary.edits_left) | summary.owner_edit_ids
     rows = [row for row in rows if row.drive_file_id not in left]
     summary.waiting = len(rows)
     if not rows:
@@ -951,6 +984,9 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
         report.notice("edit_overwritten_by_the_catalog", line)
     for line in summary.edits.get("held", []):
         report.notice("edit_held", line)
+    report.count("owner_edits_left", len(summary.owner_edits))
+    for line in summary.owner_edits:
+        report.notice("owner_edit_left_for_reconcile", line)
     report.count("marked_synced", len(summary.synced))
     report.count("failed", len(summary.failed))
     for shown, files in sorted(summary.reached.items()):
