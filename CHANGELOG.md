@@ -1,3 +1,10 @@
+# [2.54.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.53.0...v2.54.0) (2026-11-11)
+
+
+### Features
+
+* **library:** run library modes on their own worker, take new music in unchanged, and document owner edits ([2d17909](https://github.com/mini-app-polis/deejay-cog/commit/2d179096379fcea550d1efa098d23f9ba3c99837))
+
 # [2.53.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.52.0...v2.53.0) (2026-11-11)
 
 
