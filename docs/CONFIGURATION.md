@@ -166,7 +166,8 @@ regardless. See [PIPELINE.md](PIPELINE.md#library-scan).
 
 Between the scan and the backfill's chunk the library job runs the
 **library-identify** step: unidentified library files are identified (by
-their tags, else by the fingerprint function) and linked to the catalog;
+their tags checked against the fingerprint function, else by the
+fingerprint alone) and linked to the catalog;
 only the link is written to the file. It reads `LIBRARY_ROOT_FOLDER_ID` and
 `MUSIC_TAGGING_STATE_FOLDER_ID` as the backfill does, and
 `FX_LIBRARY_ROOT_FOLDER_ID` (above): FX Music's files are linked only to fx

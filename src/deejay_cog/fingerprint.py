@@ -54,7 +54,12 @@ with the file's own tags goes to a second opinion
 (:mod:`deejay_cog.second_opinion`): the other recordings AcoustID links to
 the audio, then Spotify's length for each side. The file is linked by
 whichever side a second source backs, and left for the owner when none
-does or both are. That run
+does or both are. A file whose tags found a catalog entry comes with that
+entry as the one expected (ADR-0007, amended 2026-11-11): a confident match
+to the same song links it there, one to another song goes to the second
+opinion, and no result (no match, none confident, a recording MusicBrainz
+cannot give, audio fpcalc cannot read) links it there by its tags, the
+registry note saying the fingerprint did not confirm it. That run
 is reported under ``library-identify`` and follows the stricter of the
 message's mode and ``flags.deejay_cog.library_identify``.
 
@@ -823,6 +828,7 @@ def identify_library_file(
     path: str,
     threshold: float,
     search: TrackSearch | None = None,
+    expected: str | None = None,
 ) -> LibraryIdentifyResult:
     """Identify one library file by its fingerprint and, on a confident
     match, link it to its catalog entry (made a library entry when the
@@ -832,7 +838,13 @@ def identify_library_file(
     (:mod:`deejay_cog.second_opinion`, with ``search`` as its Spotify), and
     otherwise left for the owner. A link the catalog refuses as one to the
     other library (:class:`OtherLibraryError`) is :data:`NOT_LINKABLE`, not
-    an error."""
+    an error.
+
+    ``expected`` is the catalog entry the file's tags found, sent to be
+    confirmed: a confident match to the same song (the tags agree with the
+    recording, or the recording is that entry) links the file to it; one to
+    another song gets the second opinion as above; and no result links the
+    file to it by its tags, noted as not confirmed by the fingerprint."""
     try:
         return _identify_library_file(
             drive,
@@ -844,6 +856,7 @@ def identify_library_file(
             path=path,
             threshold=threshold,
             search=search,
+            expected=expected,
         )
     except OtherLibraryError as exc:
         log.warning("library-identify fingerprint: %s not linkable: %s", path, exc)
@@ -861,6 +874,7 @@ def _identify_library_file(
     path: str,
     threshold: float,
     search: TrackSearch | None = None,
+    expected: str | None = None,
 ) -> LibraryIdentifyResult:
     meta = file_meta(drive, file_id)
     if meta.get("trashed"):
@@ -898,6 +912,7 @@ def _identify_library_file(
             path=path,
             data=data,
             why=why,
+            catalog_id=expected,
         )
         if by_tags is None:
             return None
@@ -921,12 +936,20 @@ def _identify_library_file(
             )
         return LibraryIdentifyResult(path, outcome, score)
 
+    def no_result(outcome: str, note: str) -> LibraryIdentifyResult:
+        """No fingerprint result: a tag match sent to be confirmed is linked
+        by its tags, noted as unconfirmed; any other file is left."""
+        by_tags = by_own_tags(note) if expected else None
+        if by_tags is not None:
+            return by_tags
+        return unidentified(outcome, f"{note}; left for review")
+
     try:
         result = _identify(identifier, name, data)
     except AudioUnreadable as exc:
-        return unidentified(
+        return no_result(
             Outcome.AUDIO_UNREADABLE.value,
-            f"fingerprint: the audio could not be read ({exc}); left for review",
+            f"fingerprint: the audio could not be read ({exc})",
         )
     chosen = result.chosen
     score = float(chosen.confidence or 0.0) if chosen is not None else 0.0
@@ -949,19 +972,21 @@ def _identify_library_file(
             return unidentified(Outcome.BELOW_CONFIDENCE.value, note)
         return by_tags
     if metadata.get(NOT_SERVED):
-        return unidentified(
+        return no_result(
             Outcome.RECORDING_NOT_SERVED.value,
             f"fingerprint: matched recording {metadata.get('_mbid')} (score {score:.2f}), "
-            "which MusicBrainz does not serve; left for review",
+            "which MusicBrainz does not serve",
         )
     year = _year(metadata.get("year"))
     track = ingest_track({"title": title, "artist": artist, "year": year})
     if track is None:
-        return unidentified(
-            Outcome.NO_RECORDING_TAGS.value,
+        no_tags = (
             f"fingerprint: matched (score {score:.2f}) but the recording has no "
-            "title or artist",
+            "title or artist"
         )
+        if expected:
+            return no_result(Outcome.NO_RECORDING_TAGS.value, no_tags)
+        return unidentified(Outcome.NO_RECORDING_TAGS.value, no_tags)
 
     # A file whose own tags name a song is linked only when the recording
     # found is that song: AcoustID's links to recordings are crowd-sourced
@@ -969,6 +994,41 @@ def _identify_library_file(
     # said what it is.
     own = read_tag_row(data)
     identified_by = f"fingerprint ({score:.2f}) + catalog"
+    link_note: str | None = None
+    match: CatalogMatch | None = None
+    looked_up = False
+    if expected:
+        # The tags found an entry: the fingerprint confirms it when the
+        # recording is the song the tags name, or is that very entry.
+        confirmed = tags_agree(own["title"], own["artist"], title, artist)
+        if not confirmed:
+            match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+            looked_up = True
+            confirmed = match is not None and str(match.id) == expected
+        if confirmed:
+            linked = library_identify.link_and_write(
+                drive,
+                api,
+                record,
+                file_id=file_id,
+                name=name,
+                root=root,
+                path=path,
+                data=data,
+                catalog_id=expected,
+                identified_by=f"tags + catalog; fingerprint confirmed ({score:.2f})",
+                note=f"{library_identify.CONFIRMED_NOTE} (score {score:.2f})",
+            )
+            return LibraryIdentifyResult(
+                path,
+                "linked",
+                score,
+                expected,
+                False,
+                linked.written,
+                linked.would_write,
+                tuple(linked.filled),
+            )
     if ingest_track(own) is not None and not tags_agree(
         own["title"], own["artist"], title, artist
     ):
@@ -995,8 +1055,12 @@ def _identify_library_file(
                 f"{disagreement}; {verdict.why}; left for review",
             )
         identified_by = f"fingerprint ({score:.2f}) + catalog; {verdict.why}"
+        if expected:
+            # Not the entry the tags found: the note says why.
+            link_note = f"identified by its fingerprint ({disagreement}; {verdict.why})"
 
-    match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+    if not looked_up:
+        match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
     created = False
     if match is not None:
         catalog_id = str(match.id)
@@ -1023,6 +1087,7 @@ def _identify_library_file(
         data=data,
         catalog_id=catalog_id,
         identified_by=identified_by,
+        note=link_note,
     )
     return LibraryIdentifyResult(
         path,
@@ -1136,10 +1201,12 @@ def library_identify_by_fingerprint(
     api: Any | None = None,
     identifier: Identifier | None = None,
     search: TrackSearch | None = None,
+    expected: str | None = None,
 ) -> LibraryIdentifyResult | None:
     """One library file's fingerprint run, reported under
     ``library-identify``, in the stricter of the sender's mode and
-    ``flags.deejay_cog.library_identify``."""
+    ``flags.deejay_cog.library_identify``. ``expected`` is the catalog entry
+    the file's tags found, for the fingerprint to confirm."""
     mode = stricter(sender_mode, flow_mode(library_identify.MODE_FLAG))
     started_at = monotonic()
     result: LibraryIdentifyResult | None = None
@@ -1187,6 +1254,7 @@ def library_identify_by_fingerprint(
                 path=path or name or file_id,
                 threshold=threshold,
                 search=search if search is not None else build_track_search(),
+                expected=expected,
             )
         except AudioChanged as exc:
             report.issue("audio_changed", f"{path}: {exc}")
@@ -1296,6 +1364,7 @@ def process_message(body: str, *, run_id: str) -> None:
             path=payload.path,
             run_id=run_id,
             sender_mode=parse_mode(payload.mode, setting="message mode"),
+            expected=payload.expected_catalog_id,
         )
         return
     fingerprint(payload.drive_file_id, payload.name, run_id=run_id)

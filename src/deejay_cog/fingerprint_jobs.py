@@ -16,7 +16,10 @@ before) tags the file in place; ``new-music`` takes it in as the new-music
 mode would (:mod:`deejay_cog.new_music`); ``library-identify`` identifies a
 library file and links it to the catalog
 (:mod:`deejay_cog.library_identify`), and also carries the file's
-``library_root_id`` and ``path``. For ``new-music`` and ``library-identify``,
+``library_root_id`` and ``path``, and, for a file whose tags found a
+catalog entry, that entry's id as ``expected_catalog_id``, for the function
+to check against the fingerprint before it links the file. For ``new-music``
+and ``library-identify``,
 ``mode`` is the sender's mode; the function uses the stricter of it and its
 own, and reads a missing one as ``off``.
 
@@ -60,6 +63,13 @@ class FingerprintJobPayload(BaseModel):
         default=None,
         description="A library file's path under its root (library-identify).",
     )
+    expected_catalog_id: str | None = Field(
+        default=None,
+        description=(
+            "The catalog entry a library file's tags found, for the fingerprint "
+            "to confirm (library-identify)."
+        ),
+    )
 
 
 class FingerprintJobMessage(QueueMessage[FingerprintJobPayload]):
@@ -87,6 +97,7 @@ class FingerprintJobs:
         mode: Literal["off", "dry-run", "write"] | None = None,
         library_root_id: str | None = None,
         path: str | None = None,
+        expected_catalog_id: str | None = None,
     ) -> None:
         """Queue one file. The file id (prefixed with the flow for
         new-music) is the deduplication id, so a run that is redelivered
@@ -99,6 +110,7 @@ class FingerprintJobs:
                 mode=mode,
                 library_root_id=library_root_id,
                 path=path,
+                expected_catalog_id=expected_catalog_id,
             )
         )
         self._client.send_message(

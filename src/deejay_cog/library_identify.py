@@ -10,7 +10,14 @@ this step takes the next ``LIBRARY_IDENTIFY_CHUNK_SIZE`` of them (default
 
 1. **By its tags.** The file's tags are read (a tag written in UTF-8 but
    marked Latin-1 is read as UTF-8) and looked up in the catalog with the
-   set import's own matching. A match is a confident identification.
+   set import's own matching. A match is a starting point, not the final
+   word (ADR-0007, amended 2026-11-11): the file is sent to the fingerprint
+   function with the entry its tags found as the one expected, and nothing
+   is linked here. There a confident match to the same song links it to
+   that entry; a confident match to another song gets the second opinion
+   (:mod:`deejay_cog.second_opinion`); and no fingerprint result (no
+   match, none confident, audio it cannot read) links it to that entry by
+   its tags, the registry note saying the fingerprint did not confirm it.
 2. **By its fingerprint** otherwise: a file with no usable title or artist,
    or one whose tags the catalog does not know, goes to the fingerprint
    function's queue (flow ``library-identify``). There a confident
@@ -256,6 +263,9 @@ class Linked:
 #: having confirmed them.
 TAGS_NOTE = "identified by its own tags"
 
+#: How the registry marks a file whose tag match the fingerprint confirmed.
+CONFIRMED_NOTE = "identified by its own tags, confirmed by the fingerprint"
+
 #: How the registry marks an owner edit linked by its own tags.
 OWNER_EDIT_NOTE = "an owner edit, identified by its own tags"
 
@@ -326,11 +336,16 @@ def link_by_own_tags(
     path: str,
     data: bytes,
     why: str,
+    catalog_id: str | None = None,
 ) -> TagsLink | None:
     """Link a file the fingerprint could not identify by its own tags: to
     the catalog's entry for them, or to a library entry made from its title,
     artist and year. None when its tags do not name a song
     (:func:`usable_track`); the file is then left as it is.
+
+    ``catalog_id``, when given, is the entry the file's tags already found
+    (a tag match sent to the fingerprint to confirm): the file is linked to
+    it, with no second lookup.
 
     ``why`` is what the fingerprint found (its note). The registry row keeps
     it as ``identified by its own tags (<why>)``, so a link no fingerprint
@@ -339,25 +354,26 @@ def link_by_own_tags(
     A dry run (``record.mode``) looks up but makes no entry and links
     nothing; one that would make an entry returns an empty ``catalog_id``.
     """
-    tags = read_tag_row(data)
-    track = usable_track(tags, name)
-    if track is None:
-        return None
-    match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
     created = False
-    if match is not None:
-        catalog_id = str(match.id)
-    elif record.mode.writes:
-        made = api.create_library_entry(
-            LibraryEntryCreate(
-                title=tags["title"].strip(),
-                artist=tags["artist"].strip(),
-                release_year=_release_year(tags.get("year")),
+    if catalog_id is None:
+        tags = read_tag_row(data)
+        track = usable_track(tags, name)
+        if track is None:
+            return None
+        match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+        if match is not None:
+            catalog_id = str(match.id)
+        elif record.mode.writes:
+            made = api.create_library_entry(
+                LibraryEntryCreate(
+                    title=tags["title"].strip(),
+                    artist=tags["artist"].strip(),
+                    release_year=_release_year(tags.get("year")),
+                )
             )
-        )
-        catalog_id, created = str(made.entry.id), made.created
-    else:
-        return TagsLink("", False, None)
+            catalog_id, created = str(made.entry.id), made.created
+        else:
+            return TagsLink("", False, None)
     linked = link_and_write(
         drive,
         api,
@@ -585,6 +601,14 @@ class Identify:
                 data,
             )
             return
+        if not match.owner_edit:
+            # A tag match is a starting point, not the final word: the
+            # fingerprint checks it before anything is linked (ADR-0007,
+            # amended 2026-11-11).
+            self._fingerprint(row, name, "", data, expected=match)
+            return
+        # An owner-edit entry: the owner's tags identify it (ADR-0008,
+        # decided 2026-11-11), and the fingerprint is asked for a hint only.
         linked = link_and_write(
             self.drive,
             self.api,
@@ -606,8 +630,7 @@ class Identify:
         if linked.filled:
             summary.filled.append(f"{row.path} ({', '.join(linked.filled)})")
         self._mark(row, "linked")
-        if match.owner_edit:
-            self._hint(row, name)
+        self._hint(row, name)
 
     def _owner_edit(self, row: LibraryFile, name: str, data: bytes) -> None:
         """Take in an owner edit the catalog has no owner-edit entry for: an
@@ -776,8 +799,26 @@ class Identify:
         if self.mode_writes:
             self._mark(row, "linked")
 
-    def _fingerprint(self, row: LibraryFile, name: str, why: str, data: bytes) -> None:
+    def _fingerprint(
+        self,
+        row: LibraryFile,
+        name: str,
+        why: str,
+        data: bytes,
+        *,
+        expected: CatalogMatch | None = None,
+    ) -> None:
+        """Send the file to the fingerprint function. ``expected`` is the
+        entry its tags found, for the function to check before it links the
+        file (ADR-0007, amended 2026-11-11); without one, the tags did not
+        identify the file (``why``)."""
         summary = self.summary
+        if expected is None:
+            note = f"its tags did not identify it ({why}); sent to fingerprinting"
+        else:
+            song = f"{expected.artist} - {expected.title}"
+            why = f"its tags match {song}; the fingerprint is to confirm it"
+            note = f"its tags match {song} in the catalog; sent to fingerprinting to confirm it"
         if not self.mode_writes:
             summary.to_fingerprint.append(f"{row.path} ({why})")
             return
@@ -787,7 +828,7 @@ class Identify:
             root=self.root.root_id,
             path=row.path,
             data=data,
-            note=f"its tags did not identify it ({why}); sent to fingerprinting",
+            note=note,
         )
         if self.jobs is None:
             summary.no_queue.append(f"{row.path} ({why})")
@@ -799,6 +840,7 @@ class Identify:
             mode=self.record.mode.value,  # type: ignore[arg-type]
             library_root_id=self.root.root_id,
             path=row.path,
+            expected_catalog_id=str(expected.id) if expected is not None else None,
         )
         summary.to_fingerprint.append(f"{row.path} ({why})")
         self._mark(row, "sent_to_fingerprint")
