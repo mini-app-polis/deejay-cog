@@ -31,8 +31,10 @@ this step takes the next ``LIBRARY_IDENTIFY_CHUNK_SIZE`` of them (default
 cut the owner made himself) is linked only to an owner-edit entry, never to
 the published song's: by its tags when the catalog has one, otherwise to an
 owner-edit entry made from its own title, artist and year. Its tags are the
-owner's choice, so it is not sent to fingerprinting (ADR-0008, decided
-2026-11-11).
+owner's choice, so the fingerprint never identifies it: once it is linked it
+is sent to the fingerprint function for a hint only, the published
+recording it was cut from, which changes nothing else (ADR-0008, decided
+2026-11-11, decision 4).
 
 **Each library root** (ADR-0009): the main library's unidentified files are
 tried first, then FX Music's. **An FX Music file** links only to an fx
@@ -488,6 +490,9 @@ class IdentifySummary:
     #: Owner edits linked to an owner-edit entry made from their tags (or,
     #: in a dry run, that would be).
     owner_edits: list[str] = field(default_factory=list)
+    #: Owner edits sent to the fingerprint function for a cut-from hint (or,
+    #: in a dry run, that would be).
+    owner_edit_hints: list[str] = field(default_factory=list)
     #: FX Music files given a new fx entry (or, in a dry run, that would be).
     fx_entries: list[str] = field(default_factory=list)
     #: Files the catalog refused to link because the entry is of the other
@@ -601,13 +606,15 @@ class Identify:
         if linked.filled:
             summary.filled.append(f"{row.path} ({', '.join(linked.filled)})")
         self._mark(row, "linked")
+        if match.owner_edit:
+            self._hint(row, name)
 
     def _owner_edit(self, row: LibraryFile, name: str, data: bytes) -> None:
         """Take in an owner edit the catalog has no owner-edit entry for: an
         entry is made from its own tags (the API reads the ``< >`` version
         as an owner edit) and the file is linked to it. Its tags are the
-        owner's own choice, so it is not sent to fingerprinting, which would
-        name the published recording (ADR-0008, decided 2026-11-11)."""
+        owner's own choice, so the fingerprint never identifies it; once
+        linked, it is sent for a cut-from hint (:meth:`_hint`)."""
         summary = self.summary
         tags = read_tag_row(data)
         if usable_track(tags, name) is None:
@@ -673,6 +680,30 @@ class Identify:
         if linked.filled:
             summary.filled.append(f"{row.path} ({', '.join(linked.filled)})")
         self._mark(row, "linked")
+        self._hint(row, name)
+
+    def _hint(self, row: LibraryFile, name: str) -> None:
+        """Send a linked owner edit to the fingerprint function for a hint
+        only: the published recording it was cut from, recorded there and
+        nothing else (ADR-0008, decided 2026-11-11, decision 4). A dry run
+        sends nothing; the hint is not the link, so a missing queue is
+        named and the file stays linked."""
+        summary = self.summary
+        if not self.mode_writes:
+            summary.owner_edit_hints.append(row.path)
+            return
+        if self.jobs is None:
+            summary.no_queue.append(f"{row.path} (owner edit: no cut-from hint)")
+            return
+        self.jobs.send(
+            row.drive_file_id,
+            name,
+            flow="library-identify",
+            mode=self.record.mode.value,  # type: ignore[arg-type]
+            library_root_id=self.root.root_id,
+            path=row.path,
+        )
+        summary.owner_edit_hints.append(row.path)
 
     def _fx(self, row: LibraryFile, name: str, data: bytes) -> None:
         """Take in an FX Music file: it links only to an fx entry, the one
@@ -976,6 +1007,7 @@ def _record(report: Any, summary: IdentifySummary, duration_sec: float) -> None:
     report.count("filled_up", len(summary.filled))
     report.count("to_fingerprint", len(summary.to_fingerprint))
     report.count("owner_edits", len(summary.owner_edits))
+    report.count("owner_edit_hints", len(summary.owner_edit_hints))
     report.count("fx_entries", len(summary.fx_entries))
     report.count("not_linkable", len(summary.not_linkable))
     report.count("failed", len(summary.failed))
@@ -993,6 +1025,11 @@ def _record(report: Any, summary: IdentifySummary, duration_sec: float) -> None:
         report.updated("catalog filled up", item)
     for item in summary.owner_edits:
         report.notice("owner_edit" if writes else "would_link_owner_edit", item)
+    for item in summary.owner_edit_hints:
+        report.notice(
+            "sent_for_cut_from_hint" if writes else "would_send_for_cut_from_hint",
+            item,
+        )
     for item in summary.fx_entries:
         if writes:
             report.created("fx entry made", item)

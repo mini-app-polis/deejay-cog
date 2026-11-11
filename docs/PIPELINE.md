@@ -584,10 +584,29 @@ it) to try again.
 An **owner edit** (a version in `< >`) the catalog has no owner-edit entry
 for skips steps 3 to 6: it is linked to an owner-edit entry made from its
 title, artist and year (registry note `an owner edit, identified by its own
-tags`), never to the published song's entry, and it is not sent to
-fingerprinting. One whose tags name no song (no artist) is left for the
+tags`), never to the published song's entry; the fingerprint never
+identifies it. One whose tags name no song (no artist) is left for the
 owner with a note saying so. A dry run previews the entry and links nothing
 (`would_link_owner_edit`).
+
+**The fingerprint as a hint for an owner edit** (ADR-0008, decided
+2026-11-11, decision 4). Once an owner edit is linked (to a new owner-edit
+entry or the catalog's), it is sent to the fingerprint function
+(`sent_for_cut_from_hint`; in a dry run `would_send_for_cut_from_hint`,
+and nothing is sent). There, for a file whose own title has a `< >`
+version, a confident match to a recording of its own song (its title
+without the version, and its artist) is the published recording it was cut
+from: the catalog's entry for it, or the recording's name when the catalog
+has none, goes into the file's registry note (`…; fingerprint hint: cut
+from <artist> - <title> (catalog entry <id>), score <score>`; its link and
+status are sent unchanged) and is named in the fingerprint run's report
+(`owner_edit_cut_from`). Nothing else changes. No match, an unconfident
+one, another recording, or the edit's own entry gives no hint: the file is
+never reported as wrong, held, recorded as unidentified, retitled or
+relinked, and gets no second opinion. Nothing is submitted to AcoustID
+(its one lookup only asks what the audio matches), MusicBrainz is asked
+only for the matched recording's details, and Spotify is not asked. The
+entry's `cut_from_id` is not set from here.
 
 **FX Music** ([ADR-0009](decisions/ADR-0009-library-folders.md), decision
 3): with `FX_LIBRARY_ROOT_FOLDER_ID` set, its unidentified files are tried
@@ -624,13 +643,14 @@ file as tried. Its record is `library-identify-<run id>.dry-run.json`.
 **Report:** counts for `waiting`, `fingerprinted_unlinked` (files an
 earlier run sent to fingerprinting that are still unidentified: left for the
 owner, or not run yet), `tried`, `linked`, `written`, `would_write`,
-`filled_up`, `to_fingerprint`, `owner_edits`, `fx_entries` (FX files
+`filled_up`, `to_fingerprint`, `owner_edits`, `owner_edit_hints`, `fx_entries` (FX files
 given a new fx entry, each named), `not_linkable` and `failed`, with every
 file by its path.
 The fingerprint function's run for a library file is reported under
 `library-identify` too, but sent only when it has an issue: a chunk sends
 one run per file, so a run that went as expected is logged and kept in its
-run record, not posted.
+run record, not posted; an owner edit's cut-from hint is posted, naming
+it.
 
 ## library-reconcile
 
