@@ -778,6 +778,33 @@ def _stamp(modified: dict[str, str], row: LibraryFile, display: Any) -> dict[str
     }
 
 
+def baseline(drive: Any, api: Catalog, settings: BackfillSettings) -> int:
+    """Record every present, identified file as compared as it is now,
+    without reading one, so the next runs compare only what changes after.
+    For a library just reconciled in full. Returns how many files it
+    recorded."""
+    every = _all_rows(api, settings.root)
+    shown = _displays(api, every) if every else {}
+    modified = _drive_modified(drive, settings)
+    store = StateFile(drive, settings.state, SEEN_NAME)
+    store.load()
+    store.save(
+        {
+            "flow": FLOW_NAME,
+            "version": 1,
+            "root_folder_id": settings.root,
+            "files": {
+                row.drive_file_id: _stamp(
+                    modified, row, shown.get(row.catalog_id) if row.catalog_id else None
+                )
+                for row in every
+            },
+            "updated_at": _now(),
+        }
+    )
+    return len(every)
+
+
 def _displays(api: Catalog, rows: list[LibraryFile]) -> dict[uuid.UUID, CatalogDisplay]:
     ids = list(dict.fromkeys(r.catalog_id for r in rows if r.catalog_id))
     found: dict[uuid.UUID, CatalogDisplay] = {}

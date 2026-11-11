@@ -322,3 +322,9 @@ def test_a_mode_given_does_not_change_the_flag(monkeypatch, capsys) -> None:
     admin.main(["run", "--mode", "dry-run"])
 
     assert FLAGS[rec.MODE_FLAG] == "off"
+
+
+def test_baseline_records_nothing_without_apply(drive, capsys) -> None:
+    assert admin.main(["baseline"]) == 0
+    assert "--apply" in capsys.readouterr().out
+    assert _get(drive, rec.SEEN_NAME) is None

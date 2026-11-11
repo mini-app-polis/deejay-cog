@@ -7,6 +7,7 @@ against production:
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin approvals
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin seed [--apply]
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin full [--apply]
+    doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin baseline [--apply]
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin run \\
         [--mode dry-run|write] [--chunk 260]
 
@@ -31,6 +32,11 @@ that changed since it last compared them (``library-reconcile-seen.json``);
 runs work through the whole library a chunk at a time. Use it after a change
 to the reconcile's own rules. Without ``--apply`` it only says how many files
 the record holds.
+
+**baseline** is the opposite: ``baseline --apply`` records every file as
+compared as it is now, reading none, so the next runs compare only what
+changes after. For a library just reconciled in full (the review page at
+zero). Without ``--apply`` it only says what it would do.
 
 **run** runs the reconcile once, here, in the ``--mode`` given or, without
 one, the mode the ``flags.deejay_cog.library_reconcile`` flag sets, with the
@@ -60,7 +66,7 @@ from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 
 from deejay_cog.api_client import api_client
-from deejay_cog.library_backfill import StateFile, StateProblem
+from deejay_cog.library_backfill import BackfillSettings, StateFile, StateProblem
 from deejay_cog.library_reconcile import (
     APPROVALS_NAME,
     CHUNK_SIZE_VAR,
@@ -69,6 +75,7 @@ from deejay_cog.library_reconcile import (
     MODE_FLAG,
     SEEN_NAME,
     Approvals,
+    baseline,
     from_api,
     library_reconcile,
     parse_approvals,
@@ -243,6 +250,8 @@ def _parser() -> argparse.ArgumentParser:
 
     full = sub.add_parser("full", help="start a full pass over the library")
     full.add_argument("--apply", action="store_true", help="empty the seen record")
+    base = sub.add_parser("baseline", help="record every file as compared now")
+    base.add_argument("--apply", action="store_true", help="save the record")
 
     run = sub.add_parser("run", help="run the reconcile once, here")
     run.add_argument("--mode", choices=["dry-run", "write"])
@@ -317,6 +326,21 @@ def _full_cmd(args: argparse.Namespace, drive: Any, state: str) -> int:
     return 0
 
 
+def _baseline_cmd(args: argparse.Namespace, api: Any, drive: Any) -> int:
+    if not args.apply:
+        print(
+            f"Would record every present, identified file in {SEEN_NAME} as "
+            "compared as it is now. Run again with --apply."
+        )
+        return 0
+    settings, problems = BackfillSettings.from_env()
+    if settings is None or problems:
+        raise AdminError("; ".join(problems) or "the library settings are not set")
+    count = baseline(drive, api, settings)
+    print(f"Recorded {count} files in {SEEN_NAME}: the next runs compare only changes.")
+    return 0
+
+
 def _run_cmd(args: argparse.Namespace) -> int:
     if args.chunk is not None:
         os.environ[CHUNK_SIZE_VAR] = str(args.chunk)
@@ -363,6 +387,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 with open(args.out, "w", encoding="utf-8") as handle:
                     handle.write(text + "\n")
             return 0
+        if args.command == "baseline":
+            return _baseline_cmd(args, _api(), drive)
         return _full_cmd(args, drive, state)
     except (AdminError, StateProblem) as exc:
         print(f"{PROG}: {exc}; nothing changed.", file=sys.stderr)

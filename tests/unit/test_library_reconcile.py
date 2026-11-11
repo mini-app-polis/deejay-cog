@@ -1104,3 +1104,17 @@ def test_a_tracker_that_fails_is_reported_and_the_run_carries_on(
 
     assert summary.compared == 1 and "unreadable" in summary.open_problem
     assert "open_not_tracked" in _text(posted)
+
+
+def test_a_baseline_records_every_file_and_the_next_run_reads_none(
+    settings, wired, drive, catalog
+) -> None:
+    ids = _library(drive, catalog, [{"genre": "Neo Soul"}, {}])
+    settings_now, _ = backfill.BackfillSettings.from_env()
+
+    assert rec.baseline(drive, catalog, settings_now) == 2
+
+    again = rec.library_reconcile(run_id="r-1")
+
+    assert again.compared == 0
+    assert sorted(_state(drive, rec.SEEN_NAME)["files"]) == sorted(ids)
