@@ -9,7 +9,9 @@ Accepted (owner, 2026-11-05). Builds on
 every write described here. The standards the catalog is cleaned to are
 [decided with the owner](#decided-with-the-owner-2026-11-05); the rules
 for approving the reconcile's differences were
-[decided in its first review](#decided-with-the-owner-2026-11-07-the-first-reconcile-review).
+[decided in its first review](#decided-with-the-owner-2026-11-07-the-first-reconcile-review);
+how an owner's own edits are marked was
+[decided on 2026-11-11](#decided-with-the-owner-2026-11-11-owner-edits).
 
 ## Context
 
@@ -431,6 +433,38 @@ catalog (stats, summaries, the collection) uses the same rules.
    and folder ids are still settings; only the modes moved.
 5. **A local reconcile run's `--mode` is for that run only**; it does not
    change the flag.
+
+## Decided with the owner, 2026-11-11 (owner edits)
+
+A file the owner changed by hand (an intro cut, words censored) is an
+owner edit: not the published recording, and not a release label.
+
+1. **An owner edit is a version.** Like a remix, it has its own catalog
+   entry and plays of its own, and its version part (for example
+   `Intro Cut`, `Self Censored`) is written into the title by the display
+   rules. This amends decision 7 of 2026-11-05 for owner edits: an
+   owner's no-intro cut no longer shares the song's entry. Official
+   release labels (clean, explicit, radio edit, and an official no-intro
+   edit) still share it, as decision 6 says.
+2. **Its brackets mark it.** The display rules have an owner-edit pair,
+   `<` and `>`, beside the version pair: `Baby What You Want Me To Do
+   <Intro Cut>`. The entry records that its version is an owner edit, and
+   a `<…>` version read from a file's title means the same. Filenames keep
+   leaving brackets out, so `<` and `>` never reach a file name.
+3. **The owner sets it in the file's tags only,** by writing the version in
+   `< >` in the title. Reconcile and intake pick it up, and the catalog
+   follows: an owner-edit entry is made, or the file is linked to an
+   existing one. There is no separate setting on the WCS site.
+4. **The fingerprint is a hint for an owner edit.** It still runs. A match
+   to a published recording is recorded as the original the edit was cut
+   from and shown on the review pages; no match, or a different one, is
+   expected and is never reported as wrong, held, or used to retitle or
+   relink the file. An owner edit is never sent to AcoustID or any other
+   third party as the official recording.
+5. **Existing owner edits are marked by hand.** There is no candidate
+   search: the owner retitles each one in its tags, and the next reconcile
+   carries it to the catalog. Routine cuts are identified another way and
+   are not covered here.
 
 ## Consequences
 

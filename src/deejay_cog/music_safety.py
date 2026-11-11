@@ -38,6 +38,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from googleapiclient.errors import HttpError
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
@@ -263,6 +264,80 @@ def file_meta(drive: Any, file_id: str) -> dict[str, Any]:
         .execute()
     )
     return result
+
+
+#: How much of a file's start a tag read downloads first. A file whose
+#: ID3v2 tag is longer is downloaded whole.
+TAG_HEAD_BYTES = 512 * 1024
+
+#: How much of a file's end a tag read downloads: enough for the ID3v1 block
+#: (and the look before it for an APEv2 tag) that mutagen reads there.
+TAG_TAIL_BYTES = 256
+
+
+@dataclass(frozen=True)
+class TagBytes:
+    """Bytes to read a file's tags from: the whole file (``whole``), or its
+    start, holding the whole ID3v2 tag, followed by its end, where an ID3v1
+    block sits. Tags read from either are the same; only whole bytes may be
+    written from or checked for audio (:func:`whole_bytes`)."""
+
+    data: bytes
+    whole: bool
+
+
+def id3v2_length(head: bytes) -> int | None:
+    """How many bytes the ID3v2 tag at the start of ``head`` takes, footer
+    included: 0 when there is none, None when its header cannot be read
+    (then only the whole file says what the tags are)."""
+    if head[:3] != b"ID3":
+        return 0
+    if len(head) < 10:
+        return None
+    raw = head[6:10]
+    if any(b & 0x80 for b in raw):
+        return None
+    size = (raw[0] << 21) | (raw[1] << 14) | (raw[2] << 7) | raw[3]
+    return 10 + size + (10 if head[5] & 0x10 else 0)
+
+
+def _ranged(drive: Any, file_id: str, span: str) -> bytes | None:
+    """The file's bytes in ``span`` (an HTTP Range), or None when Drive
+    will not give them (an empty file has no range to give)."""
+    request = drive.service.files().get_media(fileId=file_id, supportsAllDrives=True)
+    request.headers["Range"] = f"bytes={span}"
+    try:
+        data = request.execute()
+    except HttpError:
+        return None
+    return bytes(data) if data else None
+
+
+def read_tag_bytes(drive: Any, file_id: str) -> TagBytes:
+    """The bytes to read ``file_id``'s tags from, downloading only its start
+    and end when its ID3v2 tag fits in :data:`TAG_HEAD_BYTES`; otherwise, or
+    when a range cannot be read, the whole file."""
+    head = _ranged(drive, file_id, f"0-{TAG_HEAD_BYTES - 1}")
+    if head is not None and len(head) < TAG_HEAD_BYTES:
+        return TagBytes(head, whole=True)
+    length = id3v2_length(head) if head is not None else None
+    tail = (
+        _ranged(drive, file_id, f"-{TAG_TAIL_BYTES}")
+        if head is not None and length is not None and length <= len(head)
+        else None
+    )
+    if head is None or tail is None:
+        return TagBytes(drive.download_file_bytes(file_id).data, whole=True)
+    return TagBytes(head + tail, whole=False)
+
+
+def whole_bytes(drive: Any, file_id: str, read: TagBytes) -> bytes:
+    """The whole file: ``read``'s bytes when they are whole, else the file
+    downloaded."""
+    if read.whole:
+        return read.data
+    data: bytes = drive.download_file_bytes(file_id).data
+    return data
 
 
 def keep_head_revision(drive: Any, file_id: str, revision_id: str | None = None) -> str:

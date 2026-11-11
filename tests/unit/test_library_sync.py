@@ -909,6 +909,82 @@ def test_a_value_the_pipeline_replaced_is_put_back_and_not_sent_up(
     assert "stale write-back put back" in str(posted.call_args_list)
 
 
+def _head(monkeypatch: pytest.MonkeyPatch, data: bytes, by: int) -> None:
+    """Set the start a tag read takes to ``by`` bytes past ``data``'s tag
+    (before it, when negative)."""
+    from deejay_cog import music_safety
+
+    length = music_safety.id3v2_length(data)
+    assert length is not None
+    monkeypatch.setattr(music_safety, "TAG_HEAD_BYTES", length + by)
+
+
+@pytest.mark.parametrize("by", [16, -1], ids=["inside", "past"])
+def test_edits_are_read_the_same_from_a_ranged_read(
+    settings, wired, drive, catalog, monkeypatch, by
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    now = _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", "Neo Soul", bpm="95.5")
+    drive_id = _changed(drive, catalog, entry, now, "honesty.mp3")
+    _listed(drive, {drive_id: _AFTER_SYNC})
+    _head(monkeypatch, now, by)
+
+    summary = sync.library_sync(run_id="y-1")
+
+    from deejay_cog.music_tags import read_tag_row
+
+    [edited] = catalog.edited
+    assert edited.tags.model_dump() == {
+        k: v or None for k, v in read_tag_row(now).items()
+    }
+    assert summary.put_back == []
+    # The whole file only when its tag runs past the start read.
+    assert (drive_id in drive.downloads) is (by < 0)
+
+
+def test_a_stale_put_back_is_written_from_the_whole_file(
+    settings, wired, drive, catalog, monkeypatch
+) -> None:
+    from deejay_cog import music_safety
+
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    stale = _song(entry, "honesty", "Pink Sweat$ feat. Kehlani", bpm="95.5")
+    drive_id = _changed(drive, catalog, entry, stale, "honesty.mp3")
+    _replaced_by_pipeline(drive, drive_id, {"title": "honesty"}, {"title": "Honesty"})
+    _listed(drive, {drive_id: _AFTER_SYNC})
+    _head(monkeypatch, stale, 16)
+    seen: dict[str, list[bytes]] = {"tags": [], "in_place": [], "audio": []}
+    real_tags, real_place = sync.write_owned_fields, sync.write_in_place
+    real_audio = music_safety.check_audio_unchanged
+
+    def tags(data, fields):
+        seen["tags"].append(data)
+        return real_tags(data, fields)
+
+    def in_place(drive_, record, **kw):
+        seen["in_place"].append(kw["original"])
+        return real_place(drive_, record, **kw)
+
+    def audio(original, candidate):
+        seen["audio"].append(original)
+        return real_audio(original, candidate)
+
+    monkeypatch.setattr(sync, "write_owned_fields", tags)
+    monkeypatch.setattr(sync, "write_in_place", in_place)
+    monkeypatch.setattr(music_safety, "check_audio_unchanged", audio)
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert summary.put_back == ["RnB/honesty.mp3: title 'honesty' -> 'Honesty'"]
+    assert seen["tags"] == seen["in_place"] == [stale]
+    assert seen["audio"] and all(o == stale for o in seen["audio"])
+    assert _frames(drive.items[drive_id].data)["TIT2"] == "Honesty"
+    [edited] = catalog.edited
+    assert edited.tags.title == "Honesty"
+
+
 def test_a_file_with_both_has_the_stale_field_put_back_and_the_edit_sent_up(
     settings, wired, drive, catalog
 ) -> None:

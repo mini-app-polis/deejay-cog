@@ -42,6 +42,9 @@ file's expected title is the entry's title followed by the file's own edit
 label in parentheses, as the registry records it ("Song (No Intro Edit)").
 The comment frame and every frame VirtualDJ owns are never read for the
 comparison, and never written.
+The tags are read from the start and end of the file (a ranged Drive
+download); the whole file is downloaded only when its ID3v2 tag runs past
+the start read, or when an approved difference is written over it.
 
 **The kinds** a difference is filed under:
 
@@ -175,10 +178,13 @@ from deejay_cog.music_safety import (
     AudioChanged,
     FlowMode,
     RunRecord,
+    TagBytes,
     file_meta,
     flow_mode,
     local_run_id,
     md5,
+    read_tag_bytes,
+    whole_bytes,
     write_in_place,
 )
 from deejay_cog.music_tags import (
@@ -549,6 +555,9 @@ class Approvals:
         """Which value wins for ``diff``: ``catalog``, ``file``, or None when
         the owner has not approved it."""
         if diff.kind == "other":
+            if diff.field == "catalog_id":
+                # The row's id is the truth (a merge repoints rows only).
+                return "catalog"
             if diff.field in self.files.get(diff.drive_file_id, frozenset()):
                 return "catalog"
             if diff.field in self.file_files.get(diff.drive_file_id, frozenset()):
@@ -822,9 +831,11 @@ def _compare_one(
     row: LibraryFile,
     display: CatalogDisplay | None,
     summary: ReconcileSummary,
-) -> tuple[str, bytes, list[Difference], dict[str, str]] | None:
-    """Compare one file; return its name, bytes, differences and expected
-    values, or None when it could not be compared."""
+) -> tuple[str, TagBytes, list[Difference], dict[str, str]] | None:
+    """Compare one file; return its name, the bytes its tags were read from
+    (its start and end, or the whole file when its tag runs past the start
+    read), differences and expected values, or None when it could not be
+    compared."""
     if display is None:
         summary.failed.append(
             f"{row.path} (its catalog entry {row.catalog_id} is gone)"
@@ -835,11 +846,11 @@ def _compare_one(
         summary.failed.append(f"{row.path} (in the trash; the scan will mark it)")
         return None
     name = str(meta.get("name") or row.path.rsplit("/", 1)[-1])
-    data: bytes = drive.download_file_bytes(row.drive_file_id).data
-    tags = read_tag_row(data)
+    read = read_tag_bytes(drive, row.drive_file_id)
+    tags = read_tag_row(read.data)
     wanted = expected(display, row)
     diffs = classify(row.path, row.drive_file_id, tags, wanted)
-    link = linked_catalog_id(data)
+    link = linked_catalog_id(read.data)
     if link and link != str(row.catalog_id):
         diffs.append(
             Difference(
@@ -856,7 +867,7 @@ def _compare_one(
         summary.matching += 1
     for diff in diffs:
         summary.differences[diff.kind].append(diff)
-    return name, data, diffs, {**wanted, "catalog_id": str(row.catalog_id)}
+    return name, read, diffs, {**wanted, "catalog_id": str(row.catalog_id)}
 
 
 def _apply_one(
@@ -865,21 +876,22 @@ def _apply_one(
     record: RunRecord,
     settings: BackfillSettings,
     row: LibraryFile,
-    compared: tuple[str, bytes, list[Difference], dict[str, str]],
+    compared: tuple[str, TagBytes, list[Difference], dict[str, str]],
     approvals: Approvals,
     summary: ReconcileSummary,
 ) -> set[str]:
     """Settle one file's approved differences: send those approved for the
     file up to its entry, send its approved fill-ups to the catalog, and
     write those approved for the catalog over the file. Return the fields it
-    settled. Raises :class:`AudioChanged`."""
-    name, data, diffs, wanted = compared
+    settled. A write is built from the whole file, downloaded here when the
+    comparison read only its start and end. Raises :class:`AudioChanged`."""
+    name, read, diffs, wanted = compared
     approved = [d for d in diffs if approvals.approves(d)]
     summary.not_approved += len(diffs) - len(approved)
     settled: set[str] = set()
     kept = [d for d in approved if approvals.side(d) == "file"]
     if kept and record.mode.writes:
-        settled |= _keep_file(api, row, data, kept, summary)
+        settled |= _keep_file(api, row, read.data, kept, summary)
     approved = [d for d in approved if approvals.side(d) == "catalog"]
     fills = [d for d in approved if d.kind == "fill_up"]
     fill = _fill_up(fills)
@@ -891,6 +903,7 @@ def _apply_one(
         settled |= {d.field for d in fills if _FILLED_FIELD.get(d.field) in filled}
     if not to_write:
         return settled
+    data = whole_bytes(drive, row.drive_file_id, read)
     tagged = write_owned_fields(data, to_write)
     if tagged is None:
         return settled

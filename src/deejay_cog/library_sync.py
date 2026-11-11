@@ -39,7 +39,10 @@ did not goes up to its entry, and the sync below then carries it to the
 entry's other files; one the catalog changed too stays the catalog's and is
 written back; a BPM a player re-measured is left; a title or artist that
 does not split into the catalog's parts cleanly, and the like, is held and
-named in the report. A file with no recorded values is not read.
+named in the report. A file with no recorded values is not read. Its tags
+are read from the start and end of the file (a ranged Drive download); the
+whole file is downloaded only when its ID3v2 tag runs past the start read,
+or when a stale field is put back.
 
 **A stale write-back is told by its value.** A changed field that now holds
 a value the pipeline replaced in that file (the old tags of a done, in-place
@@ -112,14 +115,17 @@ from deejay_cog.music_safety import (
     AudioChanged,
     FlowMode,
     RunRecord,
+    TagBytes,
     TagEmptied,
     file_meta,
     flow_mode,
     local_run_id,
     parse_record,
+    read_tag_bytes,
     revision_at,
     revision_bytes,
     tag_snapshot,
+    whole_bytes,
     write_in_place,
 )
 from deejay_cog.music_tags import (
@@ -540,7 +546,7 @@ def _put_back_stale(
     drive: Any,
     record: RunRecord,
     row: LibraryFile,
-    data: bytes,
+    read: TagBytes,
     replaced: dict[str, set[str]],
     summary: SyncSummary,
 ) -> tuple[bytes, bool]:
@@ -549,8 +555,10 @@ def _put_back_stale(
     Drive revision then, never the catalog's value). Returns the file's
     bytes as they are after it (the put-back's in a dry run too, so the
     edits sent up are the file's real ones), and False when a stale field
-    had to be left, so the file's fields must not go up. Raises
-    :class:`AudioChanged`."""
+    had to be left, so the file's fields must not go up. ``read`` may hold
+    only the file's start and end; a put-back is written from the whole
+    file, downloaded here. Raises :class:`AudioChanged`."""
+    data = read.data
     now = tag_snapshot(data)
     synced = row.synced.model_dump() if row.synced is not None else {}
     stale = sorted(
@@ -587,7 +595,10 @@ def _put_back_stale(
             left = True
             continue
         back[f] = was
-    tagged = write_owned_fields(data, back) if back else None
+    if not back:
+        return data, not left
+    data = whole_bytes(drive, row.drive_file_id, read)
+    tagged = write_owned_fields(data, back)
     if tagged is None:
         return data, not left
     meta = file_meta(drive, row.drive_file_id)
@@ -713,9 +724,9 @@ def _read_edits(
             return
         summary.edits_read += 1
         try:
-            data: bytes = drive.download_file_bytes(row.drive_file_id).data
+            read = read_tag_bytes(drive, row.drive_file_id)
             data, clean = _put_back_stale(
-                drive, record, row, data, replaced.get(row.drive_file_id, {}), summary
+                drive, record, row, read, replaced.get(row.drive_file_id, {}), summary
             )
             if not clean:
                 # A stale field that could not be put back must not go up.

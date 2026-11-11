@@ -177,7 +177,7 @@ catalog; a dry run reads only, a write run applies what the owner approved. It r
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_RECONCILE_CHUNK_SIZE` | `50` | Changed files compared per run (the rest wait for the next run), and at most as many files with an approved difference settled first; a whole number of at least 1. Each is downloaded to read its tags, so the chunk is bounded by the worker's timeout. |
+| `LIBRARY_RECONCILE_CHUNK_SIZE` | `50` | Changed files compared per run (the rest wait for the next run), and at most as many files with an approved difference settled first; a whole number of at least 1. Each file's tags are read from a ranged download of its start and end (the whole file only when its tag runs past that, or for an approved write), so the chunk is bounded by the worker's timeout. |
 
 See [PIPELINE.md](PIPELINE.md#library-reconcile).
 

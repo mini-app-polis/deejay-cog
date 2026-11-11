@@ -596,7 +596,19 @@ label in the file's ID3 tags, against `POST /v1/catalog/display`. The
 expected title is the entry's title followed by the file's own edit label
 from the registry (`Song (No Intro Edit)`). The comment and every
 VirtualDJ-owned frame are left out. A `TXXX:CATALOG_ID` naming another
-entry than the registry's link is listed under `other`.
+entry than the registry's link is listed under `other` as `catalog_id`, and
+a write run corrects it **without an approval**: the row's id is written
+over the tag (that frame only). This is how a catalog merge's repointed
+files are brought in step, as the merge changes the rows and not the files.
+The library-sync step does not compare that tag, so it reads no extra file.
+
+**Tags are read from a ranged download.** Each comparison downloads only
+the start of the file (`TAG_HEAD_BYTES` in `music_safety.py`) and its last
+few bytes, where an ID3v1 block sits, so the tags read and the differences
+found are those of the whole file. The whole file is downloaded only when
+its ID3v2 tag runs past the start read, when a range cannot be read (an
+empty file), or when an approved difference is written over it: a write and
+its audio check are always made on the whole file.
 
 **A kind approval covers every file of that kind.** There is no per-file
 exception to it: with `year_later` approved for the file, any file whose
@@ -649,9 +661,10 @@ over the file. `file_wins_kinds` and `file_wins_files` approve it **for the
 file**: the file's value goes up to the entry and the file is not written.
 `kinds` approves whole kinds (any but `other`); `files` approves `other`
 differences one file and field at a time (`title`, `artist`, `year`,
-`genre`, `bpm`, `label`, `catalog_id`). The file's side takes the same
+`genre`, `bpm`, `label`). A `catalog_id` difference needs no approval: the
+row's id always wins (see "What is compared"). The file's side takes the same
 shapes, but not `fill_up` (already the file's value going up), `year_filled`
-or `genre_filled` (the file has no value), or `catalog_id`; a kind, or a
+or `genre_filled` (the file has no value); a kind, or a
 file's field, goes one way only. Approvals that cannot be read stop
 the run before it compares anything; until any are set, a write run writes
 nothing. The approvals given before the API held them were kept in
@@ -736,6 +749,11 @@ they affect. Off unless the `flags.deejay_cog.library_sync` flag is
 the library was reconciled, so the reconcile and the owner's approvals
 decided the first writes.
 
+A `TXXX:CATALOG_ID` tag that differs from its row's id (the state after a
+catalog merge repoints the row) is not the sync's to compare: it reads no
+file for that. The reconcile corrects it without approval when it next
+compares the file ([library-reconcile](#library-reconcile)).
+
 **Each run** takes the next `LIBRARY_SYNC_CHUNK_SIZE` files the API lists
 as needing a sync (`GET /v1/catalog/library/files/needing-sync`): present,
 linked files whose entry or the display rules changed after the catalog's
@@ -764,7 +782,10 @@ edit made in VirtualDJ goes up). Before the chunk above, each present,
 linked file with recorded values that Drive saw change after its last sync
 (the scan's listing, `library-scan-listing.json`, keeps when Drive last saw
 each file change) is read, and its owned fields are sent to the API
-(`POST /v1/catalog/library/files/edited`). A field the file changed and its
+(`POST /v1/catalog/library/files/edited`). Its tags are read from a ranged
+download of its start and end, as the reconcile reads them; the whole file
+is downloaded only when its ID3v2 tag runs past the start read, or when a
+stale field is put back (below). A field the file changed and its
 entry did not goes up to the entry as a catalog revision, so the chunk then
 carries it to the entry's other files. A field the catalog changed too stays
 the catalog's and is written back. A BPM within 1.5 of the recorded one (or
