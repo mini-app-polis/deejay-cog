@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from mini_app_polis import pipeline_status
+from mini_app_polis.api import OtherLibraryError
 from mini_app_polis.api.contract import (
     CatalogDisplay,
     CatalogDisplayRequest,
@@ -96,8 +97,9 @@ class FakeApi:
     def list_library_files(self, **kwargs) -> list[LibraryFile]:
         assert kwargs["identification_status"] == "unidentified"
         assert kwargs["present"] is True
+        rows = [r for r in self.rows if r.library_root_id == kwargs["library_root_id"]]
         start = kwargs["offset"]
-        return self.rows[start : start + kwargs["limit"]]
+        return rows[start : start + kwargs["limit"]]
 
     def lookup_catalog(self, payload: CatalogLookupRequest):
         return [self.known.get(t.title.lower()) for t in payload.tracks]
@@ -181,13 +183,15 @@ def wired(
     monkeypatch.setattr(ident, "shared_deadline_passed", lambda: False)
 
 
-def _unidentified(drive: FakeDrive, api: FakeApi, name: str, data: bytes) -> str:
-    drive_id = drive.add(name, ROOT, data)
+def _unidentified(
+    drive: FakeDrive, api: FakeApi, name: str, data: bytes, root: str = ROOT
+) -> str:
+    drive_id = drive.add(name, root, data)
     api.rows.append(
         LibraryFile(
             id=uuid.uuid4(),
             drive_file_id=drive_id,
-            library_root_id=ROOT,
+            library_root_id=root,
             path=f"New/{name}",
             identification_status="unidentified",
             present=True,
@@ -1168,3 +1172,215 @@ def test_an_unmarked_file_is_linked_to_the_published_song_as_before(
 
     assert api.created == [] and summary.owner_edits == []
     assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(_ENTRY)
+
+
+# ---------------------------------------------------------------------------
+# FX Music: its files link only to fx entries, and main files never do
+# ---------------------------------------------------------------------------
+
+FX = "fx-root"
+_FX_ENTRY = uuid.UUID("0f0f0f0f-0000-4000-8000-000000000003")
+
+
+class FxApi(FakeApi):
+    """A catalog that keeps fx entries apart: a new entry is of the library
+    asked for, and a link across libraries is refused."""
+
+    fx_known: dict[str, uuid.UUID]
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.fx_known = {}
+        self.library_of: dict[uuid.UUID, str] = {_ENTRY: "main"}
+
+    def create_library_entry(self, payload: LibraryEntryCreate):
+        self.created.append(payload)
+        if payload.library != "fx":
+            return super().create_library_entry(payload)
+        key = payload.title.lower()
+        existing = key in self.fx_known
+        entry = self.fx_known.get(key, _FX_ENTRY)
+        if not payload.preview:
+            self.fx_known[key] = entry
+            self.library_of[entry] = "fx"
+            self.displays[entry] = _display(
+                entry, title=payload.title, artist=payload.artist
+            )
+        return LibraryEntryCreated(
+            entry=CatalogMatch(
+                id=entry, title=payload.title, artist=payload.artist, library="fx"
+            ),
+            created=not existing and not payload.preview,
+            previewed=not existing and payload.preview,
+        )
+
+    def register_library_file(self, payload: LibraryFileRegister):
+        if payload.catalog_id is not None:
+            library = self.library_of.get(payload.catalog_id, "main")
+            root_library = "fx" if payload.library_root_id == FX else "main"
+            if library != root_library:
+                raise OtherLibraryError(
+                    status_code=409, message="other_library", path="/files"
+                )
+        return super().register_library_file(payload)
+
+
+@pytest.fixture
+def fx_api(monkeypatch: pytest.MonkeyPatch, wired) -> FxApi:
+    monkeypatch.setenv(backfill.FX_ROOT_FOLDER_VAR, FX)
+    api = FxApi(known={"temple": _match()}, displays={_ENTRY: _display()})
+    monkeypatch.setattr(ident, "api_client", lambda **_: api)
+    return api
+
+
+def test_an_fx_file_gets_an_fx_entry_even_when_its_tags_match_a_main_entry(
+    settings, fx_api, drive, jobs
+) -> None:
+    api = fx_api
+    # "temple" is a main-library song the lookup knows.
+    drive_id = _unidentified(drive, api, "temple.mp3", _song(), root=FX)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    [made] = api.created
+    assert made.library == "fx" and made.title == "temple"
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TXXX:CATALOG_ID"] == str(_FX_ENTRY)  # not the main entry's
+    # Only the link is written: the FX file's own tags win (ADR-0010).
+    assert frames["TIT2"] == "temple" and frames["TPE1"] == "thomas gold"
+    [reg] = api.registrations
+    assert reg.catalog_id == _FX_ENTRY and reg.library_root_id == FX
+    assert reg.identify_note == ident.FX_NOTE
+    assert jobs.sent == []  # never fingerprinted
+    assert summary.fx_entries == ["New/temple.mp3 -> thomas gold - temple"]
+    assert _state(drive, ident.TRIED_NAME)["files"][drive_id]["outcome"] == "linked"
+
+
+def test_an_fx_file_links_to_the_fx_entry_the_catalog_already_has(
+    settings, fx_api, drive
+) -> None:
+    api = fx_api
+    api.fx_known["temple"] = _FX_ENTRY
+    api.library_of[_FX_ENTRY] = "fx"
+    api.displays[_FX_ENTRY] = _display(_FX_ENTRY)
+    drive_id = _unidentified(drive, api, "temple.mp3", _song(), root=FX)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(_FX_ENTRY)
+    assert summary.fx_entries == [] and len(summary.linked) == 1
+
+
+def test_an_fx_file_the_fingerprint_would_match_is_never_fingerprinted(
+    settings, fx_api, drive, jobs
+) -> None:
+    api = fx_api
+    drive_id = _unidentified(drive, api, "clip.mp3", _no_tags(), root=FX)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert jobs.sent == [] and api.created == []
+    assert "TXXX:CATALOG_ID" not in _frames(drive.items[drive_id].data)
+    [reg] = api.registrations
+    assert reg.identification_status == "unidentified" and "FX Music" in (
+        reg.identify_note or ""
+    )
+    assert summary.skipped
+
+
+def test_a_dry_run_names_the_fx_entry_it_would_make_and_changes_nothing(
+    settings, fx_api, drive, jobs, posted, monkeypatch
+) -> None:
+    monkeypatch.setitem(FLAGS, ident.MODE_FLAG, "dry-run")
+    api = fx_api
+    data = _song()
+    drive_id = _unidentified(drive, api, "temple.mp3", data, root=FX)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert [(c.library, c.preview) for c in api.created] == [("fx", True)]
+    assert drive.items[drive_id].data == data
+    assert api.registrations == [] and jobs.sent == []
+    assert summary.fx_entries == ["New/temple.mp3 -> thomas gold - temple"]
+    assert "would_make_fx_entry" in _text(posted)
+
+
+def test_the_report_names_fx_files_given_new_entries(
+    settings, fx_api, drive, posted
+) -> None:
+    _unidentified(drive, fx_api, "temple.mp3", _song(), root=FX)
+
+    ident.library_identify(run_id="i-1")
+
+    assert "New/temple.mp3 -> thomas gold - temple" in _text(posted)
+
+
+def test_a_main_file_never_links_to_an_fx_entry(settings, fx_api, drive, jobs) -> None:
+    api = fx_api
+    # Were the lookup ever to answer with an fx entry, it is not taken.
+    api.known["temple"] = CatalogMatch(
+        id=_FX_ENTRY, title="Temple", artist="Thomas Gold", library="fx"
+    )
+    drive_id = _unidentified(drive, api, "temple.mp3", _song())
+
+    ident.library_identify(run_id="i-1")
+
+    assert "TXXX:CATALOG_ID" not in _frames(drive.items[drive_id].data)
+    assert [s["file_id"] for s in jobs.sent] == [drive_id]
+
+
+def test_main_and_fx_files_each_link_within_their_own_library(
+    settings, fx_api, drive
+) -> None:
+    api = fx_api
+    main_id = _unidentified(drive, api, "temple.mp3", _song())
+    fx_id = _unidentified(drive, api, "walkon.mp3", _song(), root=FX)
+
+    ident.library_identify(run_id="i-1")
+
+    assert _frames(drive.items[main_id].data)["TXXX:CATALOG_ID"] == str(_ENTRY)
+    assert _frames(drive.items[fx_id].data)["TXXX:CATALOG_ID"] == str(_FX_ENTRY)
+    assert {(r.library_root_id, r.catalog_id) for r in api.registrations} == {
+        (ROOT, _ENTRY),
+        (FX, _FX_ENTRY),
+    }
+
+
+def test_a_link_the_catalog_refuses_as_the_other_librarys_is_reported_not_raised(
+    settings, fx_api, drive, posted
+) -> None:
+    api = fx_api
+    # A main-library entry the catalog holds as fx: the link is refused.
+    api.library_of[_ENTRY] = "fx"
+    _unidentified(drive, api, "temple.mp3", _song())
+    other = _unidentified(drive, api, "clip.mp3", _song(), root=FX)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert summary.not_linkable and summary.not_linkable[0].startswith("New/temple.mp3")
+    assert summary.failed == [] and not summary.aborted
+    # The run carries on to the next file.
+    assert _frames(drive.items[other].data)["TXXX:CATALOG_ID"] == str(_FX_ENTRY)
+    assert "not_linkable" in _text(posted)
+
+
+def test_the_fingerprint_reports_a_link_to_the_other_library_as_not_linkable(
+    drive,
+) -> None:
+    api = FxApi(known={"temple": _match()}, displays={_ENTRY: _display()})
+    api.library_of[_ENTRY] = "fx"
+    drive_id = drive.add("temple.mp3", ROOT, _no_tags())
+    identifier = FakeIdentifier()
+
+    result = fp.identify_library_file(
+        drive,
+        api,
+        identifier,
+        _record(drive),
+        file_id=drive_id,
+        root=ROOT,
+        path="temple.mp3",
+        threshold=0.5,
+    )
+
+    assert result.outcome == fp.NOT_LINKABLE

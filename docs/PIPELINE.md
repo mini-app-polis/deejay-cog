@@ -588,6 +588,23 @@ fingerprinting. One whose tags name no song (no artist) is left for the
 owner with a note saying so. A dry run previews the entry and links nothing
 (`would_link_owner_edit`).
 
+**FX Music** ([ADR-0009](decisions/ADR-0009-library-folders.md), decision
+3): with `FX_LIBRARY_ROOT_FOLDER_ID` set, its unidentified files are tried
+after the main library's, from the same chunk. An FX file links only to an
+fx entry, never to a main-library one, even when its tags or fingerprint
+match one; and a main-library file never links to an fx entry. The catalog
+lookup searches main entries only, so an FX file skips steps 2 to 6: the
+catalog is asked for the fx entry of its own title, artist and year
+(`POST /v1/catalog/library/entries` with library `fx`), which it finds or
+makes, and the file is linked to it (registry note `an FX Music file,
+identified by its own tags`). Its tags win over the catalog
+([ADR-0010](decisions/ADR-0010-tagging-rule-profiles.md)): it is never
+fingerprinted, and only the link is written. An FX file whose tags name no
+song is left for the owner with a note saying so. A dry run previews the
+entry and links nothing to a new one (`would_make_fx_entry`). A link the
+catalog refuses as one to the other library (409 `other_library`) is an
+issue (`not_linkable`), never a crash; the run carries on.
+
 **Linking** fills the entry's empty fields from the file
 (`POST /v1/catalog/{id}/fill-up`), writes only the link
 (`TXXX:CATALOG_ID`) to the same file, and registers it as identified with
@@ -606,7 +623,9 @@ file as tried. Its record is `library-identify-<run id>.dry-run.json`.
 **Report:** counts for `waiting`, `fingerprinted_unlinked` (files an
 earlier run sent to fingerprinting that are still unidentified: left for the
 owner, or not run yet), `tried`, `linked`, `written`, `would_write`,
-`filled_up`, `to_fingerprint` and `failed`, with every file by its path.
+`filled_up`, `to_fingerprint`, `owner_edits`, `fx_entries` (FX files
+given a new fx entry, each named), `not_linkable` and `failed`, with every
+file by its path.
 The fingerprint function's run for a library file is reported under
 `library-identify` too, but sent only when it has an issue: a chunk sends
 one run per file, so a run that went as expected is logged and kept in its

@@ -78,6 +78,7 @@ import musicbrainzngs
 from googleapiclient.http import DEFAULT_HTTP_TIMEOUT_SEC
 from mini_app_polis import load_secrets, timing
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.api import OtherLibraryError
 from mini_app_polis.api.contract import (
     CatalogLookupRequest,
     CatalogMatch,
@@ -767,6 +768,10 @@ def intake_by_fingerprint(
 #: A library file the fingerprint could not identify, linked by its own tags.
 LINKED_BY_TAGS = "linked_by_tags"
 
+#: A library file the catalog refused to link: the entry is of the other
+#: library (main or fx). Not linked, and reported.
+NOT_LINKABLE = "not_linkable"
+
 
 @dataclass
 class LibraryIdentifyResult:
@@ -800,7 +805,38 @@ def identify_library_file(
     ``threshold`` nothing changes. A match that disagrees with the file's
     own tags is linked by whichever side a second opinion backs
     (:mod:`deejay_cog.second_opinion`, with ``search`` as its Spotify), and
-    otherwise left for the owner."""
+    otherwise left for the owner. A link the catalog refuses as one to the
+    other library (:class:`OtherLibraryError`) is :data:`NOT_LINKABLE`, not
+    an error."""
+    try:
+        return _identify_library_file(
+            drive,
+            api,
+            identifier,
+            record,
+            file_id=file_id,
+            root=root,
+            path=path,
+            threshold=threshold,
+            search=search,
+        )
+    except OtherLibraryError as exc:
+        log.warning("library-identify fingerprint: %s not linkable: %s", path, exc)
+        return LibraryIdentifyResult(path, NOT_LINKABLE)
+
+
+def _identify_library_file(
+    drive: Any,
+    api: Any,
+    identifier: Identifier,
+    record: RunRecord,
+    *,
+    file_id: str,
+    root: str,
+    path: str,
+    threshold: float,
+    search: TrackSearch | None = None,
+) -> LibraryIdentifyResult:
     meta = file_meta(drive, file_id)
     if meta.get("trashed"):
         return LibraryIdentifyResult(path, "in_trash")
@@ -1058,6 +1094,11 @@ def _record_library(
     item = result.path
     if result.score is not None:
         item = f"{item} (score {result.score:.2f})"
+    if result.outcome == NOT_LINKABLE:
+        report.issue(
+            "not_linkable",
+            f"{item}: the catalog refused the link, to an entry of the other library",
+        )
     report.count("scanned", 1)
     report.count("linked", 1 if result.outcome == "linked" else 0)
     report.count("linked_by_tags", 1 if result.outcome == LINKED_BY_TAGS else 0)
