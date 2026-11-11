@@ -31,6 +31,9 @@ to.
 an open difference the owner has approved (from ``library-reconcile-open.json``
 and the approvals), up to ``LIBRARY_RECONCILE_CHUNK_SIZE`` of them, so an
 approval settles on the next run rather than when the cursor comes round.
+An approved difference a write run tried and left open (a fill-up the
+catalog refused, a value the API held) is marked ``tried`` and not put first
+again; the cursor still comes round to it.
 They do not move the cursor; the run then carries on from it as usual, and
 a file it already compared first is passed over.
 
@@ -665,6 +668,9 @@ class ReconcileSummary:
     open_problem: str = ""
     #: Files compared first because they had an approved open difference.
     approved_first: int = 0
+    #: Open-difference keys a write run tried to settle and left open (a
+    #: fill-up the catalog refused, a value the API held): not put first again.
+    tried: set[str] = field(default_factory=set)
 
     @property
     def files_with_differences(self) -> int:
@@ -726,6 +732,9 @@ def _approved_open(
             str(value.get("catalog") or ""),
             str(value.get("kind") or "other"),
         )
+        if value.get("tried"):
+            # A run already tried it and it stayed open: the cursor gets to it.
+            continue
         if approvals.approves(diff):
             ids.add(file_id)
     if not ids:
@@ -1014,6 +1023,12 @@ def _reconcile(
                     settled = _apply_one(
                         drive, api, record, settings, row, compared, approvals, summary
                     )
+                if compared is not None and record is not None:
+                    summary.tried |= {
+                        _open_key(d)
+                        for d in compared[2]
+                        if approvals.approves(d) and d.field not in settled
+                    }
                 if compared is not None:
                     summary.reviewed.append(row.drive_file_id)
                     summary.open.extend(
@@ -1119,6 +1134,9 @@ def _track_open(
                 "file": diff.file_value,
                 "catalog": diff.catalog_value,
             }
+            tried = stamp if key in summary.tried else (was or {}).get("tried")
+            if tried and (same or key in summary.tried):
+                kept[key]["tried"] = tried
         cutoff = now.timestamp() - LONG_OPEN_DAYS * 86400
         long_open: dict[str, int] = {}
         for value in kept.values():
