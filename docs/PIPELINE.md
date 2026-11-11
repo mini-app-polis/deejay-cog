@@ -596,7 +596,11 @@ label in the file's ID3 tags, against `POST /v1/catalog/display`. The
 expected title is the entry's title followed by the file's own edit label
 from the registry (`Song (No Intro Edit)`). The comment and every
 VirtualDJ-owned frame are left out. A `TXXX:CATALOG_ID` naming another
-entry than the registry's link is listed under `other`.
+entry than the registry's link is listed under `other` as `catalog_id`, and
+a write run corrects it **without an approval**: the row's id is written
+over the tag (that frame only). This is how a catalog merge's repointed
+files are brought in step, as the merge changes the rows and not the files.
+The library-sync step does not compare that tag, so it reads no extra file.
 
 **A kind approval covers every file of that kind.** There is no per-file
 exception to it: with `year_later` approved for the file, any file whose
@@ -649,9 +653,10 @@ over the file. `file_wins_kinds` and `file_wins_files` approve it **for the
 file**: the file's value goes up to the entry and the file is not written.
 `kinds` approves whole kinds (any but `other`); `files` approves `other`
 differences one file and field at a time (`title`, `artist`, `year`,
-`genre`, `bpm`, `label`, `catalog_id`). The file's side takes the same
+`genre`, `bpm`, `label`). A `catalog_id` difference needs no approval: the
+row's id always wins (see "What is compared"). The file's side takes the same
 shapes, but not `fill_up` (already the file's value going up), `year_filled`
-or `genre_filled` (the file has no value), or `catalog_id`; a kind, or a
+or `genre_filled` (the file has no value); a kind, or a
 file's field, goes one way only. Approvals that cannot be read stop
 the run before it compares anything; until any are set, a write run writes
 nothing. The approvals given before the API held them were kept in
@@ -735,6 +740,11 @@ they affect. Off unless the `flags.deejay_cog.library_sync` flag is
 [CONFIGURATION.md](CONFIGURATION.md#library-sync)); it was kept off until
 the library was reconciled, so the reconcile and the owner's approvals
 decided the first writes.
+
+A `TXXX:CATALOG_ID` tag that differs from its row's id (the state after a
+catalog merge repoints the row) is not the sync's to compare: it reads no
+file for that. The reconcile corrects it without approval when it next
+compares the file ([library-reconcile](#library-reconcile)).
 
 **Each run** takes the next `LIBRARY_SYNC_CHUNK_SIZE` files the API lists
 as needing a sync (`GET /v1/catalog/library/files/needing-sync`): present,
