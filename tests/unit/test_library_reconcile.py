@@ -689,6 +689,48 @@ def test_an_other_difference_is_written_only_when_its_file_is_approved(
     assert _frames(drive.items[ids[1]].data)["TIT2"] == "Attention (Lash Remix)"
 
 
+def test_a_catalog_id_tag_naming_another_entry_is_rewritten_without_approval(
+    settings, writing, drive, monkeypatch
+) -> None:
+    [drive_id, same_id] = _library(drive, writing, [{}, {}])
+    merged = uuid.uuid4()  # the archived entry the tag still names
+    drive.items[drive_id].data = _song(merged)
+    entry = writing.rows[0].catalog_id
+    before = _frames(drive.items[drive_id].data)
+    same_before = drive.items[same_id].data
+
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "dry-run")
+    dry = rec.library_reconcile(run_id="r-0")
+    assert [d.field for d in dry.differences["other"]] == ["catalog_id"]
+    assert _frames(drive.items[drive_id].data) == before
+    assert drive.writes(except_folder=STATE) == []
+
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "write")
+    _forget_seen(drive)
+    summary = rec.library_reconcile(run_id="r-1")
+
+    after = _frames(drive.items[drive_id].data)
+    assert before["TXXX:CATALOG_ID"] == str(merged)
+    assert after["TXXX:CATALOG_ID"] == str(entry)
+    assert {k: v for k, v in after.items() if k != "TXXX:CATALOG_ID"} == {
+        k: v for k, v in before.items() if k != "TXXX:CATALOG_ID"
+    }
+    assert summary.written == ["0.mp3 (catalog_id)"]
+    assert drive.items[drive_id].kept
+    assert [
+        e["action"] for e in _state(drive, "library-reconcile-r-1.json")["entries"]
+    ] == ["in_place"]
+    # A file already carrying its row's id is not written.
+    assert drive.items[same_id].data == same_before
+    assert not drive.items[same_id].kept
+
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "dry-run")
+    _forget_seen(drive)
+    again = rec.run_reconcile(run_id="r-2", mode=FlowMode.DRY_RUN, api=writing)
+    assert again.compared == 2 and again.matching == 2
+    assert again.differences["other"] == []
+
+
 def test_an_approved_fill_up_goes_to_the_catalog_and_the_file_is_unchanged(
     settings, writing, drive
 ) -> None:

@@ -549,6 +549,9 @@ class Approvals:
         """Which value wins for ``diff``: ``catalog``, ``file``, or None when
         the owner has not approved it."""
         if diff.kind == "other":
+            if diff.field == "catalog_id":
+                # The row's id is the truth (a merge repoints rows only).
+                return "catalog"
             if diff.field in self.files.get(diff.drive_file_id, frozenset()):
                 return "catalog"
             if diff.field in self.file_files.get(diff.drive_file_id, frozenset()):
