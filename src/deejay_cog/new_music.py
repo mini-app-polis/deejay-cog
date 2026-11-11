@@ -1,35 +1,23 @@
-"""The ``new-music`` worker mode: take new music in, tagged and named.
+"""The ``new-music`` worker mode: put new music into New Music, unchanged.
 
 Files dropped in ``NEW_MUSIC_INPUT_FOLDER_ID`` are usually new releases,
-not yet in the play history or the catalog (ADR-0007, amended 2026-11-03
-and 2026-11-07). For each file, at most ``NEW_MUSIC_MAX_FILES_PER_RUN`` a
-run:
+not yet in the play history or the catalog (ADR-0007, amended 2026-11-11).
+Intake no longer looks a file up, makes catalog entries or writes tags: an
+MP3 with a usable title and artist is copied, tags and audio unchanged, into
+New Music under a name built from its own tags, and the library's steps
+take it from there (scan, identify with its fingerprint check, duplicates,
+reconcile and sync). Anything else goes, unchanged, to needs-review. At
+most ``NEW_MUSIC_MAX_FILES_PER_RUN`` files a run.
 
-1. **By its tags, in the catalog**, exactly as retag-music looks a file up
-   (:mod:`deejay_cog.music_tags`). A match is identified: its tags are the
-   catalog's.
-2. **Otherwise, by its own tags, standardized by the catalog.** The file's
-   tags are trusted: the API makes the song's catalog entry from them
-   (``POST /v1/catalog/library/entries``), with the catalog's own parsing,
-   genre vocabulary and display rules, and the file's tags become that
-   entry's. A dry run asks for a preview of the entry, which saves nothing.
-   A file with no usable title or artist goes to needs-review. No file is
-   fingerprinted (AcoustID is left for a later phase).
-
-An **owner edit** (a version in ``< >`` in its title, "Song <Intro Cut>")
-is taken in on an owner-edit entry, the catalog's or one made from its tags,
-never on the published song's (ADR-0008, decided 2026-11-11).
-
-An identified file is **copied**, never changed: its tagged bytes are
-uploaded as a new file named ``{title}_{artist}.<ext>`` into
+A file taken in is **copied**, never changed: its bytes are uploaded as a new file named ``{title}_{artist}.<ext>`` into
 ``NEW_MUSIC_DESTINATION_FOLDER_ID``, and the original is then moved,
 unchanged, to ``NEW_MUSIC_ORIGINALS_FOLDER_ID``. The name carries the main
 artist only (the artist tag up to a feat./ft./featuring credit); when that
 name is already taken, in the destination or by any file in the library
 (the API's library registry), the featured artists are added. Characters
 a file name can't hold are left out, ``<`` and ``>`` among them, so an
-owner edit's name carries its version without them. A file that
-cannot be identified with confidence, whose name is taken even so (or has
+owner edit's name carries its version without them. A file that is not
+an MP3 or has no usable title or artist, whose name is taken even so (or has
 no featured artists to add), or whose name cannot be checked because the
 registry cannot be read, is moved unchanged to ``NEW_MUSIC_REVIEW_FOLDER_ID``. Nothing
 is deleted and nothing is overwritten. This is the only flow that names a
@@ -52,12 +40,6 @@ from time import monotonic
 from typing import Any, Protocol
 
 from mini_app_polis import logger as logger_mod
-from mini_app_polis.api.contract import (
-    CatalogLookupRequest,
-    IngestTrack,
-    LibraryEntryCreate,
-    LibraryEntryCreated,
-)
 from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
@@ -84,15 +66,7 @@ from deejay_cog.music_safety import (
     md5,
     tag_snapshot,
 )
-from deejay_cog.music_tags import (
-    CatalogLookup,
-    edit_label,
-    ingest_track,
-    is_owner_edit,
-    owner_edit_fits,
-    read_tag_row,
-    write_catalog_tags,
-)
+from deejay_cog.music_tags import ingest_track, read_tag_row
 
 log = logger_mod.get_logger()
 
@@ -178,7 +152,6 @@ class IntakeSummary:
     record_name: str = ""
     scanned: int = 0
     identified: list[str] = field(default_factory=list)
-    new_entries: list[str] = field(default_factory=list)
     needs_review: list[str] = field(default_factory=list)
     collisions: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
@@ -251,14 +224,6 @@ class LibraryFiles(Protocol):
         offset: int | None = None,
     ) -> list[Any]:
         """One page of registered library files."""
-        ...
-
-
-class IntakeCatalog(CatalogLookup, Protocol):
-    """The part of the API client the intake calls to identify a file."""
-
-    def create_library_entry(self, payload: LibraryEntryCreate) -> LibraryEntryCreated:
-        """The song's catalog entry, made (or previewed) from its tags."""
         ...
 
 
@@ -525,84 +490,23 @@ def max_files_per_run() -> int:
     return int(raw) if raw else DEFAULT_MAX_FILES_PER_RUN
 
 
-def entry_request(track: IngestTrack, *, preview: bool) -> LibraryEntryCreate:
-    """The catalog entry the file's own tags describe; a value the entry
-    would refuse (a BPM of 0, a year outside four digits) is left out."""
-    bpm = track.bpm if track.bpm and track.bpm > 0 else None
-    year = track.release_year
-    return LibraryEntryCreate(
-        title=track.title,
-        artist=track.artist,
-        remix=track.remix,
-        label=track.label,
-        genre=track.genre,
-        bpm=bpm,
-        release_year=year if year and 1000 <= year <= 9999 else None,
-        preview=preview,
-    )
-
-
-def intake_one(intake: Intake, api: IntakeCatalog, file_id: str) -> None:
-    """Identify one file by its tags and take it in, or send it to review."""
+def intake_one(intake: Intake, file_id: str) -> None:
+    """Put one file into New Music unchanged, named by its own tags, or send
+    it to review: intake reads the tags only to name the file."""
     downloaded = intake.drive.download_file_bytes(file_id)
     name = str(getattr(downloaded, "name", "") or file_id)
     data: bytes = downloaded.data
     if not is_mp3(downloaded, name):
-        intake.review(file_id, name, None, "not an MP3: only ID3 tags are written")
+        intake.review(file_id, name, None, "not an MP3: only ID3 tags are read")
         return
-
-    row = read_tag_row(data)
-    track = ingest_track(row)
-    # Clean and explicit copies are one catalog song but two files: each
-    # keeps its own release label, in its title and so in its name.
-    label = edit_label(row.get("title", ""))
-    match = (
-        api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
-        if track is not None
-        else None
-    )
-    if match is not None and not owner_edit_fits(row.get("title", ""), match):
-        # An owner edit never takes the published song's entry: it gets an
-        # owner-edit entry of its own, made from its tags below.
-        match = None
-    if match is not None:
-        tagged = write_catalog_tags(data, match, label=label) or data
-        intake.deliver(file_id, name, data, tagged, identified_by="catalog")
-        return
-
-    if track is None:
+    if ingest_track(read_tag_row(data)) is None:
         intake.review(file_id, name, data, "no usable title or artist")
         return
-
-    # Trusted, but standardized: the catalog makes (or, in a dry run,
-    # previews) the song's entry from the file's own tags.
-    made = api.create_library_entry(
-        entry_request(track, preview=not intake.mode.writes)
-    )
-    if is_owner_edit(track.title) and not made.entry.owner_edit:
-        intake.review(
-            file_id,
-            name,
-            data,
-            "an owner edit (a version in < >) the catalog did not take as one",
-        )
-        return
-    if made.created or made.previewed:
-        entry = made.entry
-        intake.summary.new_entries.append(
-            f"{name} -> {entry.artist} - {entry.title}"
-            + (f" ({entry.remix})" if entry.remix else "")
-        )
-        by = "own tags + new catalog entry"
-    else:
-        by = "own tags + catalog"
-    tagged = write_catalog_tags(data, made.entry, label=label) or data
-    intake.deliver(file_id, name, data, tagged, identified_by=by)
+    intake.deliver(file_id, name, data, data, identified_by="own tags")
 
 
 def intake_files(
     intake: Intake,
-    api: IntakeCatalog,
     files: list[Any],
     *,
     max_files: int,
@@ -623,7 +527,7 @@ def intake_files(
             raise RunOutOfTime(f"run deadline reached before {name}")
         summary.scanned += 1
         try:
-            intake_one(intake, api, f.id)
+            intake_one(intake, f.id)
         except AudioChanged:
             summary.failed.append(name)
             raise
@@ -716,7 +620,7 @@ def new_music(*, run_id: str | None = None) -> IntakeSummary:
 
     def work(intake: Intake) -> None:
         files = list_audio_files(intake.drive, intake.folders.input)
-        intake_files(intake, api, files, max_files=max_files_per_run())
+        intake_files(intake, files, max_files=max_files_per_run())
 
     return run_intake(stage="intake", run_id=run_id, mode=mode, work=work, library=api)
 
@@ -740,7 +644,6 @@ def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
     report.ok(0 if dry else len(summary.identified))
     report.count("scanned", summary.scanned)
     report.count("identified", len(summary.identified))
-    report.count("new_entries", len(summary.new_entries))
     report.count("needs_review", len(summary.needs_review))
     report.count("collisions", len(summary.collisions))
     report.count("failed", len(summary.failed))
@@ -756,9 +659,7 @@ def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
         if dry:
             report.notice("would_identify", name)
         else:
-            report.created("tagged copy", name)
-    for name in summary.new_entries:
-        report.notice("would_create_entry" if dry else "created_entry", name)
+            report.created("copy", name)
     for name in summary.needs_review:
         report.notice("would_need_review" if dry else "needs_review", name)
     for name in summary.collisions:

@@ -56,7 +56,7 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
 | `process-new-files` | **process-new-csv-files** | `process_new_files.py` | Sweeps the CSV drop zone: normalise, upload to Sheets, ingest to the API, archive, sync Spotify. |
 | `ingest-live-history` | **ingest-live-history** | `ingest_live_history.py` | Sends the plays in the **most recent** VirtualDJ `.m3u` to `POST /v1/live-plays`. Not the whole history. |
 | `retag-music` | **retag-music** | `retag_music_from_catalog.py` | Looks each audio file in the music upload folder up in the catalog and writes the catalog's tags over the same Drive file. |
-| `new-music` | **new-music** | `new_music.py` | Identifies each file in the new-music input folder, sends a tagged copy named `{title}_{artist}` to the destination folder and keeps the original in processed-originals. Off by default. |
+| `new-music` | **new-music** | `new_music.py` | Copies each file in the new-music input folder, unchanged and named `{title}_{artist}` from its own tags, into New Music and keeps the original in processed-originals; the library steps do the rest. Off by default. |
 | `library-backfill` | **the library job** | `library_nightly.py` | Six steps over the music library, each with its own flag: scan, trash, identify, backfill, sync, duplicates ([below](#the-library-jobs)). Never renames, moves or deletes a library file (the trash step only moves the copies the owner chose to Drive's trash). |
 | `library-reconcile` | **library-reconcile** | `library_reconcile.py` | Settles the differences the owner approved, then compares the next chunk of linked library files with the catalog. |
 
@@ -168,43 +168,36 @@ file whose tags already match is not written again.
 ## new-music
 
 New music intake ([ADR-0007](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-03-owner-two-flows-and-the-safety-rules),
-amended [2026-11-07](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-07-owner-new-music-trusts-its-own-tags-standardized-by-the-catalog)).
+amended [2026-11-11](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-11-owner-incoming-music-takes-the-librarys-path)).
 It does nothing unless the `flags.deejay_cog.new_music` flag is `dry-run` or `write`, and nothing
 unless all five of its folders are set and different (see
 [CONFIGURATION.md](CONFIGURATION.md#music-tagging-safety-and-new-music)).
 
 Lists the audio files in `NEW_MUSIC_INPUT_FOLDER_ID`, at most
-`NEW_MUSIC_MAX_FILES_PER_RUN` (25; 0 for no cap) a run. Per file:
+`NEW_MUSIC_MAX_FILES_PER_RUN` (25; 0 for no cap) a run. Intake does not look
+a file up, make catalog entries or write tags: it puts the file into New
+Music as it came, and the library's steps take it from there (scan,
+identify with its fingerprint check, duplicates, reconcile and sync; see
+[ADDING-AND-REMOVING-SONGS.md](ADDING-AND-REMOVING-SONGS.md)). Per file:
 
-1. **Not an MP3** → moved, unchanged, to needs-review (only ID3 tags are
-   written).
-2. **Its tags find a catalog entry** (the same lookup as retag-music) →
-   identified; the new tags are the catalog's.
-3. **The catalog does not know it** → identified by its own tags,
-   standardized by the catalog: the API makes the song's catalog entry from
-   them (`POST /v1/catalog/library/entries`; in a dry run, a preview that
-   saves nothing), with the catalog's parsing, genre vocabulary and display
-   rules, and the new tags are that entry's. The report names the entry
-   (`created_entry`, or `would_create_entry` in a dry run).
-4. **No usable title or artist** → moved, unchanged, to needs-review.
+1. **Not an MP3** → moved, unchanged, to needs-review (the main library
+   takes MP3s only).
+2. **No usable title or artist** → moved, unchanged, to needs-review.
+3. **Otherwise** → taken in: copied, tags and audio unchanged, into New
+   Music, named from its own tags.
 
-No new-music file is sent to the fingerprint function. A release label in
-the file's own title (Clean, Explicit, Radio Edit, No Intro Edit) is kept
-in parentheses after the catalog's title, and so in the new name: clean and
-explicit copies are one catalog song but two files (ADR-0008, decision 6).
-An owner edit (a version in `< >`, below) is taken in on an owner-edit entry,
-the catalog's or one made from its tags, never on the published song's; a
-lookup that answers with the published song is not used, and a file the
-catalog does not take as an owner edit goes to needs-review. The name leaves
+A release label in the file's own title (Clean, Explicit, Radio Edit, an
+official No Intro Edit) stays in its title, and so in its name. An owner
+edit (a version in `< >`, below) is taken in the same way; the name leaves
 out `<` and `>`, as it does every character a file name can't hold
 (`Baby What You Want Me To Do Intro Cut_Etta James.mp3`).
 
-**Taking an identified file in** (write mode):
+**Taking a file in** (write mode):
 
-1. The new tags are built; a field the file has a value for is never
-   emptied, and the audio in the new bytes must be byte-identical to the
-   original's (ID3v2 at the start, ID3v1, APEv2 and an appended ID3v2 at
-   the end are stripped before comparing).
+1. The copy's bytes are the original's, so its tags and audio are unchanged;
+   the audio check before and after the upload still holds (ID3v2 at the
+   start, ID3v1, APEv2 and an appended ID3v2 at the end are stripped before
+   comparing).
 2. The file is named `{title}_{artist}.<ext>` with the **main artist
    only**: the artist tag up to a feat./ft./featuring credit, main artists
    split on commas (ADR-0008 decision 9). When a file of that name is
@@ -215,7 +208,7 @@ out `<` and `>`, as it does every character a file name can't hold
    goes to needs-review and the run reports a `name_collision`. If the
    registry cannot be read, the name cannot be checked, so the original
    goes to needs-review as well.
-3. The tagged bytes are uploaded as a **new** file under that name into
+3. The bytes are uploaded as a **new** file under that name into
    `NEW_MUSIC_DESTINATION_FOLDER_ID`, marked with the original's file id.
 4. The copy is downloaded again and its audio checked once more.
 5. The original, unchanged, is moved to `NEW_MUSIC_ORIGINALS_FOLDER_ID` —
@@ -231,13 +224,13 @@ file (after an upload, the bad copy goes to the Drive trash and the original
 stays in the input folder), the rest of the folder waits, and an ERROR
 finding names the file. The message is not retried.
 
-**Dry run** reads, identifies and computes everything and writes nothing to
+**Dry run** reads and computes everything and writes nothing to
 the music folders. The report names what would happen per file, and the
 would-be run record is saved in the state folder as
-`new-music-<run id>.dry-run.json`, with old and new tags, new names and
+`new-music-<run id>.dry-run.json`, with the tags, new names and
 destinations.
 
-**Report:** counts for `scanned`, `identified`, `new_entries`,
+**Report:** counts for `scanned`, `identified` (taken in),
 `needs_review`, `collisions`, `failed`,
 `no_longer_in_input` (and `not_written_dry_run` in a dry run), with the files
 by name. Off, the report says only that the flow is off; a missing setting
@@ -293,16 +286,41 @@ writes nothing, so for such a file the reconcile, not the sync, settles a
 difference first.
 
 **Owner edits** ([ADR-0008, decided 2026-11-11](decisions/ADR-0008-catalog-source-of-truth.md#decided-with-the-owner-2026-11-11-owner-edits)).
-A file the owner cut by hand (an intro cut, words censored) carries its
-version in `< >` in its title: `Baby What You Want Me To Do <Intro Cut>`.
-The owner sets it in the file's tags only. Such a file is an owner edit: it
-is linked only to an owner-edit entry, never to the published song's entry,
-and a `< >` version is never read as a release label (those stay in `( )`
-or after ` - `). Intake, identify and the backfill take it in on an
-owner-edit entry; the reconcile carries a file retitled with `< >` up to the
-catalog by linking it to one; the sync writes an owner-edit entry's title
-with its `< >` version and never sends a retitle up as an edit to the
-published entry. A file without `< >` behaves as before.
+A file the owner changed by hand (an intro cut, words censored) is an owner
+edit: not the published recording, and not a release label. It is a
+version, like a remix: it has its own catalog entry and plays of its own,
+never the published song's entry.
+
+- **How to mark one.** In the file's tags only, by writing its version in
+  `< >` in the title (in VirtualDJ, say): `Baby What You Want Me To Do
+  <Intro Cut>`, `<Self Censored>`. There is no setting on the WCS site, and
+  no search for candidates: an existing owner edit is marked by retitling
+  it, and the next reconcile carries it to the catalog. The entry records that
+  its version is an owner edit, and its displayed title carries the version
+  in `< >`. A file without `< >` behaves as before.
+- **How it differs from a release label.** A release label (Clean,
+  Explicit, Radio Edit, an official No Intro Edit) is in `( )` or after
+  ` - `; its file shares the song's entry and keeps its own label
+  (ADR-0008, decision 6). A `< >` version is never read as a release label.
+  So the owner's own no-intro cut is `<Intro Cut>`, while a No Intro Edit
+  the label released stays `(No Intro Edit)` on the song's entry.
+- **What each step does with it.** Identify links it only to an
+  owner-edit entry, the catalog's or one made from its title, artist and
+  year, never to the published song's; the backfill links it only to an
+  owner-edit entry the catalog has, and otherwise leaves it to identify;
+  the reconcile carries a file retitled with `< >` up to the catalog by
+  linking it to one, with no approval; the sync writes an owner-edit entry's title with its `< >`
+  version and never sends a retitle up as an edit to the published entry.
+  The **fingerprint** is only a hint: a confident match to the published
+  recording is recorded as what the edit was cut from, and no match, or
+  another one, is never reported as wrong, held, or used to retitle or
+  relink it ([library-identify](#library-identify)). It is never sent to
+  **AcoustID** or any other third party as the official recording: the one
+  AcoustID lookup only asks what the audio matches, and nothing is
+  submitted. The **duplicates** step never groups it with the published
+  song's files, even with the same md5; listed beside them, it is kept on
+  purpose as an owner edit ([library-duplicates](#library-duplicates)).
+  File names leave `<` and `>` out.
 
 ### Running a library job on demand
 
@@ -405,8 +423,8 @@ the run with a WARN until resolved.
 (`POST /v1/catalog/library/files`): Drive id, library root, path, size, md5
 and duration (of the file as it now is), the catalog entry it links to
 (`identified`) or none (`unidentified`), the release label its title carries
-(Clean, Explicit, Radio Edit, No Intro Edit, Super Clean…), and its comment
-frame as a backup. Registering never changes a music file; a re-run updates
+(Clean, Explicit, Radio Edit, an official No Intro Edit, Super Clean…;
+never an owner edit's `< >` version), and its comment frame as a backup. Registering never changes a music file; a re-run updates
 the same row. A registration that fails does not stop the run: the file is
 named (`registry_failed`) and, in a `write` run, kept in the cursor's
 `registry_retry` list and registered again at the start of the next run,
@@ -1038,8 +1056,8 @@ display rules write them out (case, spacing and punctuation ignored), or a
 file name in the same folder (ignoring a copy suffix such as ` (1)`).
 
 **Kept on purpose:** files of one song with a different release label
-(Clean, Explicit, Radio Edit, …) or durations more than three seconds
-apart (a No Intro Edit) are different edits, never duplicates of each
+(Clean, Explicit, Radio Edit, an official No Intro Edit, …) or durations
+more than three seconds apart (a shorter cut) are different edits, never duplicates of each
 other. Each linked set is split into its edits; every edit with two or
 more files is a group, listing the song's other edits marked kept on
 purpose with why, so the page can never send them to the trash.

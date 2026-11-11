@@ -4,22 +4,15 @@ folder settings, the audio check and the run record."""
 from __future__ import annotations
 
 import json
-import uuid
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from mini_app_polis import pipeline_status
-from mini_app_polis.api.contract import (
-    CatalogLookupRequest,
-    CatalogMatch,
-    LibraryEntryCreate,
-    LibraryEntryCreated,
-)
 from mini_app_polis.lambda_worker import RunOutOfTime
 from music_fakes import AUDIO, FakeDrive, mp3
-from mutagen.id3 import TALB, TCON, TIT2, TPE1
+from mutagen.id3 import TALB, TIT2, TPE1
 
 from deejay_cog import new_music as flow
 from deejay_cog.music_safety import (
@@ -30,24 +23,10 @@ from deejay_cog.music_safety import (
 from flag_fakes import FLAGS
 
 IN, DEST, REVIEW, ORIG, STATE = "in", "dest", "review", "orig", "state"
-_CATALOG_ID = uuid.UUID("11111111-2222-3333-4444-555555555555")
-_NEW_ID = uuid.UUID("99999999-8888-7777-6666-555555555555")
+_NAME = "Temple_Thomas Gold.mp3"
 
 
-def _match(**overrides) -> CatalogMatch:
-    fields = {
-        "id": _CATALOG_ID,
-        "title": "Temple",
-        "remix": "Niko The Kid Remix",
-        "artist": "Thomas Gold",
-        "genre": "WCS",
-        "release_year": 2019,
-    }
-    fields.update(overrides)
-    return CatalogMatch(**fields)
-
-
-def _tagged(title: str = "temple", artist: str = "thomas gold") -> bytes:
+def _tagged(title: str = "Temple", artist: str = "Thomas Gold") -> bytes:
     return mp3(
         TIT2(encoding=3, text=[title]),
         TPE1(encoding=3, text=[artist]),
@@ -57,35 +36,18 @@ def _tagged(title: str = "temple", artist: str = "thomas gold") -> bytes:
 
 @dataclass
 class FakeApi:
-    answers: dict[str, CatalogMatch | None] = field(default_factory=dict)
-    requests: list[CatalogLookupRequest] = field(default_factory=list)
+    """The API as intake sees it: only the library registry, read for names."""
+
     #: Paths in the library registry; listing raises this while it is set.
     library: list[str] = field(default_factory=list)
     registry_down: Exception | None = None
     listings: list[dict] = field(default_factory=list)
-    entries: list[LibraryEntryCreate] = field(default_factory=list)
-    #: False: the entry already existed (another call made it first).
-    entry_is_new: bool = True
 
-    def lookup_catalog(self, payload: CatalogLookupRequest):
-        self.requests.append(payload)
-        return [self.answers.get(t.title.lower()) for t in payload.tracks]
+    def lookup_catalog(self, _payload):
+        raise AssertionError("intake never looks a file up")
 
-    def create_library_entry(self, payload: LibraryEntryCreate):
-        """The catalog's standardized entry for the tags it was sent."""
-        self.entries.append(payload)
-        entry = CatalogMatch(
-            id=_NEW_ID,
-            title="Brand New Song",
-            artist="New Artist",
-            genre="Pop",
-        )
-        new = self.entry_is_new
-        return LibraryEntryCreated(
-            entry=entry,
-            created=new and not payload.preview,
-            previewed=new and payload.preview,
-        )
+    def create_library_entry(self, _payload):
+        raise AssertionError("intake never makes a catalog entry")
 
     def list_library_files(self, *, present=None, limit=None, offset=None):
         self.listings.append({"present": present, "limit": limit, "offset": offset})
@@ -126,7 +88,7 @@ def errors(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 @pytest.fixture
 def api() -> FakeApi:
-    return FakeApi({"temple": _match()})
+    return FakeApi()
 
 
 @pytest.fixture
@@ -205,11 +167,11 @@ def test_two_roles_on_one_folder_does_nothing(
 
 
 # ---------------------------------------------------------------------------
-# Identified in the catalog
+# Taken in: an unchanged copy, named by its own tags
 # ---------------------------------------------------------------------------
 
 
-def test_a_catalog_match_is_copied_tagged_and_renamed_and_the_original_kept(
+def test_a_file_is_copied_unchanged_and_named_by_its_own_tags(
     settings, wired, posted, drive
 ) -> None:
     original = _tagged()
@@ -217,14 +179,12 @@ def test_a_catalog_match_is_copied_tagged_and_renamed_and_the_original_kept(
 
     summary = flow.new_music(run_id="m-1")
 
-    assert summary.identified == [
-        "track01.mp3 -> Temple (Niko The Kid Remix)_Thomas Gold.mp3"
-    ]
+    assert summary.identified == [f"track01.mp3 -> {_NAME}"]
     (copy,) = drive.in_folder(DEST)
-    assert copy.name == "Temple (Niko The Kid Remix)_Thomas Gold.mp3"
+    assert copy.name == _NAME
     assert copy.app_properties == {SOURCE_PROPERTY: file_id}
-    assert tag_snapshot(copy.data)["title"] == "Temple (Niko The Kid Remix)"
-    assert tag_snapshot(copy.data)["catalog_id"] == str(_CATALOG_ID)
+    # Tags and audio exactly as they came in: the library steps do the rest.
+    assert copy.data == original
     assert audio_payload(copy.data) == AUDIO
     # The original: moved, never changed, never renamed.
     item = drive.items[file_id]
@@ -241,9 +201,9 @@ def test_a_catalog_match_is_copied_tagged_and_renamed_and_the_original_kept(
     (entry,) = record["entries"]
     assert entry["file_id"] == file_id
     assert entry["original_name"] == "track01.mp3"
+    assert entry["identified_by"] == "own tags"
     assert entry["state"] == "done"
-    assert entry["old_tags"]["title"] == "temple"
-    assert entry["new_tags"]["artist"] == "Thomas Gold"
+    assert entry["old_tags"] == entry["new_tags"]
     assert entry["copy"] == {"id": copy.id, "folder_id": DEST, "name": copy.name}
     assert entry["move"] == {"from": IN, "to": ORIG}
     assert posted.call_args.args[1] == "SUCCESS"
@@ -256,7 +216,7 @@ def test_dry_run_writes_nothing_but_its_record(
     monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
     drive.add("track01.mp3", IN, _tagged())
     drive.add("clip.m4a", IN, b"m4a", mime_type="audio/mp4")
-    drive.add("Temple (Niko The Kid Remix)_Thomas Gold.mp3", DEST, b"x")
+    drive.add(_NAME, DEST, b"x")
 
     summary = flow.new_music(run_id="m-1")
 
@@ -286,143 +246,44 @@ def test_dry_run_reports_what_it_would_write(
     assert drive.items[file_id].parents == [IN]
     (entry,) = _record(drive)["entries"]
     assert entry["action"] == "deliver"
-    assert entry["new_name"] == "Temple (Niko The Kid Remix)_Thomas Gold.mp3"
-    assert entry["old_tags"]["title"] == "temple"
-    assert entry["new_tags"]["title"] == "Temple (Niko The Kid Remix)"
+    assert entry["new_name"] == _NAME
+    assert entry["new_tags"]["title"] == "Temple"
     assert entry["copy"] is None and entry["move"] is None
     assert summary.identified
     assert posted.call_args.kwargs["not_written_dry_run"] == 1
 
 
-def test_a_catalog_value_never_empties_a_tag(
-    settings, wired, drive, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    original = mp3(
-        TIT2(encoding=3, text=["temple"]),
-        TPE1(encoding=3, text=["thomas gold"]),
-        TCON(encoding=3, text=["Pop"]),
-    )
-    file_id = drive.add("track01.mp3", IN, original)
-    emptied = mp3(
-        TIT2(encoding=3, text=["Temple"]), TPE1(encoding=3, text=["Thomas Gold"])
-    )
-    monkeypatch.setattr(flow, "write_catalog_tags", lambda *_, **__: emptied)
-
-    summary = flow.new_music(run_id="m-1")
-
-    assert summary.failed and "genre" in summary.failed[0]
-    assert drive.writes(except_folder=STATE) == []
-    assert drive.items[file_id].parents == [IN]
-
-
-# ---------------------------------------------------------------------------
-# Not in the catalog: its own tags, standardized by a new catalog entry
-# ---------------------------------------------------------------------------
-
-
-def test_a_file_the_catalog_does_not_know_gets_an_entry_from_its_own_tags(
-    settings, wired, posted, drive, api
-) -> None:
-    original = _tagged("brand new song", "new artist")
-    file_id = drive.add("new.mp3", IN, original)
-
-    summary = flow.new_music(run_id="m-1")
-
-    (sent,) = api.entries
-    assert (sent.title, sent.artist, sent.preview) == (
-        "brand new song",
-        "new artist",
-        False,
-    )
-    assert summary.new_entries == ["new.mp3 -> New Artist - Brand New Song"]
-    assert summary.identified == ["new.mp3 -> Brand New Song_New Artist.mp3"]
-    (copy,) = drive.in_folder(DEST)
-    tags = tag_snapshot(copy.data)
-    assert (tags["title"], tags["artist"], tags["genre"]) == (
-        "Brand New Song",
-        "New Artist",
-        "Pop",
-    )
-    assert tags["catalog_id"] == str(_NEW_ID)
-    assert drive.items[file_id].parents == [ORIG]
-    assert drive.items[file_id].data == original
-    (entry,) = _record(drive)["entries"]
-    assert entry["identified_by"] == "own tags + new catalog entry"
-    assert posted.call_args.kwargs["new_entries"] == 1
-
-
 @pytest.mark.parametrize(
-    ("title", "label"), [("temple [Clean]", "Clean"), ("temple (Explicit)", "Explicit")]
+    ("title", "name"),
+    [
+        ("Temple [Clean]", "Temple [Clean]_Thomas Gold.mp3"),
+        ("Temple (Explicit)", "Temple (Explicit)_Thomas Gold.mp3"),
+    ],
 )
-def test_a_file_keeps_its_own_release_label_in_its_title_and_name(
-    settings, wired, drive, api, title, label
+def test_a_release_label_stays_in_the_title_and_name(
+    settings, wired, drive, title, name
 ) -> None:
-    # The real lookup sets the label aside; the fake matches the title as is.
-    api.answers[title.lower()] = _match()
-    drive.add("track01.mp3", IN, _tagged(title))
+    original = _tagged(title)
+    drive.add("track01.mp3", IN, original)
 
     summary = flow.new_music(run_id="m-1")
 
-    name = f"Temple (Niko The Kid Remix) ({label})_Thomas Gold.mp3"
     assert summary.identified == [f"track01.mp3 -> {name}"]
     (copy,) = drive.in_folder(DEST)
     assert copy.name == name
-    assert tag_snapshot(copy.data)["title"] == f"Temple (Niko The Kid Remix) ({label})"
-
-
-def test_dry_run_previews_the_entry_and_writes_nothing(
-    settings, wired, posted, drive, api, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
-    file_id = drive.add("new.mp3", IN, _tagged("brand new song", "new artist"))
-
-    summary = flow.new_music(run_id="m-1")
-
-    (sent,) = api.entries
-    assert sent.preview is True
-    assert summary.new_entries == ["new.mp3 -> New Artist - Brand New Song"]
-    assert drive.writes(except_folder=STATE) == []
-    assert drive.items[file_id].parents == [IN]
-    (entry,) = _record(drive)["entries"]
-    assert entry["new_name"] == "Brand New Song_New Artist.mp3"
-    assert entry["new_tags"]["title"] == "Brand New Song"
-    assert "would_create_entry" in posted.call_args.kwargs["text"]
-
-
-def test_an_entry_another_call_made_first_counts_as_the_catalog_s(
-    settings, wired, drive, api
-) -> None:
-    api.entry_is_new = False
-    drive.add("new.mp3", IN, _tagged("brand new song", "new artist"))
-
-    summary = flow.new_music(run_id="m-1")
-
-    assert summary.new_entries == []
-    assert summary.identified == ["new.mp3 -> Brand New Song_New Artist.mp3"]
-    (entry,) = _record(drive)["entries"]
-    assert entry["identified_by"] == "own tags + catalog"
+    assert copy.data == original
 
 
 def test_a_file_with_no_usable_title_or_artist_goes_to_review(
-    settings, wired, drive, api
+    settings, wired, drive
 ) -> None:
     file_id = drive.add("new.mp3", IN, mp3(TALB(encoding=3, text=["Album only"])))
 
     summary = flow.new_music(run_id="m-1")
 
-    assert api.entries == []
     assert summary.needs_review == ["new.mp3 (no usable title or artist)"]
     assert drive.items[file_id].parents == [REVIEW]
-
-
-def test_a_bpm_of_zero_and_an_odd_year_are_left_out_of_the_entry() -> None:
-    track = flow.IngestTrack(title="Song", artist="Someone", bpm=0, release_year=99)
-
-    request = flow.entry_request(track, preview=True)
-
-    assert request.bpm is None
-    assert request.release_year is None
-    assert request.preview is True
+    assert drive.in_folder(DEST) == []
 
 
 # ---------------------------------------------------------------------------
@@ -446,15 +307,13 @@ def test_a_file_that_is_not_an_mp3_goes_to_review_unchanged(
 def test_a_name_already_in_the_destination_is_not_overwritten(
     settings, wired, posted, drive
 ) -> None:
-    existing = drive.add("Temple (Niko The Kid Remix)_Thomas Gold.mp3", DEST, b"mine")
+    existing = drive.add(_NAME, DEST, b"mine")
     original = _tagged()
     file_id = drive.add("track01.mp3", IN, original)
 
     summary = flow.new_music(run_id="m-1")
 
-    assert summary.collisions == [
-        "track01.mp3 -> Temple (Niko The Kid Remix)_Thomas Gold.mp3"
-    ]
+    assert summary.collisions == [f"track01.mp3 -> {_NAME}"]
     assert [i.id for i in drive.in_folder(DEST)] == [existing]
     assert drive.items[existing].data == b"mine"
     assert drive.items[file_id].parents == [REVIEW]
@@ -470,7 +329,7 @@ def test_a_copy_an_earlier_run_made_is_used_not_made_twice(
     file_id = drive.add("track01.mp3", IN, _tagged())
     # As an earlier run stopped after its upload, before the move.
     earlier = drive.add(
-        "Temple (Niko The Kid Remix)_Thomas Gold.mp3",
+        _NAME,
         DEST,
         mp3(TIT2(encoding=3, text=["Temple"]), TPE1(encoding=3, text=["T"])),
         app_properties={SOURCE_PROPERTY: file_id},
@@ -500,31 +359,6 @@ def test_names_are_sanitized(tags, name) -> None:
 # ---------------------------------------------------------------------------
 # The audio check stops the run
 # ---------------------------------------------------------------------------
-
-
-def test_audio_that_would_change_stops_the_run_before_any_write(
-    settings, wired, posted, errors, drive, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    first = drive.add("a.mp3", IN, _tagged())
-    second = drive.add("b.mp3", IN, _tagged())
-    bad = mp3(
-        TIT2(encoding=3, text=["Temple"]),
-        TPE1(encoding=3, text=["Thomas Gold"]),
-        TALB(encoding=3, text=["Some Album"]),
-        audio=AUDIO[:-1] + b"\x01",
-    )
-    monkeypatch.setattr(flow, "write_catalog_tags", lambda *_, **__: bad)
-
-    summary = flow.new_music(run_id="m-1")
-
-    assert summary.aborted
-    assert summary.scanned == 1
-    assert drive.writes() == []
-    assert drive.items[first].parents == [IN]
-    assert drive.items[second].parents == [IN]
-    errors.assert_called_once()
-    assert errors.call_args.args[:2] == ("new-music", "ERROR")
-    assert posted.call_args.args[1] == "WARN"
 
 
 def test_audio_changed_by_the_upload_trashes_the_copy_and_stops(
@@ -586,21 +420,20 @@ def test_the_deadline_stops_between_files_and_the_record_survives(
 
 
 def test_a_failing_file_does_not_end_the_sweep(
-    settings, wired, drive, api, monkeypatch: pytest.MonkeyPatch
+    settings, wired, drive, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     drive.add("a.mp3", IN, _tagged())
-    drive.add("b.mp3", IN, _tagged())
-    calls = iter([RuntimeError("api down")])
+    drive.add("b.mp3", IN, _tagged("Other", "Someone"))
+    calls = iter([RuntimeError("tags unreadable")])
+    real = flow.read_tag_row
 
-    real = api.lookup_catalog
-
-    def flaky(payload):
+    def flaky(data):
         exc = next(calls, None)
         if exc:
             raise exc
-        return real(payload)
+        return real(data)
 
-    monkeypatch.setattr(api, "lookup_catalog", flaky)
+    monkeypatch.setattr(flow, "read_tag_row", flaky)
 
     summary = flow.new_music(run_id="m-1")
 
@@ -683,15 +516,14 @@ def test_a_song_with_features_is_named_by_its_main_artist_first() -> None:
     ]
 
 
-def _featured_match() -> CatalogMatch:
-    return _match(title="At My Worst", remix=None, artist="Pink Sweat$ feat. Kehlani")
+def _featured() -> bytes:
+    return _tagged("At My Worst", "Pink Sweat$ feat. Kehlani")
 
 
 def test_a_song_with_features_is_delivered_under_its_main_artist(
-    settings, wired, drive, api: FakeApi
+    settings, wired, drive
 ) -> None:
-    api.answers["temple"] = _featured_match()
-    drive.add("track01.mp3", IN, _tagged())
+    drive.add("track01.mp3", IN, _featured())
 
     summary = flow.new_music(run_id="m-1")
 
@@ -702,9 +534,8 @@ def test_a_song_with_features_is_delivered_under_its_main_artist(
 def test_a_name_taken_in_the_library_adds_the_featured_artists(
     settings, wired, drive, api: FakeApi
 ) -> None:
-    api.answers["temple"] = _featured_match()
     api.library = ["R&B/At My Worst_Pink Sweat$.mp3"]
-    drive.add("track01.mp3", IN, _tagged())
+    drive.add("track01.mp3", IN, _featured())
 
     summary = flow.new_music(run_id="m-1")
 
@@ -717,10 +548,9 @@ def test_a_name_taken_in_the_library_adds_the_featured_artists(
 def test_a_name_taken_even_with_the_features_goes_to_review(
     settings, wired, drive, api: FakeApi
 ) -> None:
-    api.answers["temple"] = _featured_match()
     api.library = ["a/At My Worst_Pink Sweat$.mp3"]
     drive.add("At My Worst_Pink Sweat$ feat. Kehlani.mp3", DEST, b"mine")
-    file_id = drive.add("track01.mp3", IN, _tagged())
+    file_id = drive.add("track01.mp3", IN, _featured())
 
     summary = flow.new_music(run_id="m-1")
 
@@ -734,7 +564,7 @@ def test_a_name_taken_even_with_the_features_goes_to_review(
 def test_a_name_taken_with_no_features_to_add_goes_to_review(
     settings, wired, drive, api: FakeApi
 ) -> None:
-    api.library = ["House/Temple (Niko The Kid Remix)_Thomas Gold.mp3"]
+    api.library = [f"House/{_NAME}"]
     file_id = drive.add("track01.mp3", IN, _tagged())
 
     summary = flow.new_music(run_id="m-1")
@@ -776,77 +606,21 @@ def test_the_registry_is_read_once_a_run_and_paged(
 _BABY = "Baby What You Want Me To Do"
 
 
-class OwnerEditApi(FakeApi):
-    """A catalog that makes an owner-edit entry for a title in < >."""
-
-    def create_library_entry(self, payload: LibraryEntryCreate):
-        self.entries.append(payload)
-        entry = CatalogMatch(
-            id=_NEW_ID,
-            title=payload.title,
-            artist=payload.artist,
-            owner_edit="<" in payload.title,
-        )
-        return LibraryEntryCreated(
-            entry=entry, created=not payload.preview, previewed=payload.preview
-        )
-
-
-@pytest.fixture
-def owner_edit_api(monkeypatch: pytest.MonkeyPatch, wired) -> OwnerEditApi:
-    api = OwnerEditApi({_BABY.lower(): _match(title=_BABY, remix=None)})
-    monkeypatch.setattr(flow, "api_client", lambda **_: api)
-    return api
-
-
-def test_an_owner_edit_is_taken_in_on_an_owner_edit_entry_and_named_without_brackets(
-    settings, owner_edit_api, drive
+def test_an_owner_edit_is_copied_unchanged_and_named_without_brackets(
+    settings, wired, drive
 ) -> None:
     title = f"{_BABY} <Intro Cut>"
-    # The catalog's answer is the published song: not the owner edit's entry.
-    owner_edit_api.answers[title.lower()] = _match(title=_BABY, remix=None)
-    drive.add("cut.mp3", IN, _tagged(title, "Etta James"))
+    original = _tagged(title, "Etta James")
+    drive.add("cut.mp3", IN, original)
 
     summary = flow.new_music(run_id="m-1")
 
-    (sent,) = owner_edit_api.entries
-    assert sent.title == title and sent.preview is False
     (copy,) = drive.in_folder(DEST)
     assert copy.name == f"{_BABY} Intro Cut_Etta James.mp3"
     assert "<" not in copy.name and ">" not in copy.name
+    assert copy.data == original
     assert tag_snapshot(copy.data)["title"] == title
-    assert summary.new_entries == [f"cut.mp3 -> Etta James - {title}"]
-
-
-def test_an_owner_edit_entry_the_catalog_has_keeps_its_version_in_the_title(
-    settings, owner_edit_api, drive
-) -> None:
-    title = f"{_BABY} <Intro Cut> (Clean)"
-    # An owner-edit entry whose version is a part of its own.
-    owner_edit_api.answers[title.lower()] = _match(
-        title=_BABY, remix="Intro Cut", artist="Etta James", owner_edit=True
-    )
-    drive.add("cut.mp3", IN, _tagged(title, "Etta James"))
-
-    flow.new_music(run_id="m-1")
-
-    assert owner_edit_api.entries == []
-    (copy,) = drive.in_folder(DEST)
-    assert tag_snapshot(copy.data)["title"] == title
-    assert copy.name == f"{_BABY} Intro Cut (Clean)_Etta James.mp3"
-
-
-def test_an_owner_edit_the_catalog_does_not_take_as_one_goes_to_review(
-    settings, wired, drive, api
-) -> None:
-    # The plain fake makes an ordinary entry for any title.
-    drive.add("cut.mp3", IN, _tagged(f"{_BABY} <Intro Cut>", "Etta James"))
-
-    summary = flow.new_music(run_id="m-1")
-
-    assert drive.in_folder(DEST) == []
-    assert [i.name for i in drive.in_folder(REVIEW)] == ["cut.mp3"]
-    assert summary.identified == []
+    assert summary.identified == [f"cut.mp3 -> {copy.name}"]
 
 
 def test_names_never_carry_the_owner_edit_brackets() -> None:
