@@ -20,6 +20,10 @@ from mini_app_polis.api.contract import (
     CatalogDisplayRequest,
     CatalogFillUp,
     CatalogFillUpResult,
+    CatalogLookupRequest,
+    CatalogMatch,
+    LibraryEntryCreate,
+    LibraryEntryCreated,
     LibraryFieldEdit,
     LibraryFile,
     LibraryFileEdited,
@@ -36,7 +40,7 @@ from deejay_cog import library_backfill as backfill
 from deejay_cog import library_reconcile as rec
 from deejay_cog import library_scan as scan
 from deejay_cog.library_backfill import StateFile
-from deejay_cog.music_safety import FlowMode
+from deejay_cog.music_safety import FlowMode, check_audio_unchanged
 from flag_fakes import FLAGS
 
 ROOT, STATE = "root", "state"
@@ -1268,3 +1272,193 @@ def test_a_baseline_records_every_file_and_the_next_run_reads_none(
 
     assert again.compared == 0
     assert sorted(_state(drive, rec.SEEN_NAME)["files"]) == sorted(ids)
+
+
+# ---------------------------------------------------------------------------
+# Owner edits: a file retitled with a version in < > goes up as the owner's
+# choice of an owner-edit entry
+# ---------------------------------------------------------------------------
+
+_BABY = "Baby What You Want Me To Do"
+_OWNER_EDIT_ID = uuid.UUID("0e0e0e0e-0000-4000-8000-000000000001")
+
+
+@dataclass
+class OwnerEditCatalog(WritingCatalog):
+    """A catalog that also looks files up and makes library entries."""
+
+    known: dict[str, CatalogMatch] = field(default_factory=dict)
+    created: list[LibraryEntryCreate] = field(default_factory=list)
+    lookups: list[str] = field(default_factory=list)
+
+    def lookup_catalog(self, payload: CatalogLookupRequest):
+        self.lookups.extend(t.title for t in payload.tracks)
+        return [self.known.get(t.title.lower()) for t in payload.tracks]
+
+    def create_library_entry(self, payload: LibraryEntryCreate):
+        self.created.append(payload)
+        owner_edit = "<" in payload.title
+        return LibraryEntryCreated(
+            entry=CatalogMatch(
+                id=_OWNER_EDIT_ID,
+                title=payload.title,
+                artist=payload.artist,
+                owner_edit=owner_edit,
+            ),
+            created=not payload.preview,
+            previewed=payload.preview,
+        )
+
+
+def _owner_edit_library(
+    drive: FakeDrive, api: FakeCatalog, title: str, *, owner_edit: bool = False
+) -> tuple[str, uuid.UUID, bytes]:
+    """One file titled ``title``, linked to the published song's entry (or,
+    with ``owner_edit``, to an owner-edit entry shown as ``Song <Intro Cut>``)."""
+    entry = uuid.uuid4()
+    data = _song(entry, title=title, artist="Etta James")
+    drive_id = drive.add("baby.mp3", ROOT, data)
+    api.rows.append(_row(drive_id, entry, path="baby.mp3"))
+    shown = f"{_BABY} <Intro Cut>" if owner_edit else _BABY
+    api.displays[entry] = _display(
+        entry, title=shown, artist="Etta James", owner_edit=owner_edit
+    )
+    return drive_id, entry, data
+
+
+@pytest.fixture
+def owner_edits(monkeypatch: pytest.MonkeyPatch, drive: FakeDrive) -> OwnerEditCatalog:
+    api = OwnerEditCatalog()
+    google = MagicMock()
+    google.from_env.return_value = SimpleNamespace(drive=drive)
+    monkeypatch.setattr(rec, "GoogleAPI", google)
+    monkeypatch.setattr(rec, "api_client", lambda **_: api)
+    monkeypatch.setattr(rec, "shared_deadline_passed", lambda: False)
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "write")
+    return api
+
+
+def test_a_file_retitled_as_an_owner_edit_moves_to_a_new_owner_edit_entry(
+    settings, owner_edits, drive, posted
+) -> None:
+    title = f"{_BABY} <Intro Cut>"
+    drive_id, published, before = _owner_edit_library(drive, owner_edits, title)
+
+    # No approvals are set: the retitle is the owner's choice and needs none.
+    summary = rec.library_reconcile(run_id="r-1")
+
+    [made] = owner_edits.created
+    assert made.title == title and made.artist == "Etta James"
+    assert made.preview is False
+    after = drive.items[drive_id].data
+    frames = _frames(after)
+    assert frames["TXXX:CATALOG_ID"] == str(_OWNER_EDIT_ID)
+    assert frames["TIT2"] == title  # the owner's title stays
+    assert frames["COMM::eng"] == "VirtualDJ cue notes"  # never written
+    check_audio_unchanged(before, after)
+    [reg] = owner_edits.registrations
+    assert reg.catalog_id == _OWNER_EDIT_ID and reg.edit_label is None
+    assert reg.synced_at is not None and reg.comment_backup is None
+    # The published entry is left as it is, its plays and other files with it.
+    assert owner_edits.fills == [] and owner_edits.kept == []
+    assert summary.compared == 0 and summary.differences["version_brackets"] == []
+    assert summary.owner_edits == [
+        f"baby.mp3: {published} -> {_OWNER_EDIT_ID} "
+        f"(Etta James - {title}, a new owner-edit entry)"
+    ]
+    # The review drops what it held for the file under the published entry.
+    [review] = owner_edits.reviews
+    assert review.compared == [drive_id] and review.differences == []
+    # Not marked compared: the next run compares it with its new entry.
+    assert drive_id not in _state(drive, rec.SEEN_NAME)["files"]
+    assert drive.items[drive_id].name == "baby.mp3"
+    assert drive.items[drive_id].parents == [ROOT]
+
+
+def test_a_retitled_owner_edit_is_linked_to_the_owner_edit_entry_the_catalog_has(
+    settings, owner_edits, drive
+) -> None:
+    title = f"{_BABY} <Intro Cut> (Clean)"
+    drive_id, _, _ = _owner_edit_library(drive, owner_edits, title)
+    existing = uuid.uuid4()
+    owner_edits.known[title.lower()] = CatalogMatch(
+        id=existing, title=f"{_BABY} <Intro Cut>", artist="Etta James", owner_edit=True
+    )
+
+    rec.library_reconcile(run_id="r-1")
+
+    assert owner_edits.created == []
+    assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(existing)
+    [reg] = owner_edits.registrations
+    # The release label is read as before; the < > version is not one.
+    assert reg.catalog_id == existing and reg.edit_label == "Clean"
+
+
+def test_the_published_songs_entry_is_never_the_owner_edits(
+    settings, owner_edits, drive
+) -> None:
+    title = f"{_BABY} <Intro Cut>"
+    _owner_edit_library(drive, owner_edits, title)
+    owner_edits.known[title.lower()] = CatalogMatch(
+        id=uuid.uuid4(), title=_BABY, artist="Etta James"
+    )
+
+    rec.library_reconcile(run_id="r-1")
+
+    [made] = owner_edits.created
+    assert made.title == title
+    assert owner_edits.registrations[0].catalog_id == _OWNER_EDIT_ID
+
+
+def test_a_dry_run_previews_the_owner_edit_entry_and_changes_nothing(
+    settings, owner_edits, drive, posted, monkeypatch
+) -> None:
+    monkeypatch.setitem(FLAGS, rec.MODE_FLAG, "dry-run")
+    drive_id, _, before = _owner_edit_library(
+        drive, owner_edits, f"{_BABY} <Intro Cut>"
+    )
+
+    summary = rec.library_reconcile(run_id="r-1")
+    again = rec.library_reconcile(run_id="r-2")
+
+    assert [c.preview for c in owner_edits.created] == [True, True]
+    assert drive.writes(except_folder=STATE) == []
+    assert drive.items[drive_id].data == before
+    assert owner_edits.registrations == []
+    # Listed each time, so a write run still takes it.
+    assert len(summary.owner_edits) == 1 and len(again.owner_edits) == 1
+    assert "would_link_owner_edit" in _text(posted)
+
+
+def test_a_reconcile_that_is_off_does_not_move_an_owner_edit(
+    settings, owner_edits, drive, monkeypatch
+) -> None:
+    monkeypatch.delitem(FLAGS, rec.MODE_FLAG, raising=False)
+    _owner_edit_library(drive, owner_edits, f"{_BABY} <Intro Cut>")
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.mode is FlowMode.OFF
+    assert owner_edits.lookups == [] and owner_edits.created == []
+    assert drive.calls == []
+
+
+def test_a_file_on_its_owner_edit_entry_is_compared_as_any_other(
+    settings, owner_edits, drive
+) -> None:
+    _owner_edit_library(drive, owner_edits, f"{_BABY} <Intro Cut>", owner_edit=True)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert owner_edits.lookups == [] and owner_edits.created == []
+    assert summary.compared == 1 and summary.matching == 1
+    assert summary.owner_edits == []
+
+
+def test_an_unmarked_file_is_compared_as_before(settings, owner_edits, drive) -> None:
+    _owner_edit_library(drive, owner_edits, f"{_BABY} (Intro Cut)")
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert owner_edits.lookups == [] and owner_edits.created == []
+    assert [d.field for d in summary.differences["other"]] == ["title"]

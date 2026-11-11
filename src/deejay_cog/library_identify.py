@@ -27,6 +27,13 @@ this step takes the next ``LIBRARY_IDENTIFY_CHUNK_SIZE`` of them (default
    them, and the fingerprint never will. A file the fingerprint names as
    another song stays for the owner (ADR-0008, decided 2026-11-09).
 
+**An owner edit** (a version in ``< >`` in its title, "Song <Intro Cut>": a
+cut the owner made himself) is linked only to an owner-edit entry, never to
+the published song's: by its tags when the catalog has one, otherwise to an
+owner-edit entry made from its own title, artist and year. Its tags are the
+owner's choice, so it is not sent to fingerprinting (ADR-0008, decided
+2026-11-11).
+
 **Linking a file** (:func:`link_and_write`): the file's values go up to the
 catalog's empty fields (``POST /v1/catalog/{id}/fill-up``); only the link
 (``TXXX:CATALOG_ID``) is written to the file in place, and every owned field
@@ -76,6 +83,7 @@ from mini_app_polis.api.contract import (
     CatalogMatch,
     IngestTrack,
     LibraryEntryCreate,
+    LibraryEntryCreated,
     LibraryFile,
     LibraryFileRegister,
     LibraryFileTags,
@@ -107,6 +115,8 @@ from deejay_cog.music_tags import (
     duration_secs,
     edit_label,
     ingest_track,
+    is_owner_edit,
+    owner_edit_fits,
     read_tag_row,
     write_owned_fields,
 )
@@ -166,6 +176,10 @@ class Catalog(Protocol):
         """Register a library file, or bring its row up to date."""
         ...
 
+    def create_library_entry(self, payload: LibraryEntryCreate) -> LibraryEntryCreated:
+        """The song's entry, made from the library when the catalog lacks it."""
+        ...
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -221,6 +235,9 @@ class Linked:
 #: How the registry marks a file linked by its own tags, no fingerprint
 #: having confirmed them.
 TAGS_NOTE = "identified by its own tags"
+
+#: How the registry marks an owner edit linked by its own tags.
+OWNER_EDIT_NOTE = "an owner edit, identified by its own tags"
 
 #: An artist that names no one.
 _NO_ARTIST = re.compile(r"^(?:unknown(?: artist)?|various(?: artists)?|va|n/?a)$", re.I)
@@ -447,6 +464,9 @@ class IdentifySummary:
     would_write: list[str] = field(default_factory=list)
     filled: list[str] = field(default_factory=list)
     to_fingerprint: list[str] = field(default_factory=list)
+    #: Owner edits linked to an owner-edit entry made from their tags (or,
+    #: in a dry run, that would be).
+    owner_edits: list[str] = field(default_factory=list)
     no_queue: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
@@ -508,10 +528,16 @@ class Identify:
             return
         name = str(meta.get("name") or row.path.rsplit("/", 1)[-1])
         data: bytes = self.drive.download_file_bytes(row.drive_file_id).data
-        track = ingest_track(read_tag_row(data))
+        tags = read_tag_row(data)
+        track = ingest_track(tags)
         match = None
         if track is not None:
             match = self.api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+        if match is not None and not owner_edit_fits(tags["title"], match):
+            match = None
+        if match is None and is_owner_edit(tags["title"]):
+            self._owner_edit(row, name, data)
+            return
         if match is None:
             self._fingerprint(
                 row,
@@ -538,6 +564,70 @@ class Identify:
             summary.written.append(row.path)
         if linked.would_write:
             summary.would_write.append(row.path)
+        if linked.filled:
+            summary.filled.append(f"{row.path} ({', '.join(linked.filled)})")
+        self._mark(row, "linked")
+
+    def _owner_edit(self, row: LibraryFile, name: str, data: bytes) -> None:
+        """Take in an owner edit the catalog has no owner-edit entry for: an
+        entry is made from its own tags (the API reads the ``< >`` version
+        as an owner edit) and the file is linked to it. Its tags are the
+        owner's own choice, so it is not sent to fingerprinting, which would
+        name the published recording (ADR-0008, decided 2026-11-11)."""
+        summary = self.summary
+        tags = read_tag_row(data)
+        if usable_track(tags, name) is None:
+            note = "an owner edit whose tags do not name a song: set its artist"
+            summary.skipped.append(f"{row.path} ({note})")
+            if self.mode_writes:
+                record_unidentified(
+                    self.api,
+                    file_id=row.drive_file_id,
+                    root=self.settings.root,
+                    path=row.path,
+                    data=data,
+                    note=note,
+                )
+                self._mark(row, "owner_edit_unnamed")
+            return
+        made = self.api.create_library_entry(
+            LibraryEntryCreate(
+                title=tags["title"].strip(),
+                artist=tags["artist"].strip(),
+                release_year=_release_year(tags.get("year")),
+                preview=not self.mode_writes,
+            )
+        )
+        if not made.entry.owner_edit:
+            summary.failed.append(
+                f"{row.path} (the catalog did not take {tags['title']!r} as an "
+                "owner edit; nothing linked)"
+            )
+            if self.mode_writes:
+                self._mark(row, "owner_edit_refused")
+            return
+        entry = made.entry
+        if not self.mode_writes:
+            summary.owner_edits.append(f"{row.path} -> {entry.artist} - {entry.title}")
+            return
+        linked = link_and_write(
+            self.drive,
+            self.api,
+            self.record,
+            file_id=row.drive_file_id,
+            name=name,
+            root=self.settings.root,
+            path=row.path,
+            data=data,
+            catalog_id=str(entry.id),
+            identified_by="own tags (owner edit)",
+            note=OWNER_EDIT_NOTE,
+        )
+        label = f"{row.path} -> {entry.artist} - {entry.title}"
+        summary.linked.append(label)
+        summary.owner_edits.append(label)
+        if linked.written:
+            summary.written.append(row.path)
         if linked.filled:
             summary.filled.append(f"{row.path} ({', '.join(linked.filled)})")
         self._mark(row, "linked")
@@ -758,6 +848,7 @@ def _record(report: Any, summary: IdentifySummary, duration_sec: float) -> None:
     report.count("would_write", len(summary.would_write))
     report.count("filled_up", len(summary.filled))
     report.count("to_fingerprint", len(summary.to_fingerprint))
+    report.count("owner_edits", len(summary.owner_edits))
     report.count("failed", len(summary.failed))
     writes = summary.mode.writes
     for item in summary.linked:
@@ -771,6 +862,8 @@ def _record(report: Any, summary: IdentifySummary, duration_sec: float) -> None:
         report.notice("would_write", item)
     for item in summary.filled:
         report.updated("catalog filled up", item)
+    for item in summary.owner_edits:
+        report.notice("owner_edit" if writes else "would_link_owner_edit", item)
     for item in summary.to_fingerprint:
         report.notice("sent_to_fingerprint" if writes else "would_fingerprint", item)
     for item in summary.no_queue:

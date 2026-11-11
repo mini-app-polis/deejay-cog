@@ -191,6 +191,12 @@ No new-music file is sent to the fingerprint function. A release label in
 the file's own title (Clean, Explicit, Radio Edit, No Intro Edit) is kept
 in parentheses after the catalog's title, and so in the new name: clean and
 explicit copies are one catalog song but two files (ADR-0008, decision 6).
+An owner edit (a version in `< >`, below) is taken in on an owner-edit entry,
+the catalog's or one made from its tags, never on the published song's; a
+lookup that answers with the published song is not used, and a file the
+catalog does not take as an owner edit goes to needs-review. The name leaves
+out `<` and `>`, as it does every character a file name can't hold
+(`Baby What You Want Me To Do Intro Cut_Etta James.mp3`).
 
 **Taking an identified file in** (write mode):
 
@@ -285,6 +291,18 @@ linked, written by the reconcile, or restored) it records those values and
 writes nothing, so for such a file the reconcile, not the sync, settles a
 difference first.
 
+**Owner edits** ([ADR-0008, decided 2026-11-11](decisions/ADR-0008-catalog-source-of-truth.md#decided-with-the-owner-2026-11-11-owner-edits)).
+A file the owner cut by hand (an intro cut, words censored) carries its
+version in `< >` in its title: `Baby What You Want Me To Do <Intro Cut>`.
+The owner sets it in the file's tags only. Such a file is an owner edit: it
+is linked only to an owner-edit entry, never to the published song's entry,
+and a `< >` version is never read as a release label (those stay in `( )`
+or after ` - `). Intake, identify and the backfill take it in on an
+owner-edit entry; the reconcile carries a file retitled with `< >` up to the
+catalog by linking it to one; the sync writes an owner-edit entry's title
+with its `< >` version and never sends a retitle up as an edit to the
+published entry. A file without `< >` behaves as before.
+
 ### Running a library job on demand
 
 `POST /v1/deejay/runs` with `{"mode": "library-backfill"}` or
@@ -365,7 +383,9 @@ the run with a WARN until resolved.
    (`needs_fingerprinting`). Library files are **not** sent to the
    fingerprint function.
 5. Not in the catalog (the same lookup as new-music) → left as it is,
-   named (`not_in_catalog`).
+   named (`not_in_catalog`). So is an owner edit (a version in `< >`) the
+   catalog answers with the published song's entry: identify takes it in
+   on an owner-edit entry.
 6. In the catalog and already carrying its tags → not written
    (`already_tagged`). The backfill writes **only the catalog id**
    (`TXXX:CATALOG_ID`): no title, artist, year, genre, BPM, label or
@@ -560,6 +580,14 @@ it) to try again.
    fingerprint's best guess and score. The owner's unidentified-files page
    on the WCS site shows both.
 
+An **owner edit** (a version in `< >`) the catalog has no owner-edit entry
+for skips steps 3 to 6: it is linked to an owner-edit entry made from its
+title, artist and year (registry note `an owner edit, identified by its own
+tags`), never to the published song's entry, and it is not sent to
+fingerprinting. One whose tags name no song (no artist) is left for the
+owner with a note saying so. A dry run previews the entry and links nothing
+(`would_link_owner_edit`).
+
 **Linking** fills the entry's empty fields from the file
 (`POST /v1/catalog/{id}/fill-up`), writes only the link
 (`TXXX:CATALOG_ID`) to the same file, and registers it as identified with
@@ -623,7 +651,18 @@ not put first again; its file is compared again when it changes.
 label in the file's ID3 tags, against `POST /v1/catalog/display`. The
 expected title is the entry's title followed by the file's own edit label
 from the registry (`Song (No Intro Edit)`). The comment and every
-VirtualDJ-owned frame are left out. A `TXXX:CATALOG_ID` naming another
+VirtualDJ-owned frame are left out.
+
+**A file retitled as an owner edit** (a version in `< >` while its entry is
+the published song's, or another owner edit) is not compared: the retitle is
+the owner's choice, and it goes up to the catalog with no approval. A write
+run links the file to its owner-edit entry, the one the catalog's matching
+finds or one made from its title, artist and year, writing only
+`TXXX:CATALOG_ID`, and registers it on that entry (with its release label,
+if it has one, and its synced values cleared). The entry it leaves keeps its
+plays and its other files. The next run compares the file with its new
+entry. A dry run previews the entry and changes nothing
+(`would_link_owner_edit`); the report counts `owner_edits`. A `TXXX:CATALOG_ID` naming another
 entry than the registry's link is listed under `other` as `catalog_id`, and
 a write run corrects it **without an approval**: the row's id is written
 over the tag (that frame only). This is how a catalog merge's repointed
@@ -820,7 +859,12 @@ the catalog's and is written back. A BPM within 1.5 of the recorded one (or
 its double or half) is a re-measure and is left; a title or artist that does
 not split into parts cleanly, a genre the vocabulary does not place, or a
 one-character label is held: the file keeps it and the report names it. A
-dry run asks the API what would happen and changes nothing.
+dry run asks the API what would happen and changes nothing. A file whose
+title now names an owner edit its entry is not (a version in `< >`) is not
+sent up and is left out of the chunk, so nothing is written over it and it
+is not marked synced; the reconcile links it to its owner-edit entry
+(`owner_edit_left_for_reconcile`). An owner-edit entry's displayed title
+carries its version in `< >`, and the sync writes it so.
 
 **A stale write-back is told from an edit by its value.** A tagger can
 write its own stored tags back over the library (VirtualDJ did on
@@ -919,8 +963,8 @@ The last step of the `library-backfill` library job
 Off unless the `flags.deejay_cog.library_duplicates` flag is `dry-run` or `write`. Read-only: it
 never writes, renames, moves or deletes a music file.
 
-**Each run** reads the registry's present files under the root (leaving out
-those already marked for the trash) and the catalog's title and artist for
+**Each run** reads, for each library root on its own, the registry's present
+files under that root (leaving out those already marked for the trash) and the catalog's title and artist for
 the entries they link to (`POST /v1/catalog/display`), and links files that
 share an md5 (exact copies), a catalog entry, a title and artist as the
 display rules write them out (case, spacing and punctuation ignored), or a
@@ -933,15 +977,35 @@ other. Each linked set is split into its edits; every edit with two or
 more files is a group, listing the song's other edits marked kept on
 purpose with why, so the page can never send them to the trash.
 
-A group's key is made from its files, so an unchanged library gives the
-same groups. `write` sends them to the API
-(`POST /v1/catalog/library/duplicates`), replacing the root's open groups;
-a dry run only reports them.
+**Per root** ([ADR-0009](decisions/ADR-0009-library-folders.md), decision
+4). Files are grouped only with files of the same root: a file in FX Music
+and one in the main library are never duplicates of each other.
 
-**Report:** counts for `files` and `groups` (and, in write, the API's
-`open_groups`, `added` and `dropped`), and every group with its reasons and
-files by path, when the groups changed (or in a dry run). Open groups the
-same as last run wait on the duplicates page and are not named again.
+- **The main library** (its own folder and New Music, one root): files are
+  grouped within and across the two folders, as above. Neither folder is
+  preferred; the owner picks the keeper on the duplicates page.
+- **FX Music:** files are grouped only within one folder; a different cut
+  (another length or edit) is kept on purpose, as above. Copies linked
+  across FX folders are kept there on purpose (one per role or event), so
+  they are never offered as a group to resolve: each set is listed in the
+  run report (`fx_across_folders`, with every path) for the owner to decide
+  case by case. The duplicates page does not show them.
+
+A group's key is made from its files, so an unchanged library gives the
+same groups. `write` sends each root's groups to the API
+(`POST /v1/catalog/library/duplicates`), replacing that root's open groups;
+a dry run only reports them. A root whose files can't be read or whose
+groups can't be sent is reported (`failed`, naming the root), and the other
+root still runs.
+
+**Report:** counts for `files` and `groups` over every root (and, in write,
+the API's `open_groups`, `added` and `dropped`), and every group with its
+reasons and files by path, when the root's groups changed (or in a dry
+run). Open groups the same as last run wait on the duplicates page and are
+not named again. With more than one root, each root's group count
+(`groups_main`, `groups_fx`) is given and every group line starts with the
+root, named by the settings naming its folders; with FX Music set,
+`fx_across_folders` counts its sets of copies across folders.
 
 ### Run records
 

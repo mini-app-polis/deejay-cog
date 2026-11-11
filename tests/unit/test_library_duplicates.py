@@ -322,6 +322,7 @@ def test_open_groups_unchanged_since_last_run_are_not_named_again() -> None:
     catalog = _catalog()
     summary = dup.run_duplicates(run_id="d-4", mode=FlowMode.WRITE, api=catalog)
     summary.result = DuplicateReportResult(open_groups=1, added=0, dropped=0)
+    summary.roots[0].result = summary.result
     report = MagicMock()
 
     dup._record(report, summary, 1.0)
@@ -337,3 +338,170 @@ def test_a_new_group_is_named() -> None:
     dup._record(report, summary, 1.0)
 
     assert any(c.args[0] == "group" for c in report.notice.call_args_list)
+
+
+# ── Per library root ──────────────────────────────────────────────────────
+
+FX, NEW = "fx-root", "new-music"
+#: How a report names FX Music: by the setting naming its folder.
+FX_LABEL = backfill.FX_ROOT_FOLDER_VAR
+
+
+def _fx(drive_id: str, path: str, **kw: Any) -> LibraryFile:
+    return _file(drive_id, path, **kw).model_copy(update={"library_root_id": FX})
+
+
+@dataclass
+class RootsCatalog(FakeCatalog):
+    """A registry holding files under more than one root."""
+
+    broken: set[str] = field(default_factory=set)
+
+    def list_library_files(self, **kwargs: Any) -> list[LibraryFile]:
+        root = kwargs["library_root_id"]
+        if root in self.broken:
+            raise RuntimeError("registry down")
+        rows = [r for r in self.rows if r.library_root_id == root]
+        return rows[kwargs["offset"] : kwargs["offset"] + kwargs["limit"]]
+
+
+@pytest.fixture
+def roots(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(backfill.NEW_MUSIC_FOLDER_VAR, NEW)
+    monkeypatch.setenv(backfill.FX_ROOT_FOLDER_VAR, FX)
+
+
+def test_an_fx_file_and_a_main_library_file_are_never_grouped(roots) -> None:
+    entry = uuid.uuid4()
+    catalog = RootsCatalog(
+        rows=[
+            _file("main", "Pop/walk.mp3", md5="m1", catalog_id=entry),
+            _fx("fx", "Walk-ons/walk.mp3", md5="m1", catalog_id=entry),
+        ]
+    )
+
+    summary = dup.run_duplicates(run_id="d-1", mode=FlowMode.WRITE, api=catalog)
+
+    assert summary.groups == []
+    # Each root's groups replace that root's own open groups.
+    assert [(r.library_root_id, r.groups) for r in catalog.reports] == [
+        (ROOT, []),
+        (FX, []),
+    ]
+
+
+def test_the_main_library_groups_across_its_folder_and_new_music(roots) -> None:
+    entry = uuid.uuid4()
+    catalog = RootsCatalog(
+        rows=[
+            _file("a", "Pop/s.mp3", catalog_id=entry),
+            _file("b", "/New Music/s.mp3", catalog_id=entry),
+            _file("c", "/New Music/t.mp3", md5="m2"),
+            _file("d", "/New Music/t (1).mp3", md5="m2"),
+        ]
+    )
+
+    summary = dup.run_duplicates(run_id="d-1", mode=FlowMode.WRITE, api=catalog)
+
+    assert sorted(set(_members(g)) for g in summary.groups) == [
+        {"a", "b"},
+        {"c", "d"},
+    ]
+    [main, fx] = catalog.reports
+    assert main.library_root_id == ROOT and len(main.groups) == 2
+    assert fx.library_root_id == FX and fx.groups == []
+
+
+def test_fx_copies_in_one_folder_are_a_group_unless_they_are_different_cuts(
+    roots,
+) -> None:
+    entry, other = uuid.uuid4(), uuid.uuid4()
+    catalog = RootsCatalog(
+        rows=[
+            _fx("a", "Bows/bow.mp3", md5="m1", catalog_id=entry),
+            _fx("b", "Bows/bow (1).mp3", md5="m1", catalog_id=entry),
+            # A shorter cut of the same song, in the same folder.
+            _fx("c", "Bows/bow short.mp3", catalog_id=entry, secs=30.0),
+            # Two cuts and nothing else: not a group.
+            _fx("d", "Awards/fanfare.mp3", catalog_id=other, secs=20.0),
+            _fx("e", "Awards/fanfare long.mp3", catalog_id=other, secs=60.0),
+        ]
+    )
+
+    summary = dup.run_duplicates(run_id="d-1", mode=FlowMode.WRITE, api=catalog)
+
+    [group] = summary.groups
+    assert _members(group) == {
+        "a": None,
+        "b": None,
+        "c": "a different edit (0:30 against 3:20)",
+    }
+    [_, fx] = catalog.reports
+    assert fx.library_root_id == FX and fx.groups == [group]
+
+
+def test_fx_copies_in_different_folders_are_listed_for_the_owner_not_grouped(
+    roots,
+) -> None:
+    entry = uuid.uuid4()
+    catalog = RootsCatalog(
+        rows=[
+            _fx("a", "Walk-ons/song.mp3", md5="m1", catalog_id=entry),
+            _fx("b", "Events/MADjam 2026/song.mp3", md5="m1", catalog_id=entry),
+            _fx("c", "Rotation/other.mp3", md5="m9"),
+        ]
+    )
+    report = MagicMock()
+
+    summary = dup.run_duplicates(run_id="d-1", mode=FlowMode.WRITE, api=catalog)
+    dup._record(report, summary, 1.0)
+
+    assert summary.groups == []
+    [_, fx_report] = catalog.reports
+    assert fx_report.groups == []
+    [_, fx] = summary.roots
+    assert fx.across_folders == [["Events/MADjam 2026/song.mp3", "Walk-ons/song.mp3"]]
+    assert (
+        "fx_across_folders",
+        f"{FX_LABEL}: Events/MADjam 2026/song.mp3; Walk-ons/song.mp3",
+    ) in [c.args for c in report.notice.call_args_list]
+
+
+def test_with_two_roots_each_group_names_its_root(roots) -> None:
+    catalog = RootsCatalog(
+        rows=[
+            _file("a", "Pop/x.mp3", md5="m1"),
+            _file("b", "/New Music/x.mp3", md5="m1"),
+            _fx("c", "Bows/y.mp3", md5="m2"),
+            _fx("d", "Bows/y (1).mp3", md5="m2"),
+        ]
+    )
+    report = MagicMock()
+
+    summary = dup.run_duplicates(run_id="d-1", mode=FlowMode.DRY_RUN, api=catalog)
+    dup._record(report, summary, 1.0)
+
+    groups = [c.args[1] for c in report.notice.call_args_list if c.args[0] == "group"]
+    main_label = f"{backfill.ROOT_FOLDER_VAR} and {backfill.NEW_MUSIC_FOLDER_VAR}"
+    assert groups == [
+        f"{main_label}: same_md5: Pop/x.mp3; /New Music/x.mp3",
+        f"{FX_LABEL}: same_md5, same_name: Bows/y.mp3; Bows/y (1).mp3",
+    ]
+    assert catalog.reports == []  # a dry run sends nothing
+
+
+def test_a_root_that_fails_does_not_stop_the_other(roots) -> None:
+    catalog = RootsCatalog(
+        rows=[_fx("c", "Bows/y.mp3", md5="m2"), _fx("d", "Bows/y (1).mp3", md5="m2")],
+        broken={ROOT},
+    )
+    report = MagicMock()
+
+    summary = dup.run_duplicates(run_id="d-1", mode=FlowMode.WRITE, api=catalog)
+    dup._record(report, summary, 1.0)
+
+    [fx] = catalog.reports
+    assert fx.library_root_id == FX and len(fx.groups) == 1
+    assert "registry down" in summary.roots[0].failed
+    issues = [c.args for c in report.issue.call_args_list]
+    assert issues[0][0] == "failed" and backfill.ROOT_FOLDER_VAR in issues[0][1]

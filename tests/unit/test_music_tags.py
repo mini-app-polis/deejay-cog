@@ -6,10 +6,15 @@ from __future__ import annotations
 import io
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from mini_app_polis.api.contract import CatalogLookupRequest, CatalogMatch
+from mini_app_polis.api.contract import (
+    CatalogDisplay,
+    CatalogLookupRequest,
+    CatalogMatch,
+)
 from mutagen.id3 import (
     APIC,
     COMM,
@@ -515,3 +520,105 @@ def test_the_comment_and_link_are_read_from_the_tags() -> None:
     assert music_tags.linked_catalog_id(data) == str(_CATALOG_ID)
     assert music_tags.comment_text(_mp3()) == ""
     assert music_tags.linked_catalog_id(_mp3()) == ""
+
+
+# ---------------------------------------------------------------------------
+# Owner edits: a version in < >
+# ---------------------------------------------------------------------------
+
+_BABY = "Baby What You Want Me To Do"
+
+
+@pytest.mark.parametrize(
+    ("title", "label"),
+    [
+        (f"{_BABY} <Intro Cut>", None),
+        (f"{_BABY} <No Intro Edit>", None),
+        (f"{_BABY} - <Clean>", None),
+        (f"{_BABY} <Intro Cut> (Clean)", "Clean"),
+        (f"{_BABY} <Self Censored> - Radio Edit", "Radio Edit"),
+    ],
+)
+def test_a_version_in_angle_brackets_is_never_read_as_a_release_label(
+    title, label
+) -> None:
+    assert music_tags.edit_label(title) == label
+
+
+@pytest.mark.parametrize(
+    ("title", "version"),
+    [
+        (f"{_BABY} <Intro Cut>", "Intro Cut"),
+        (f"{_BABY} <  Self   Censored >", "Self Censored"),
+        (f"{_BABY} <Intro Cut> (Clean)", "Intro Cut"),
+        (f"{_BABY} (Intro Cut)", None),
+        (f"{_BABY} <>", None),
+        (_BABY, None),
+    ],
+)
+def test_an_owner_edit_is_read_from_the_angle_brackets(title, version) -> None:
+    assert music_tags.owner_edit_version(title) == version
+    assert music_tags.is_owner_edit(title) is (version is not None)
+
+
+def test_an_owner_edit_fits_only_an_owner_edit_entry() -> None:
+    published = CatalogMatch(id=uuid.uuid4(), title=_BABY, artist="Etta James")
+    cut = published.model_copy(update={"owner_edit": True})
+    assert not music_tags.owner_edit_fits(f"{_BABY} <Intro Cut>", published)
+    assert music_tags.owner_edit_fits(f"{_BABY} <Intro Cut>", cut)
+    # An unmarked title fits either, as before.
+    assert music_tags.owner_edit_fits(_BABY, published)
+    assert music_tags.owner_edit_fits(f"{_BABY} (No Intro Edit)", published)
+
+
+def test_an_owner_edit_entry_is_written_with_its_version_in_angle_brackets() -> None:
+    cut = CatalogMatch(
+        id=uuid.uuid4(),
+        title=_BABY,
+        remix="Intro Cut",
+        artist="Etta James",
+        owner_edit=True,
+    )
+    assert music_tags.catalog_title(cut) == f"{_BABY} <Intro Cut>"
+    shown = cut.model_copy(update={"title": f"{_BABY} <Intro Cut>", "remix": None})
+    assert music_tags.catalog_title(shown) == f"{_BABY} <Intro Cut>"
+    remix = cut.model_copy(update={"owner_edit": False})
+    assert music_tags.catalog_title(remix) == f"{_BABY} (Intro Cut)"
+
+
+def _shown(title: str, owner_edit: bool) -> CatalogDisplay:
+    return CatalogDisplay(
+        id=uuid.uuid4(),
+        title=title,
+        artist="Etta James",
+        owner_edit=owner_edit,
+        changed_at=datetime.now(UTC),
+    )
+
+
+@pytest.mark.parametrize(
+    ("title", "shown", "owner_edit", "needs"),
+    [
+        (f"{_BABY} <Intro Cut>", _BABY, False, True),
+        (f"{_BABY} <Intro Cut>", f"{_BABY} (Intro Cut)", False, True),
+        (f"{_BABY} <Intro Cut>", f"{_BABY} <Intro Cut>", True, False),
+        (f"{_BABY} <Intro Cut> (Clean)", f"{_BABY} <Intro Cut>", True, False),
+        (f"{_BABY} <Intro Cut>", f"{_BABY} {{Intro Cut}}", True, False),
+        (f"{_BABY} <Self Censored>", f"{_BABY} <Intro Cut>", True, True),
+        (_BABY, f"{_BABY} <Intro Cut>", True, False),
+        (_BABY, _BABY, False, False),
+    ],
+)
+def test_a_file_retitled_as_an_owner_edit_needs_an_owner_edit_entry(
+    title, shown, owner_edit, needs
+) -> None:
+    display = _shown(shown, owner_edit)
+    assert music_tags.needs_owner_edit_entry(title, display) is needs
+
+
+def test_an_owner_edit_entry_is_displayed_with_its_brackets_and_the_files_label() -> (
+    None
+):
+    display = _shown(f"{_BABY} <Intro Cut>", True)
+    fields = music_tags.display_fields(display, label="Clean")
+    assert fields["title"] == f"{_BABY} <Intro Cut> (Clean)"

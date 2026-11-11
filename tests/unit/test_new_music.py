@@ -767,3 +767,88 @@ def test_the_registry_is_read_once_a_run_and_paged(
     flow.new_music(run_id="m-1")
 
     assert [c["offset"] for c in api.listings] == [0, 2]
+
+
+# ---------------------------------------------------------------------------
+# Owner edits: a version in < > in the file's title
+# ---------------------------------------------------------------------------
+
+_BABY = "Baby What You Want Me To Do"
+
+
+class OwnerEditApi(FakeApi):
+    """A catalog that makes an owner-edit entry for a title in < >."""
+
+    def create_library_entry(self, payload: LibraryEntryCreate):
+        self.entries.append(payload)
+        entry = CatalogMatch(
+            id=_NEW_ID,
+            title=payload.title,
+            artist=payload.artist,
+            owner_edit="<" in payload.title,
+        )
+        return LibraryEntryCreated(
+            entry=entry, created=not payload.preview, previewed=payload.preview
+        )
+
+
+@pytest.fixture
+def owner_edit_api(monkeypatch: pytest.MonkeyPatch, wired) -> OwnerEditApi:
+    api = OwnerEditApi({_BABY.lower(): _match(title=_BABY, remix=None)})
+    monkeypatch.setattr(flow, "api_client", lambda **_: api)
+    return api
+
+
+def test_an_owner_edit_is_taken_in_on_an_owner_edit_entry_and_named_without_brackets(
+    settings, owner_edit_api, drive
+) -> None:
+    title = f"{_BABY} <Intro Cut>"
+    # The catalog's answer is the published song: not the owner edit's entry.
+    owner_edit_api.answers[title.lower()] = _match(title=_BABY, remix=None)
+    drive.add("cut.mp3", IN, _tagged(title, "Etta James"))
+
+    summary = flow.new_music(run_id="m-1")
+
+    (sent,) = owner_edit_api.entries
+    assert sent.title == title and sent.preview is False
+    (copy,) = drive.in_folder(DEST)
+    assert copy.name == f"{_BABY} Intro Cut_Etta James.mp3"
+    assert "<" not in copy.name and ">" not in copy.name
+    assert tag_snapshot(copy.data)["title"] == title
+    assert summary.new_entries == [f"cut.mp3 -> Etta James - {title}"]
+
+
+def test_an_owner_edit_entry_the_catalog_has_keeps_its_version_in_the_title(
+    settings, owner_edit_api, drive
+) -> None:
+    title = f"{_BABY} <Intro Cut> (Clean)"
+    # An owner-edit entry whose version is a part of its own.
+    owner_edit_api.answers[title.lower()] = _match(
+        title=_BABY, remix="Intro Cut", artist="Etta James", owner_edit=True
+    )
+    drive.add("cut.mp3", IN, _tagged(title, "Etta James"))
+
+    flow.new_music(run_id="m-1")
+
+    assert owner_edit_api.entries == []
+    (copy,) = drive.in_folder(DEST)
+    assert tag_snapshot(copy.data)["title"] == title
+    assert copy.name == f"{_BABY} Intro Cut (Clean)_Etta James.mp3"
+
+
+def test_an_owner_edit_the_catalog_does_not_take_as_one_goes_to_review(
+    settings, wired, drive, api
+) -> None:
+    # The plain fake makes an ordinary entry for any title.
+    drive.add("cut.mp3", IN, _tagged(f"{_BABY} <Intro Cut>", "Etta James"))
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert drive.in_folder(DEST) == []
+    assert [i.name for i in drive.in_folder(REVIEW)] == ["cut.mp3"]
+    assert summary.identified == []
+
+
+def test_names_never_carry_the_owner_edit_brackets() -> None:
+    tags = {"title": f"{_BABY} <Intro Cut>", "artist": "Etta James"}
+    assert flow.delivery_name(tags, "x.mp3") == f"{_BABY} Intro Cut_Etta James.mp3"

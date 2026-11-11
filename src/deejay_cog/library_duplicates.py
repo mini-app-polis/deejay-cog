@@ -23,11 +23,21 @@ files is split into its edits; every edit with two or more files is a
 group, and the files of the song's other edits are shown in it marked kept
 on purpose, with why, so they can never be sent to the trash through it.
 
+**Per library root** (ADR-0009, decision 4). Files are grouped only with
+files of the same root, so an FX Music file and a main-library file are
+never duplicates of each other. In the main library (its own folder and New
+Music, one root) they are grouped within and across its folders, as above.
+In FX Music, which keeps copies of one file in several role and event
+folders on purpose, files are grouped only within one folder; copies linked
+across FX folders are not offered as duplicates but listed in the run
+report (``fx_across_folders``) for the owner to decide case by case.
+
 Each group has a key made from its files, so an unchanged library reports
 the same groups every run. With ``flags.deejay_cog.library_duplicates`` at ``write`` the
 groups go to the API (``POST /v1/catalog/library/duplicates``), where the
-WCS duplicates page shows them; they replace the open groups for the root.
-A dry run lists the groups in the run report only.
+WCS duplicates page shows them; they replace the open groups for that root,
+each root reported on its own. A dry run lists the groups in the run report
+only.
 """
 
 from __future__ import annotations
@@ -58,7 +68,7 @@ from mini_app_polis.pipeline_status import run_report
 from deejay_cog._pipeline_eval import REPO
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
-from deejay_cog.library_backfill import BackfillSettings
+from deejay_cog.library_backfill import BackfillSettings, LibraryRoot
 from deejay_cog.music_safety import FlowMode, flow_mode, local_run_id
 
 log = logger_mod.get_logger()
@@ -105,8 +115,25 @@ class Catalog(Protocol):
 
 
 @dataclass
+class RootDuplicates:
+    """The groups found under one library root, and what the API made of
+    them."""
+
+    root: LibraryRoot
+    files: int = 0
+    groups: list[DuplicateGroupReport] = field(default_factory=list)
+    left_out: int = 0
+    result: DuplicateReportResult | None = None
+    #: FX Music: files linked as copies across its folders, each set listed
+    #: for the owner to decide, never offered as a group to resolve.
+    across_folders: list[list[str]] = field(default_factory=list)
+    failed: str = ""
+
+
+@dataclass
 class DuplicatesSummary:
-    """The groups one run found, and what the API made of them."""
+    """The groups one run found, and what the API made of them: the totals
+    over every root, and each root's own."""
 
     mode: FlowMode
     problems: list[str] = field(default_factory=list)
@@ -115,6 +142,7 @@ class DuplicatesSummary:
     paths: dict[str, str] = field(default_factory=dict)
     left_out: int = 0
     result: DuplicateReportResult | None = None
+    roots: list[RootDuplicates] = field(default_factory=list)
 
 
 def _normal(text: str) -> str:
@@ -204,11 +232,10 @@ def _why_kept(f: LibraryFile, edit: list[LibraryFile]) -> str:
     return "a different edit"
 
 
-def find_groups(
+def _songs(
     files: list[LibraryFile], shown: dict[uuid.UUID, CatalogDisplay]
-) -> list[DuplicateGroupReport]:
-    """The duplicate groups among ``files``, sorted by key; the same files
-    always give the same groups."""
+) -> tuple[list[list[LibraryFile]], _Links]:
+    """``files`` in sets linked as copies of one song, and the links."""
     files = sorted(files, key=lambda f: f.drive_file_id)
     links = _Links([f.drive_file_id for f in files])
     buckets: dict[tuple[str, str], list[str]] = defaultdict(list)
@@ -229,9 +256,17 @@ def find_groups(
     songs: dict[str, list[LibraryFile]] = defaultdict(list)
     for f in files:
         songs[links.find(f.drive_file_id)].append(f)
+    return list(songs.values()), links
 
+
+def find_groups(
+    files: list[LibraryFile], shown: dict[uuid.UUID, CatalogDisplay]
+) -> list[DuplicateGroupReport]:
+    """The duplicate groups among ``files``, sorted by key; the same files
+    always give the same groups."""
+    songs, links = _songs(files, shown)
     groups: list[DuplicateGroupReport] = []
-    for song in songs.values():
+    for song in songs:
         if len(song) < 2:
             continue
         for edit in _edits(song):
@@ -263,6 +298,35 @@ def find_groups(
                 )
             )
     return sorted(groups, key=lambda g: g.key)
+
+
+def _folder(path: str) -> str:
+    """The folder a registered path is in, under its root ("" at the top)."""
+    return path.rpartition("/")[0]
+
+
+def find_fx_groups(
+    files: list[LibraryFile], shown: dict[uuid.UUID, CatalogDisplay]
+) -> tuple[list[DuplicateGroupReport], list[list[str]]]:
+    """FX Music's duplicate groups, and its copies across folders.
+
+    Copies of one file in the same folder are grouped as anywhere else, a
+    different cut (another length or edit) kept on purpose. Copies in
+    different folders are kept there on purpose (one per role or event), so
+    they are never grouped: each set of files linked across folders is
+    returned as its paths, for the owner to decide."""
+    by_folder: dict[str, list[LibraryFile]] = defaultdict(list)
+    for f in files:
+        by_folder[_folder(f.path)].append(f)
+    groups: list[DuplicateGroupReport] = []
+    for folder in sorted(by_folder):
+        groups.extend(find_groups(by_folder[folder], shown))
+    across = [
+        sorted(f.path for f in song)
+        for song in _songs(files, shown)[0]
+        if len({_folder(f.path) for f in song}) > 1
+    ]
+    return sorted(groups, key=lambda g: g.key), sorted(across)
 
 
 def _files(api: Catalog, root: str) -> list[LibraryFile]:
@@ -314,21 +378,53 @@ def run_duplicates(
             client = api or cast(
                 Catalog, api_client(base_url=api_base_url().strip() or None)
             )
-            rows = _files(client, settings.root)
-            summary.files = len(rows)
-            summary.paths = {r.drive_file_id: r.path for r in rows}
-            groups = find_groups(rows, _displays(client, rows))
-            summary.left_out = max(0, len(groups) - DUPLICATE_REPORT_MAX_GROUPS)
-            summary.groups = groups[:DUPLICATE_REPORT_MAX_GROUPS]
-            if mode.writes:
-                summary.result = client.report_duplicate_groups(
-                    DuplicateReport(
-                        library_root_id=settings.root, groups=summary.groups
-                    )
-                )
+            for root in settings.roots:
+                summary.roots.append(_root_duplicates(client, root, summary))
+            _totals(summary)
         finally:
             _record(report, summary, monotonic() - started_at)
     return summary
+
+
+def _root_duplicates(
+    api: Catalog, root: LibraryRoot, summary: DuplicatesSummary
+) -> RootDuplicates:
+    """Group one root's files and, in write mode, send its groups. A
+    failure is the root's alone: the other roots still run."""
+    found = RootDuplicates(root)
+    try:
+        rows = _files(api, root.root_id)
+        found.files = len(rows)
+        summary.paths.update({r.drive_file_id: r.path for r in rows})
+        shown = _displays(api, rows)
+        if root.key == "fx":
+            groups, found.across_folders = find_fx_groups(rows, shown)
+        else:
+            groups = find_groups(rows, shown)
+        found.left_out = max(0, len(groups) - DUPLICATE_REPORT_MAX_GROUPS)
+        found.groups = groups[:DUPLICATE_REPORT_MAX_GROUPS]
+        if summary.mode.writes:
+            found.result = api.report_duplicate_groups(
+                DuplicateReport(library_root_id=root.root_id, groups=found.groups)
+            )
+    except Exception as exc:  # noqa: BLE001 — one root must not stop the other
+        log.exception("library-duplicates: %s failed", root.label)
+        found.failed = f"{type(exc).__name__}: {exc}"
+    return found
+
+
+def _totals(summary: DuplicatesSummary) -> None:
+    """The run's totals over its roots."""
+    summary.files = sum(r.files for r in summary.roots)
+    summary.groups = [g for r in summary.roots for g in r.groups]
+    summary.left_out = sum(r.left_out for r in summary.roots)
+    results = [r.result for r in summary.roots if r.result is not None]
+    if results:
+        summary.result = DuplicateReportResult(
+            open_groups=sum(r.open_groups for r in results),
+            added=sum(r.added for r in results),
+            dropped=sum(r.dropped for r in results),
+        )
 
 
 def library_duplicates(*, run_id: str | None = None) -> DuplicatesSummary:
@@ -358,17 +454,30 @@ def _record(report: Any, summary: DuplicatesSummary, duration_sec: float) -> Non
         report.count("open_groups", summary.result.open_groups)
         report.count("added", summary.result.added)
         report.count("dropped", summary.result.dropped)
-    unchanged = (
-        summary.result is not None
-        and not summary.result.added
-        and not summary.result.dropped
-    )
-    for group in [] if unchanged else summary.groups:
-        # The groups are named when they change (or in a dry run); open
-        # groups that are the same as last run wait on the page, unrepeated.
-        parts = []
-        for m in group.files:
-            path = summary.paths.get(m.drive_file_id, m.drive_file_id)
-            parts.append(f"{path} (kept: {m.why_kept})" if m.kept_on_purpose else path)
-        report.notice("group", f"{', '.join(group.reasons)}: {'; '.join(parts)}")
+    # With more than one root, every line names the root it is about.
+    several = len(summary.roots) > 1
+    for found in summary.roots:
+        named = f"{found.root.label}: " if several else ""
+        if found.failed:
+            report.issue("failed", f"{found.root.label}: {found.failed}")
+        if several:
+            report.count(f"groups_{found.root.key}", len(found.groups))
+        result = found.result
+        unchanged = result is not None and not result.added and not result.dropped
+        for group in [] if unchanged else found.groups:
+            # The groups are named when they change (or in a dry run); open
+            # groups that are the same as last run wait on the page, unrepeated.
+            parts = []
+            for m in group.files:
+                path = summary.paths.get(m.drive_file_id, m.drive_file_id)
+                parts.append(
+                    f"{path} (kept: {m.why_kept})" if m.kept_on_purpose else path
+                )
+            report.notice(
+                "group", f"{named}{', '.join(group.reasons)}: {'; '.join(parts)}"
+            )
+        if found.root.key == "fx":
+            report.count("fx_across_folders", len(found.across_folders))
+            for paths in found.across_folders:
+                report.notice("fx_across_folders", f"{named}{'; '.join(paths)}")
     report.ok(len(summary.groups))

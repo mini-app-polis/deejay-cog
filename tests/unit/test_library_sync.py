@@ -1119,3 +1119,92 @@ def test_a_dry_run_record_and_files_left_in_the_state_folder_are_not_records(
     assert summary.put_back == []
     [edited] = catalog.edited
     assert edited.tags.title == "honesty"  # an edit, as far as the run can tell
+
+
+# ---------------------------------------------------------------------------
+# Owner edits
+# ---------------------------------------------------------------------------
+
+_BABY = "Baby What You Want Me To Do"
+
+
+def test_an_owner_edit_entry_is_written_with_its_version_in_the_owner_edit_pair(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    # The entry's version was edited; it is an owner edit, shown in < >.
+    catalog.displays[entry] = _display(
+        entry, title=f"{_BABY} <Intro Cut>", artist="Etta James", owner_edit=True
+    )
+    drive_id = _linked(
+        drive,
+        catalog,
+        "baby.mp3",
+        _song(entry, f"{_BABY} <Intro Edit> (Clean)", "Etta James"),
+        entry,
+        label="Clean",
+        synced=_synced(title=f"{_BABY} <Intro Edit> (Clean)", artist="Etta James"),
+    )
+
+    summary = sync.library_sync(run_id="y-1")
+
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TIT2"] == f"{_BABY} <Intro Cut> (Clean)"
+    assert frames["COMM::eng"] == "cue: drop at 1:02"
+    assert summary.written == ["RnB/baby.mp3 (title)"]
+
+
+def test_a_file_retitled_as_an_owner_edit_is_left_for_the_reconcile(
+    settings, wired, drive, catalog, posted
+) -> None:
+    entry = uuid.uuid4()
+    # The published song's entry; its title changed in the catalog too.
+    catalog.displays[entry] = _display(entry, title=f"{_BABY}!", artist="Etta James")
+    retitled = f"{_BABY} <Intro Cut>"
+    data = _song(entry, retitled, "Etta James")
+    drive_id = _linked(
+        drive,
+        catalog,
+        "baby.mp3",
+        data,
+        entry,
+        synced=_synced(title=_BABY, artist="Etta James"),
+    )
+    _listed(drive, {drive_id: "2026-11-08T09:30:00.000Z"})
+
+    summary = sync.library_sync(run_id="y-1")
+
+    # Not sent up as an edit to the published entry, not written over, and
+    # not marked synced: the reconcile links it to its owner-edit entry.
+    assert catalog.edited == []
+    assert drive.items[drive_id].data == data
+    assert catalog.marked == []
+    assert summary.owner_edits == [
+        f"RnB/baby.mp3: title {retitled!r} (an owner edit: the reconcile links "
+        "it to its own entry)"
+    ]
+    assert "owner_edit_left_for_reconcile" in _text(posted)
+
+
+def test_an_owner_edit_on_its_own_entry_has_its_edits_sent_up_as_before(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    title = f"{_BABY} <Intro Cut>"
+    catalog.displays[entry] = _display(
+        entry, title=title, artist="Etta James", owner_edit=True
+    )
+    drive_id = _linked(
+        drive,
+        catalog,
+        "baby.mp3",
+        _song(entry, title, "Etta James", "Blues"),
+        entry,
+        synced=_synced(title=title, artist="Etta James"),
+    )
+    _listed(drive, {drive_id: "2026-11-08T09:30:00.000Z"})
+
+    sync.library_sync(run_id="y-1")
+
+    [edited] = catalog.edited
+    assert edited.tags.title == title and edited.tags.genre == "Blues"

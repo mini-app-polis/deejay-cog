@@ -259,10 +259,39 @@ EDIT_LABELS = (
 )
 _LABEL_PART = re.compile(r"[\[(]([^\])]*)[\])]|\s+-\s+(.*)$")
 
+#: An owner edit's version, in the owner-edit pair ``< >``: a cut the owner
+#: made by hand ("Song <Intro Cut>"), not the published recording and not a
+#: release label (ADR-0008, decided 2026-11-11).
+_OWNER_EDIT = re.compile(r"<([^<>]*)>")
+
+
+def owner_edit_version(title: str) -> str | None:
+    """The owner-edit version a file's title names ("Song <Intro Cut>" ->
+    "Intro Cut"), or None when the title is not an owner edit."""
+    for match in _OWNER_EDIT.finditer(title):
+        version = " ".join(match.group(1).split())
+        if version:
+            return version
+    return None
+
+
+def is_owner_edit(title: str) -> bool:
+    """Whether a file's title names an owner edit (a version in ``< >``)."""
+    return owner_edit_version(title) is not None
+
+
+def owner_edit_fits(title: str, match: CatalogMatch) -> bool:
+    """Whether a catalog entry found for a file can be its entry: a title
+    naming an owner edit fits only an owner-edit entry, never the published
+    song's. Any other title fits as before."""
+    return match.owner_edit or not is_owner_edit(title)
+
 
 def edit_label(title: str) -> str | None:
     """The release label in a file's title ("Song (No Intro Edit)" -> "No
-    Intro Edit"), or None when it carries none."""
+    Intro Edit"), or None when it carries none. A version in ``< >`` is an
+    owner edit, never a release label, so it is not read."""
+    title = _OWNER_EDIT.sub(" ", title)
     for match in _LABEL_PART.finditer(title):
         part = " ".join((match.group(1) or match.group(2) or "").split())
         for label in EDIT_LABELS:
@@ -306,9 +335,13 @@ def ingest_track(row: dict[str, str]) -> IngestTrack | None:
 
 def catalog_title(match: CatalogMatch) -> str:
     """The title frame's text: the catalog's title, with its remix in
-    parentheses when it has one."""
+    parentheses when it has one (an owner edit's in ``< >``)."""
     remix = (match.remix or "").strip()
-    return f"{match.title} ({remix})" if remix else match.title
+    if not remix:
+        return match.title
+    return (
+        f"{match.title} <{remix}>" if match.owner_edit else f"{match.title} ({remix})"
+    )
 
 
 def _bpm_text(bpm: float) -> str:
@@ -380,6 +413,19 @@ def display_fields(
         "bpm": None if display.bpm is None else f"{display.bpm:g}",
         "label": display.label or None,
     }
+
+
+def needs_owner_edit_entry(title: str, display: CatalogDisplay) -> bool:
+    """Whether a linked file's title names an owner edit its entry is not:
+    the entry is the published song (or another owner edit), so the file
+    belongs on an owner-edit entry of its own. The owner retitled it in its
+    tags, and that is his choice (ADR-0008, decided 2026-11-11)."""
+    if not is_owner_edit(title):
+        return False
+    if not display.owner_edit:
+        return True
+    shown = display_title(display, edit_label(title))
+    return _agree_key(title) != _agree_key(shown)
 
 
 #: The frame each owned field is written to.

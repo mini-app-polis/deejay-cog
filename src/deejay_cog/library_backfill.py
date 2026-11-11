@@ -41,7 +41,9 @@ the first file.
 longer in the folder the manifest has it in, or in the trash → skipped,
 named. No usable title or artist → skipped and named as needing
 fingerprinting (library files are **not** sent to the fingerprint function:
-that writes MusicBrainz tags). Not in the catalog → skipped, named. In the
+that writes MusicBrainz tags). Not in the catalog → skipped, named; so is
+an owner edit (a version in ``< >`` in its title) the catalog has no
+owner-edit entry for, which identify then takes in. In the
 catalog and already carrying its tags → nothing written. Otherwise written
 in place, writing only ``TXXX:CATALOG_ID`` (no other frame changes, even an
 empty field), with the head revision kept forever, the audio checked before
@@ -119,6 +121,7 @@ from deejay_cog.music_tags import (
     edit_label,
     ingest_track,
     linked_catalog_id,
+    owner_edit_fits,
     read_tag_row,
     write_catalog_tags,
 )
@@ -715,6 +718,10 @@ class Backfill:
             self.register(item, name, meta, data, None)
             return "needs_fingerprinting"
         match = self.api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+        if match is not None and not owner_edit_fits(row["title"], match):
+            # An owner edit is never linked to the published song's entry:
+            # identify takes it in as an owner-edit entry of its own.
+            match = None
         if match is None:
             self._skip(
                 item,
