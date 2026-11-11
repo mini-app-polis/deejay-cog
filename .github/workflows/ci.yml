@@ -88,6 +88,26 @@ jobs:
       region: ${{ vars.AWS_REGION }}
       function-name: ${{ vars.AWS_FINGERPRINT_FUNCTION_NAME }}
 
+  # The library worker: a third function from the same package and release,
+  # for the library-* modes on their own queue, deployed through its own
+  # role. Its handler and architecture match the function declared in
+  # mini-app-polis/infra.
+  deploy-library:
+    needs: release
+    if: needs.release.outputs.tag != ''
+    permissions:
+      id-token: write
+      contents: read
+    uses: mini-app-polis/.github/.github/workflows/lambda-deploy.yml@v3
+    with:
+      ref: ${{ needs.release.outputs.tag }}
+      handler: deejay_cog.library_worker.lambda_handler
+      architecture: x86_64
+      python-version: "3.14"
+      role-arn: ${{ vars.AWS_LIBRARY_DEPLOY_ROLE_ARN }}
+      region: ${{ vars.AWS_REGION }}
+      function-name: ${{ vars.AWS_LIBRARY_FUNCTION_NAME }}
+
   # Conformance is graded on every push to main once CI passes, before the
   # release (CD-031), so a promotion that cuts no release (docs or chore
   # commits only) is graded too. Nothing waits for the answer: the job

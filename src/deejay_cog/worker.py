@@ -191,13 +191,17 @@ except Exception:  # noqa: BLE001 — the report is not the job
     log.exception("worker: could not log the effective settings")
 
 
-def _message_of(body: str) -> DeejayRunMessage:
-    """The run message, with a mode this worker runs. Raises
-    UnprocessableMessage otherwise."""
+def _message_of(
+    body: str, accepts: Callable[[str], bool] | None = None
+) -> DeejayRunMessage:
+    """The run message, with a mode this worker runs (and ``accepts``, when
+    given). Raises UnprocessableMessage otherwise."""
     message = parse_message(body, DeejayRunMessage)
     mode = message.payload.mode
     if mode not in MODES:
         raise UnprocessableMessage(f"unknown mode {mode!r}; supported: {sorted(MODES)}")
+    if accepts is not None and not accepts(mode):
+        raise UnprocessableMessage(f"mode {mode!r} does not run on this worker")
     return message
 
 
@@ -206,7 +210,9 @@ def _mode_of(body: str) -> str:
     return _message_of(body).payload.mode
 
 
-def process_message(body: str, *, run_id: str) -> None:
+def process_message(
+    body: str, *, run_id: str, accepts: Callable[[str], bool] | None = None
+) -> None:
     """Run the flow one message asks for. Raises if it must be redelivered.
 
     A flow that raises is retried as a whole. That is safe for both flows
@@ -215,7 +221,7 @@ def process_message(body: str, *, run_id: str) -> None:
     time, and live history re-sends the most recent file's plays, which
     the API deduplicates.
     """
-    message = _message_of(body)
+    message = _message_of(body, accepts)
     mode = message.payload.mode
     request = message.request
     log.info("worker: run %s mode=%s rss=%sMB", run_id, mode, _rss_mb())
@@ -282,8 +288,17 @@ def _attempt(record: dict[str, Any]) -> str:
     return str((record.get("attributes") or {}).get("ApproximateReceiveCount", "?"))
 
 
-def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+def lambda_handler(
+    event: dict[str, Any],
+    context: Any,
+    *,
+    accepts: Callable[[str], bool] | None = None,
+) -> dict[str, Any]:
     """Run each record's flow, and name the records that must come back.
+
+    With ``accepts``, a mode it refuses is an unprocessable message: it fails
+    and, after its receives, dead-letters, so a misrouted message shows up as
+    the dead-letter alarm instead of running on the wrong worker.
 
     Never raises. An exception escaping here fails the whole batch; at
     ``batch_size = 1`` that looks identical to reporting the one record,
@@ -323,7 +338,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     margin_seconds=DEADLINE_MARGIN_SECONDS,
                     request_headroom_seconds=REQUEST_HEADROOM_SECONDS,
                 ):
-                    process_message(body, run_id=message_id)
+                    process_message(body, run_id=message_id, accepts=accepts)
             except UnprocessableMessage:
                 timed.label(outcome="unprocessable")
                 raise
