@@ -491,6 +491,12 @@ compared, and the next run lists the files after it
 (`GET /v1/catalog/library/files?after=`), so a file linked, unlinked or gone
 earlier in the order between runs neither repeats nor skips one.
 
+**Approved files first:** a write run first compares the files with an open
+difference the owner has approved (read from `library-reconcile-open.json`
+and the approvals), up to `LIBRARY_RECONCILE_CHUNK_SIZE` of them, so an
+approval settles on the next run instead of when the cursor comes round.
+They do not move the cursor; the report counts them as `approved_first`.
+
 **What is compared:** title (with its version), artist, year, genre, BPM and
 label in the file's ID3 tags, against `POST /v1/catalog/display`. The
 expected title is the entry's title followed by the file's own edit label

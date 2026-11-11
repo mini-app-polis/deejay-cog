@@ -27,6 +27,13 @@ the next pass.
 Past the run's deadline the run stops between files and saves where it got
 to.
 
+**Approved files first.** A write run first compares the files that have
+an open difference the owner has approved (from ``library-reconcile-open.json``
+and the approvals), up to ``LIBRARY_RECONCILE_CHUNK_SIZE`` of them, so an
+approval settles on the next run rather than when the cursor comes round.
+They do not move the cursor; the run then carries on from it as usual, and
+a file it already compared first is passed over.
+
 **What is compared.** The owned fields (title with its version, artist,
 year, genre, BPM, label) as the file's ID3 tags hold them, against the
 entry as the display rules write it out (``POST /v1/catalog/display``). The
@@ -194,6 +201,9 @@ DEFAULT_CHUNK_SIZE = 50
 CURSOR_NAME = f"{FLOW_NAME}-cursor.json"
 #: Every open difference and when it was first seen open, across runs.
 OPEN_NAME = f"{FLOW_NAME}-open.json"
+
+#: Registry rows asked for per page when finding the approved files.
+REGISTRY_PAGE = 500
 
 #: A difference open this long has had a full pass to close and did not:
 #: it has no decision, or its decision cannot apply. The report warns once.
@@ -653,6 +663,8 @@ class ReconcileSummary:
     long_open: dict[str, int] = field(default_factory=dict)
     long_open_warn: bool = False
     open_problem: str = ""
+    #: Files compared first because they had an approved open difference.
+    approved_first: int = 0
 
     @property
     def files_with_differences(self) -> int:
@@ -686,6 +698,47 @@ def _page(
         limit=limit,
         **paging,
     )
+
+
+def _approved_open(
+    drive: Any,
+    api: Catalog,
+    settings: BackfillSettings,
+    approvals: Approvals,
+    limit: int,
+) -> list[LibraryFile]:
+    """The registry rows of the files with an open difference the owner has
+    approved, in the registry's order, at most ``limit``. Empty when the
+    open-differences file cannot be read (the run goes on with its cursor)."""
+    try:
+        held = StateFile(drive, settings.state, OPEN_NAME).load() or {}
+    except StateProblem:
+        log.exception("library-reconcile: open differences not read")
+        return []
+    ids: set[str] = set()
+    for key, value in (held.get("open") or {}).items():
+        file_id, _, name = str(key).partition("|")
+        diff = Difference(
+            str(value.get("path") or ""),
+            file_id,
+            name,
+            str(value.get("file") or ""),
+            str(value.get("catalog") or ""),
+            str(value.get("kind") or "other"),
+        )
+        if approvals.approves(diff):
+            ids.add(file_id)
+    if not ids:
+        return []
+    found: list[LibraryFile] = []
+    offset = 0
+    while len(found) < limit:
+        page = _page(api, settings.root, REGISTRY_PAGE, offset=offset)
+        found.extend(row for row in page if row.drive_file_id in ids)
+        if len(page) < REGISTRY_PAGE:
+            break
+        offset += len(page)
+    return found[:limit]
 
 
 def _resume(
@@ -933,11 +986,22 @@ def _reconcile(
             stage=f"identified files from {position + 1}",
             folders={"root": settings.root, "state": settings.state},
         ).attach(drive, settings.state)
-    displays = _displays(api, rows) if rows else {}
+    first: list[LibraryFile] = []
+    if record is not None and approvals != Approvals():
+        first = _approved_open(drive, api, settings, approvals, chunk_size)
+    summary.approved_first = len(first)
+    done_first = {row.drive_file_id for row in first}
+    queue = [(row, True) for row in first] + [(row, False) for row in rows]
+    displays = _displays(api, first + rows) if queue else {}
 
     status = "complete"
     try:
-        for row in rows:
+        for row, is_first in queue:
+            if not is_first and row.drive_file_id in done_first:
+                # Compared first in this run: only the cursor moves past it.
+                summary.position += 1
+                summary.after = str(row.id)
+                continue
             if shared_deadline_passed():
                 summary.stopped = f"run deadline reached before {row.path}"
                 status = "stopped"
@@ -967,8 +1031,9 @@ def _reconcile(
                     break
                 log.exception("library-reconcile: failed on %s", row.path)
                 summary.failed.append(f"{row.path} ({type(exc).__name__}: {exc})")
-            summary.position += 1
-            summary.after = str(row.id)
+            if not is_first:
+                summary.position += 1
+                summary.after = str(row.id)
     finally:
         # Saved even past the deadline: the next run must carry on from here.
         with without_run_deadline():
@@ -1200,6 +1265,7 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
         )
     report.count("long_open", long_open)
     report.count("compared", summary.compared)
+    report.count("approved_first", summary.approved_first)
     report.count("matching", summary.matching)
     report.count("with_differences", summary.files_with_differences)
     for kind in KINDS:
