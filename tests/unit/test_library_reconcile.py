@@ -930,6 +930,24 @@ def test_a_cursor_file_already_settled_first_is_passed_over(
     assert _state(drive, rec.CURSOR_NAME)["position"] == 1
 
 
+def test_an_approved_difference_that_stays_open_is_not_put_first_again(
+    settings, writing, drive, monkeypatch
+) -> None:
+    monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "1")
+    ids = _library(drive, writing, [{}, {}, {"genre": "Neo Soul"}])
+    _held_open(drive, ids[2], "genre", "genre_remapped")
+    _approve(writing, kinds=["genre_remapped"])
+    # The write can't land: the file keeps its value and the difference stays.
+    monkeypatch.setattr(rec, "write_owned_fields", lambda *_: None)
+
+    first = rec.library_reconcile(run_id="r-1")
+    again = rec.library_reconcile(run_id="r-2")
+
+    assert first.approved_first == 1
+    assert _state(drive, rec.OPEN_NAME)["open"][f"{ids[2]}|genre"]["tried"]
+    assert again.approved_first == 0
+
+
 def test_an_unapproved_open_difference_waits_for_the_cursor(
     settings, writing, drive, monkeypatch
 ) -> None:

@@ -496,6 +496,9 @@ difference the owner has approved (read from `library-reconcile-open.json`
 and the approvals), up to `LIBRARY_RECONCILE_CHUNK_SIZE` of them, so an
 approval settles on the next run instead of when the cursor comes round.
 They do not move the cursor; the report counts them as `approved_first`.
+An approved difference a write run tried and left open (a fill-up the
+catalog refused, a value the API held) is marked `tried` and is not put
+first again; the cursor still comes round to it.
 
 **What is compared:** title (with its version), artist, year, genre, BPM and
 label in the file's ID3 tags, against `POST /v1/catalog/display`. The
