@@ -1,3 +1,10 @@
+# [2.51.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.50.1...v2.51.0) (2026-11-11)
+
+
+### Features
+
+* **library-scan:** scan the main library with New Music, and FX Music as its own root ([6591e85](https://github.com/mini-app-polis/deejay-cog/commit/6591e85ab775d66a306b7dbda0d1a1856967cee5))
+
 ## [2.50.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.50.0...v2.50.1) (2026-11-11)
 
 
