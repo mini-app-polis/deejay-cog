@@ -1,10 +1,10 @@
-"""The ``library-trash`` step of the nightly library run: move the files the
+"""The ``library-trash`` step of the library job: move the files the
 owner sent to the trash on the WCS duplicates page to Drive's trash
 (ADR-0008, decision 7).
 
 Resolving a duplicate group on the WCS site keeps the file the owner picks
 and marks the group's other copies trash-requested in the library registry.
-Each night this step lists the present files under the library root that
+Each run this step lists the present files under the library root that
 are marked so (``GET /v1/catalog/library/files?trash_requested=true``) and,
 for each:
 
@@ -170,7 +170,7 @@ def run_trash(
     with run_report(
         FLOW_NAME,
         repo=REPO,
-        notable=True,
+        notable=False,
         run_id=run_id,
         version=__version__,
         list_all=True,

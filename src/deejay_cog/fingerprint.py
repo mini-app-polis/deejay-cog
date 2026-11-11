@@ -42,7 +42,7 @@ needs-review otherwise. That run is reported under ``new-music`` and follows
 the stricter of the message's mode and ``flags.deejay_cog.new_music``.
 
 **Library files.** A message marked ``"flow": "library-identify"`` comes
-from the nightly library run (:mod:`deejay_cog.library_identify`). The file
+from the library job (:mod:`deejay_cog.library_identify`). The file
 is identified the same way but **no MusicBrainz tags are written**: a
 confident match is looked up in the catalog, or made a library entry when
 the catalog has no song for it, and the file is then linked to that entry
@@ -760,7 +760,7 @@ def intake_by_fingerprint(
 
 
 # ---------------------------------------------------------------------------
-# Library files (the nightly library run's unidentified files)
+# Library files (the library job's unidentified files)
 # ---------------------------------------------------------------------------
 
 
@@ -1048,7 +1048,7 @@ def _record_library(
     The library identify step sends a whole chunk to fingerprinting at once,
     one run here per file, so a run that went as expected records counts
     only and is not sent: its file is in the run record, and the next
-    nightly identify report counts what is still unidentified
+    identify report counts what is still unidentified
     (``fingerprinted_unlinked``). Only an issue (a missing setting, a
     changed audio check, an exception) reaches the channel.
     """

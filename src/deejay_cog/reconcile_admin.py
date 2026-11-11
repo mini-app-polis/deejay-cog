@@ -1,13 +1,12 @@
 """Work the library reconcile from a working session (ADR-0008, step 3):
 review its differences, read the owner's approvals, carry the old approvals
-file over to the API, move its cursor and run it by hand. Run locally
+file over to the API, start a full pass and run it by hand. Run locally
 against production:
 
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin review
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin approvals
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin seed [--apply]
-    doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin cursor \\
-        [--position 0 --apply]
+    doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin full [--apply]
     doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin run \\
         [--mode dry-run|write] [--chunk 260]
 
@@ -26,8 +25,12 @@ cannot change them. **seed** carries ``library-reconcile-approvals.json``
 way a write run read it; without ``--apply`` it is only printed. Once the API
 holds approvals it sends nothing and says so (the API would refuse it too).
 
-**cursor** prints the reconcile's cursor; ``--position N --apply`` moves it
-(0 starts the next run from the first identified file).
+**full** starts a full pass: the reconcile normally compares only the files
+that changed since it last compared them (``library-reconcile-seen.json``);
+``full --apply`` empties that record, so every file is new to it and the
+runs work through the whole library a chunk at a time. Use it after a change
+to the reconcile's own rules. Without ``--apply`` it only says how many files
+the record holds.
 
 **run** runs the reconcile once, here, in the ``--mode`` given or, without
 one, the mode the ``flags.deejay_cog.library_reconcile`` flag sets, with the
@@ -35,9 +38,9 @@ environment's chunk or the ``--chunk`` given, and prints what it did. When
 the mode comes out off (the flag off, and no ``--mode``), it runs nothing
 and says so. ``--mode`` applies to this run only; the flag is not changed.
 A write run here writes exactly as the scheduled one does; run it while the
-flag is off, so the two do not move the cursor at once.
+flag is off, so the two do not compare the same files at once.
 
-**cursor** changes only the cursor file, and **seed** only the API's
+**full** changes only the seen record, and **seed** only the API's
 approvals, once; **review** and **approvals** read only.
 """
 
@@ -61,10 +64,10 @@ from deejay_cog.library_backfill import StateFile, StateProblem
 from deejay_cog.library_reconcile import (
     APPROVALS_NAME,
     CHUNK_SIZE_VAR,
-    CURSOR_NAME,
     FLOW_NAME,
     KINDS,
     MODE_FLAG,
+    SEEN_NAME,
     Approvals,
     from_api,
     library_reconcile,
@@ -198,7 +201,7 @@ def read_records(drive: Any, state: str) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Approvals and cursor
+# Approvals
 # ---------------------------------------------------------------------------
 
 
@@ -215,20 +218,6 @@ def old_approvals(drive: Any, state: str) -> dict[str, Any] | None:
     return {
         "kinds": list(data.get("kinds") or []),
         "files": dict(data.get("files") or {}),
-    }
-
-
-def moved_cursor(cursor: dict[str, Any] | None, position: int) -> dict[str, Any]:
-    """The cursor at ``position``; everything else in it is kept but the
-    file it last compared, so the next run starts at ``position``."""
-    if position < 0:
-        raise AdminError("--position must be 0 or more")
-    if cursor is None:
-        raise AdminError(f"no {CURSOR_NAME} in the state folder: nothing to move")
-    return {
-        **{key: value for key, value in cursor.items() if key != "after"},
-        "position": position,
-        "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
 
 
@@ -252,9 +241,8 @@ def _parser() -> argparse.ArgumentParser:
     seed = sub.add_parser("seed", help="carry the old approvals file over to the API")
     seed.add_argument("--apply", action="store_true", help="send it")
 
-    cursor = sub.add_parser("cursor", help="print or move the cursor")
-    cursor.add_argument("--position", type=int, help="move it here (with --apply)")
-    cursor.add_argument("--apply", action="store_true", help="save the move")
+    full = sub.add_parser("full", help="start a full pass over the library")
+    full.add_argument("--apply", action="store_true", help="empty the seen record")
 
     run = sub.add_parser("run", help="run the reconcile once, here")
     run.add_argument("--mode", choices=["dry-run", "write"])
@@ -308,18 +296,24 @@ def _seed_cmd(args: argparse.Namespace, api: Any, drive: Any, state: str) -> int
     return 0
 
 
-def _cursor_cmd(args: argparse.Namespace, drive: Any, state: str) -> int:
-    store = StateFile(drive, state, CURSOR_NAME)
-    cursor = store.load()
-    print(json.dumps(cursor, indent=1))
-    if args.position is None:
-        return 0
-    moved = moved_cursor(cursor, args.position)
+def _full_cmd(args: argparse.Namespace, drive: Any, state: str) -> int:
+    store = StateFile(drive, state, SEEN_NAME)
+    held = store.load() or {}
+    files = dict(held.get("files") or {})
     if not args.apply:
-        print(f"Would move the cursor to {args.position}. Run again with --apply.")
+        print(
+            f"{SEEN_NAME} holds {len(files)} files. Run again with --apply to "
+            "compare every file again."
+        )
         return 0
-    store.save(moved)
-    print(f"Moved the cursor to {args.position}.")
+    store.save(
+        {
+            **held,
+            "files": {},
+            "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+    )
+    print(f"Emptied {SEEN_NAME}: the next runs compare every file again.")
     return 0
 
 
@@ -333,8 +327,8 @@ def _run_cmd(args: argparse.Namespace) -> int:
         raise AdminError(f"{MODE_FLAG} is off: give --mode dry-run or --mode write")
     s = library_reconcile(mode=mode)
     print(
-        f"{s.record_name or 'no record'}: mode {s.mode.value}, files "
-        f"{s.start + 1}-{s.position}, {s.compared} compared, {s.matching} matching, "
+        f"{s.record_name or 'no record'}: mode {s.mode.value}, "
+        f"{s.compared} compared, {s.changed_left} changed left, {s.matching} matching, "
         f"{len(s.written)} written, {len(s.filled)} filled up, "
         f"{s.not_approved} not approved, {len(s.failed)} failed"
     )
@@ -369,7 +363,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 with open(args.out, "w", encoding="utf-8") as handle:
                     handle.write(text + "\n")
             return 0
-        return _cursor_cmd(args, drive, state)
+        return _full_cmd(args, drive, state)
     except (AdminError, StateProblem) as exc:
         print(f"{PROG}: {exc}; nothing changed.", file=sys.stderr)
         return 2

@@ -1,10 +1,10 @@
-"""The ``library-identify`` step of the nightly library run: identify the
+"""The ``library-identify`` step of the library job: identify the
 library files the registry holds as unidentified and link each confident
 one to its catalog entry, writing only the link to the file; the reconcile
 brings its owned fields in step (ADR-0008, decisions 2 and 5).
 
 The library scan registers a file new to the library as ``unidentified``,
-and the backfill does the same for a file it could not match. Each night
+and the backfill does the same for a file it could not match. Each run
 this step takes the next ``LIBRARY_IDENTIFY_CHUNK_SIZE`` of them (default
 20) that it has not tried before:
 
@@ -39,7 +39,7 @@ every write in the run record (``library-identify-<run id>.json``), which
 
 **Tried once.** Every file this step has tried, and with what outcome, is in
 ``library-identify-tried.json`` in the state folder, so a file is not
-fingerprinted again every night. To try a file again, remove its id from
+fingerprinted again every run. To try a file again, remove its id from
 that file (or trash the file to try them all). The one exception: a file
 sent to fingerprinting and left for review because its fingerprint
 disagreed with its tags, and not marked ``second_opinion``, is tried once
@@ -710,7 +710,7 @@ def run_identify(
     with run_report(
         FLOW_NAME,
         repo=REPO,
-        notable=True,
+        notable=False,
         run_id=run_id,
         version=__version__,
         list_all=True,

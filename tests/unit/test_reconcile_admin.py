@@ -1,5 +1,5 @@
 """reconcile_admin: the working-session commands over the library reconcile's
-records, approvals and cursor."""
+records, approvals and full passes."""
 
 from __future__ import annotations
 
@@ -235,38 +235,28 @@ def test_with_no_old_file_there_is_nothing_to_seed(drive, api, capsys) -> None:
     assert "nothing to seed" in capsys.readouterr().err
 
 
-# -- cursor -----------------------------------------------------------------
+# -- full -------------------------------------------------------------------
 
 
-def test_the_cursor_moves_only_with_apply_and_keeps_its_other_fields(drive) -> None:
+def test_full_empties_the_seen_record_only_with_apply(drive, capsys) -> None:
     _put(
         drive,
-        rec.CURSOR_NAME,
-        {"flow": rec.FLOW_NAME, "position": 272, "after": "row-id", "passes": 0},
+        rec.SEEN_NAME,
+        {"flow": rec.FLOW_NAME, "files": {"f1": {"modified": "x"}}},
     )
 
-    assert admin.main(["cursor", "--position", "0"]) == 0
-    assert _get(drive, rec.CURSOR_NAME)["position"] == 272
+    assert admin.main(["full"]) == 0
+    assert "holds 1 files" in capsys.readouterr().out
+    assert _get(drive, rec.SEEN_NAME)["files"] == {"f1": {"modified": "x"}}
 
-    assert admin.main(["cursor", "--position", "0", "--apply"]) == 0
-    cursor = _get(drive, rec.CURSOR_NAME)
-    assert (cursor["position"], cursor["passes"], cursor["flow"]) == (
-        0,
-        0,
-        rec.FLOW_NAME,
-    )
-    # The file it last compared goes, so the next run starts at the position.
-    assert "after" not in cursor
-
-
-def test_there_is_no_cursor_to_move_before_a_first_run(drive, capsys) -> None:
-    assert admin.main(["cursor", "--position", "0", "--apply"]) == 2
-    assert "nothing to move" in capsys.readouterr().err
+    assert admin.main(["full", "--apply"]) == 0
+    held = _get(drive, rec.SEEN_NAME)
+    assert held["files"] == {} and held["flow"] == rec.FLOW_NAME
 
 
 def test_without_a_state_folder_nothing_is_done(monkeypatch, capsys) -> None:
     monkeypatch.delenv(STATE_FOLDER_VAR, raising=False)
-    assert admin.main(["cursor"]) == 2
+    assert admin.main(["full"]) == 2
     assert STATE_FOLDER_VAR in capsys.readouterr().err
 
 
@@ -292,7 +282,7 @@ def test_run_sets_the_mode_and_chunk_it_is_given(monkeypatch, capsys) -> None:
         seen["chunk"] = rec.os.environ.get(rec.CHUNK_SIZE_VAR)
         summary = rec.ReconcileSummary(rec.FlowMode.DRY_RUN)
         summary.record_name = "library-reconcile-local.dry-run.json"
-        summary.position = summary.compared = 5
+        summary.compared = 5
         return summary
 
     monkeypatch.setattr(admin, "library_reconcile", fake_reconcile)
@@ -302,7 +292,7 @@ def test_run_sets_the_mode_and_chunk_it_is_given(monkeypatch, capsys) -> None:
     assert admin.main(["run", "--mode", "dry-run", "--chunk", "5"]) == 0
 
     assert seen == {"mode": "dry-run", "chunk": "5"}
-    assert "files 1-5, 5 compared" in capsys.readouterr().out
+    assert "5 compared" in capsys.readouterr().out
 
 
 def test_run_without_a_mode_uses_the_flags(monkeypatch, capsys) -> None:

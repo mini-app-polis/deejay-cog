@@ -20,7 +20,7 @@ tags name no song (no title or artist, "Unknown", "Various Artists",
 
 Without ``--apply`` it is a dry run: it reads the tags the registry holds,
 looks each up, and prints what it would do, downloading nothing. With it,
-each file is read from Drive and linked the nightly run's way (the catalog's
+each file is read from Drive and linked the library job's way (the catalog's
 values written in place, revision pinned, audio checked), recorded as a
 ``library-link-by-tags`` run that ``deejay_cog.music_rollback`` can undo
 (the file's bytes; the entry and the registry row stay).

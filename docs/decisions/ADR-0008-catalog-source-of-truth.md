@@ -103,7 +103,8 @@ catalog (stats, summaries, the collection) uses the same rules.
   linked to an entry it affects that has not had it yet. Catalog edits and
   rule changes are the only way owned fields change once the library is
   reconciled. Sync runs nightly: edits made during the day reach the files
-  overnight. A sync writes only the fields whose catalog value moved since
+  overnight (several times a day since 2026-11-10, a stable library is
+  quiet). A sync writes only the fields whose catalog value moved since
   the file's last sync (2026-11-09, the sync writes only what moved). A tag
   edited in a file in VirtualDJ goes up to the catalog (2026-11-09, an edit
   made in VirtualDJ goes up) and from there to the song's other files.
@@ -299,6 +300,25 @@ catalog (stats, summaries, the collection) uses the same rules.
 2. **An approved difference a run tried and could not settle** (a refused
    fill-up, a value the API held) is not taken first again; the cursor
    still reaches it, and it does not count as open too long.
+
+## Decided with the owner, 2026-11-10 (a stable library is quiet)
+
+1. **A library that did not change does no work and sends nothing.** Left
+   alone for months, the library jobs should read as stable: every step
+   acts only on what changed, and a step with nothing to do logs its counts
+   and sends no report.
+2. **The reconcile compares only files that changed** since it last
+   compared them: in Drive, or in their entry's display (an entry edit or
+   a display-rule change). It no longer walks the whole library over and
+   over. A full pass is started by hand, after a change to the reconcile's
+   own rules.
+3. **Changes resolve within the hour.** With idle runs this cheap, the
+   library job runs several times a day rather than nightly, so an edit
+   made in VirtualDJ or in the catalog editor reaches the other side the
+   same hour.
+4. **Refused fill-ups are not reported as work.** A fill-up the catalog
+   refuses stays the file's (2026-11-07, decision 5), so the reports count
+   it apart and do not list it.
 
 ## Decided with the owner, 2026-11-09 (files the fingerprint finds nothing for)
 

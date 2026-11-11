@@ -428,6 +428,17 @@ def test_at_the_end_of_the_library_a_run_does_nothing(
     assert summary.scanned == 0
     assert downloads == []
     assert len(_music_writes(drive)) == writes_before
+    # Said once, when the end was reached; a finished backfill is quiet.
+    assert "trash library-backfill-manifest.json" not in _text(posted)
+    assert posted.call_args.kwargs["notable"] is False
+
+
+def test_the_run_that_reaches_the_end_says_so(settings, wired, posted, drive) -> None:
+    _library(drive, 2)
+
+    summary = flow.library_backfill(run_id="m-1")
+
+    assert summary.done is True
     assert "trash library-backfill-manifest.json" in _text(posted)
 
 

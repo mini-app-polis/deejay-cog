@@ -9,6 +9,7 @@ import datetime as dt
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from mini_app_polis.api.contract import (
@@ -315,3 +316,24 @@ def test_off_reads_nothing() -> None:
 def test_a_name_key_drops_the_extension_and_copy_suffix() -> None:
     assert dup.name_key("Pop/9to5 (1).mp3") == dup.name_key("pop/9to5.MP3")
     assert dup.name_key("Pop/9to5.mp3") != dup.name_key("Rock/9to5.mp3")
+
+
+def test_open_groups_unchanged_since_last_run_are_not_named_again() -> None:
+    catalog = _catalog()
+    summary = dup.run_duplicates(run_id="d-4", mode=FlowMode.WRITE, api=catalog)
+    summary.result = DuplicateReportResult(open_groups=1, added=0, dropped=0)
+    report = MagicMock()
+
+    dup._record(report, summary, 1.0)
+
+    assert all(c.args[0] != "group" for c in report.notice.call_args_list)
+
+
+def test_a_new_group_is_named() -> None:
+    catalog = _catalog()
+    summary = dup.run_duplicates(run_id="d-5", mode=FlowMode.WRITE, api=catalog)
+    report = MagicMock()
+
+    dup._record(report, summary, 1.0)
+
+    assert any(c.args[0] == "group" for c in report.notice.call_args_list)

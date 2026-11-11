@@ -1,4 +1,4 @@
-"""The ``library-sync`` step of the nightly library run: write catalog
+"""The ``library-sync`` step of the library job: write catalog
 edits and display-rule changes to the library files they affect (ADR-0008,
 step 4 and decision 5, edit).
 
@@ -7,7 +7,7 @@ change: an edit on the WCS site, an edit made in a file (below), or a
 change to the display rules. The API
 lists the present, linked files whose entry or rules changed after the
 catalog's values were last written to them, or that never had them written
-(``GET /v1/catalog/library/files/needing-sync``). Each night this step takes
+(``GET /v1/catalog/library/files/needing-sync``). Each run this step takes
 the next ``LIBRARY_SYNC_CHUNK_SIZE`` of them (default 50) and, for each:
 
 1. reads its entry as the display rules write it out
@@ -161,6 +161,8 @@ _STATE_SUFFIXES = (
     "-approvals.json",
     "-listing.json",
     "-index.json",
+    "-open.json",
+    "-seen.json",
 )
 
 #: The state file holding the values pipeline writes replaced, by file and
@@ -845,7 +847,7 @@ def run_sync(
     with run_report(
         FLOW_NAME,
         repo=REPO,
-        notable=True,
+        notable=False,
         run_id=run_id,
         version=__version__,
         list_all=True,

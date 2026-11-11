@@ -23,7 +23,7 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 | `retag-music` | **retag-music** | `retag_music_from_catalog.py` | Tags the music upload folder's files from the catalog; a file with no usable title or artist goes to the fingerprint function. |
 | `new-music` | **new-music** | `new_music.py` | New music intake: identifies each file in the new-music input folder (catalog, else the fingerprint function), sends a tagged copy named `{title}_{artist}` to the destination folder and keeps the original in processed-originals; anything not identified with confidence goes to needs-review. Off unless the `flags.deejay_cog.new_music` flag is `dry-run` or `write`. |
 | `library-backfill` | **the library job** | `library_nightly.py` | The nightly library job: six steps over the music library (`LIBRARY_ROOT_FOLDER_ID`), in this order, each off unless its `flags.deejay_cog.<step>` flag is `dry-run` or `write`. **Scan** (`library_scan.py`): files added to or removed from the library reach the library registry, metadata only. **Trash** (`library_trash.py`): the copies the owner sent to the trash on the WCS duplicates page go to Drive's trash, never deleted. **Identify** (`library_identify.py`): unidentified files are identified by their tags or the fingerprint function and linked to the catalog; only the link is written. **Backfill** (`library_backfill.py`): the first linking pass over the library, from a manifest and cursor in `MUSIC_TAGGING_STATE_FOLDER_ID`; it reports `library_done` once every file is linked. **Sync** (`library_sync.py`): edits made in VirtualDJ go up to the catalog, then catalog edits and display-rule changes are written to the files they affect. **Duplicates** (`library_duplicates.py`): files that look like copies of one song are grouped for the duplicates page, different edits and release labels kept on purpose; never writes music. No step renames, moves or deletes a library file except the trash step's move to Drive's trash. |
-| `library-reconcile` | **library-reconcile** | `library_reconcile.py` | Library reconcile, its own scheduled mode: linked files compared with the catalog, every difference grouped by kind and sent to the owner's review page on the WCS site. In `write`, a run first settles the files with a difference the owner approved there (catalog wins: written over the file; file wins: sent up to the entry), then compares the next `LIBRARY_RECONCILE_CHUNK_SIZE` files after its cursor. Off unless the `flags.deejay_cog.library_reconcile` flag is `dry-run` or `write`. |
+| `library-reconcile` | **library-reconcile** | `library_reconcile.py` | Library reconcile, its own scheduled mode: linked files compared with the catalog, every difference grouped by kind and sent to the owner's review page on the WCS site. Only files that changed since it last compared them (in Drive, or in their entry's display) are read, up to `LIBRARY_RECONCILE_CHUNK_SIZE` a run. In `write`, a run first settles the files with a difference the owner approved there (catalog wins: written over the file; file wins: sent up to the entry). Off unless the `flags.deejay_cog.library_reconcile` flag is `dry-run` or `write`. |
 
 The **fingerprint function** (`fingerprint.py`) is a second Lambda behind its own queue: it identifies one such file by its sound (AcoustID, MusicBrainz) and tags it, or for a new-music file takes it in with the new-music steps — see [ADR-0007](docs/decisions/ADR-0007-music-tagging-redesign.md). Every flow that writes music goes through `music_safety.py` (modes, the audio check, run records), and `music_rollback.py` undoes a run from its record.
 
@@ -71,7 +71,7 @@ The **fingerprint function** (`fingerprint.py`) is a second Lambda behind its ow
 | **music_safety.py** | The safety layer every music-writing flow uses: modes, the audio check, run records. |
 | **music_rollback.py** | Local CLI: undo a music-tagging run from its run record (dry run unless `--apply`). |
 | **library_restore.py**, **restore_bpm.py**, **restore_styling.py**, **fingerprint_check.py**, **link_by_tags.py**, **relink.py** | Local repair CLIs for the library, each a dry run unless `--apply`; see [PIPELINE.md](docs/PIPELINE.md#run-records). |
-| **reconcile_admin.py** | Local CLI: review the library reconcile's differences by kind, print the approvals (set on the WCS review page), move its cursor and run it by hand. |
+| **reconcile_admin.py** | Local CLI: review the library reconcile's differences by kind, print the approvals (set on the WCS review page), start a full pass and run it by hand. |
 | **deduplicate_summary.py** | CLI / helper to deduplicate summary spreadsheets. |
 | **spotify_sync.py** | Spotify helpers used from `process_new_files.py`. |
 
@@ -143,7 +143,8 @@ doppler run -- uv run python -m deejay_cog.music_rollback <run_id> --apply
 ```bash
 doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin review
 doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin approvals
-doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin cursor --position 0 --apply
+doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin full --apply
+doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin baseline --apply
 doppler run --config prd -- uv run python -m deejay_cog.reconcile_admin run --mode dry-run --chunk 260
 ```
 

@@ -1,5 +1,5 @@
 """The ``library-backfill`` worker mode: retag the music library from the
-catalog, in place, a chunk a night (ADR-0007, amended 2026-11-03).
+catalog, in place, a chunk a run (ADR-0007, amended 2026-11-03).
 
 The library under ``LIBRARY_ROOT_FOLDER_ID`` is what VirtualDJ plays from,
 by path. So a library file is **never renamed, moved or deleted**: only its
@@ -27,7 +27,7 @@ hold the position:
 Each run takes the next ``LIBRARY_BACKFILL_CHUNK_SIZE`` files (default 10)
 after the cursor, and starts no file with less than
 ``LIBRARY_BACKFILL_RESERVE_SECONDS`` (default 120) left before the run
-deadline, so the nightly steps after it still run; the next run carries on
+deadline, so the library job's steps after it still run; the next run carries on
 from the cursor. The record and cursor are saved after each file even past
 the deadline, so a file written is never done twice. A redelivery of a run stopped by the deadline (the same
 queue message id) finishes that run's chunk rather than start a new one.
@@ -142,7 +142,7 @@ DEFAULT_CHUNK_SIZE = 10
 #: report): the way past a file whose audio check fails.
 SKIP_IDS_VAR = "LIBRARY_BACKFILL_SKIP_FILE_IDS"
 
-#: Seconds of the run the backfill leaves for the nightly steps after it:
+#: Seconds of the run the backfill leaves for the library job's steps after it:
 #: it starts no file with less than this left before the run deadline.
 RESERVE_SECONDS_VAR = "LIBRARY_BACKFILL_RESERVE_SECONDS"
 DEFAULT_RESERVE_SECONDS = 120
@@ -831,7 +831,7 @@ def run_backfill(
     with run_report(
         FLOW_NAME,
         repo=REPO,
-        notable=True,
+        notable=False,
         run_id=run_id,
         version=__version__,
         list_all=True,  # every file in the chunk is named, not the first few
@@ -1027,7 +1027,9 @@ def _record(report: Any, summary: BackfillSummary, duration_sec: float) -> None:
         report.notice(
             "manifest_rebuilt", "a new manifest: starting from its first file"
         )
-    if summary.done:
+    if summary.done and summary.scanned:
+        # Said once, on the run that reached the end; a finished backfill is
+        # otherwise idle and quiet.
         report.notice(
             "library_done",
             f"all {summary.total} files in the manifest are processed; trash "
