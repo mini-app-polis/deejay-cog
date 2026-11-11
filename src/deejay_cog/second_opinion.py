@@ -31,7 +31,7 @@ from typing import Any, Literal, Protocol
 
 from mini_app_polis import logger as logger_mod
 
-from deejay_cog.music_tags import tags_agree
+from deejay_cog.music_tags import is_owner_edit, tags_agree
 
 log = logger_mod.get_logger()
 
@@ -48,6 +48,11 @@ Side = Literal["tags", "fingerprint"]
 #: How a note begins when Spotify was not asked (no client, or a search
 #: failed): the second opinion was not taken, so the file is tried again.
 NO_SPOTIFY = "no second opinion: Spotify"
+
+
+#: The verdict's reason for an owner edit, which is never given a second
+#: opinion.
+OWNER_EDIT_NO_OPINION = "an owner edit: its fingerprint is only a hint"
 
 
 class SearchFailed(Exception):
@@ -148,7 +153,14 @@ def decide(
     search: TrackSearch | None,
 ) -> Verdict:
     """The second opinion on a file whose tags (``own_*``) and fingerprint
-    (``found_*``) disagree."""
+    (``found_*``) disagree.
+
+    An owner edit (a version in ``< >`` in its own title) is never given
+    one: its fingerprint is only a hint at what it was cut from (ADR-0008,
+    decided 2026-11-11, decision 4), so neither side is backed and nothing
+    is asked of Spotify."""
+    if is_owner_edit(own_title):
+        return Verdict(None, OWNER_EDIT_NO_OPINION)
     for recording in heard.recordings if heard else ():
         if tags_agree(own_title, own_artist, recording.title, recording.artist):
             return Verdict(

@@ -27,7 +27,8 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
   the library jobs on their schedules (below).
 - **api-kaianolevine-com** validates the mode and enqueues
   `{"type": "deejay.run", "version": 1, "payload": {"mode": "<mode>"}}`. It is
-  the queue's only producer.
+  the queue's only producer. A message queued from a request also carries
+  `request` (`id`, `requested_at`, and `caller` when the API knows it).
 - **The Lambda** runs one flow per message, under the message id as its run
   id, so a run can be traced from watcher's log to its report.
 - **library-backfill** and **library-reconcile** are the modes meant to run
@@ -583,10 +584,46 @@ it) to try again.
 An **owner edit** (a version in `< >`) the catalog has no owner-edit entry
 for skips steps 3 to 6: it is linked to an owner-edit entry made from its
 title, artist and year (registry note `an owner edit, identified by its own
-tags`), never to the published song's entry, and it is not sent to
-fingerprinting. One whose tags name no song (no artist) is left for the
+tags`), never to the published song's entry; the fingerprint never
+identifies it. One whose tags name no song (no artist) is left for the
 owner with a note saying so. A dry run previews the entry and links nothing
 (`would_link_owner_edit`).
+
+**The fingerprint as a hint for an owner edit** (ADR-0008, decided
+2026-11-11, decision 4). Once an owner edit is linked (to a new owner-edit
+entry or the catalog's), it is sent to the fingerprint function
+(`sent_for_cut_from_hint`; in a dry run `would_send_for_cut_from_hint`,
+and nothing is sent). There, for a file whose own title has a `< >`
+version, a confident match to a recording of its own song (its title
+without the version, and its artist) is the published recording it was cut
+from: the catalog's entry for it, or the recording's name when the catalog
+has none, goes into the file's registry note (`…; fingerprint hint: cut
+from <artist> - <title> (catalog entry <id>), score <score>`; its link and
+status are sent unchanged) and is named in the fingerprint run's report
+(`owner_edit_cut_from`). Nothing else changes. No match, an unconfident
+one, another recording, or the edit's own entry gives no hint: the file is
+never reported as wrong, held, recorded as unidentified, retitled or
+relinked, and gets no second opinion. Nothing is submitted to AcoustID
+(its one lookup only asks what the audio matches), MusicBrainz is asked
+only for the matched recording's details, and Spotify is not asked. The
+entry's `cut_from_id` is not set from here.
+
+**FX Music** ([ADR-0009](decisions/ADR-0009-library-folders.md), decision
+3): with `FX_LIBRARY_ROOT_FOLDER_ID` set, its unidentified files are tried
+after the main library's, from the same chunk. An FX file links only to an
+fx entry, never to a main-library one, even when its tags or fingerprint
+match one; and a main-library file never links to an fx entry. The catalog
+lookup searches main entries only, so an FX file skips steps 2 to 6: the
+catalog is asked for the fx entry of its own title, artist and year
+(`POST /v1/catalog/library/entries` with library `fx`), which it finds or
+makes, and the file is linked to it (registry note `an FX Music file,
+identified by its own tags`). Its tags win over the catalog
+([ADR-0010](decisions/ADR-0010-tagging-rule-profiles.md)): it is never
+fingerprinted, and only the link is written. An FX file whose tags name no
+song is left for the owner with a note saying so. A dry run previews the
+entry and links nothing to a new one (`would_make_fx_entry`). A link the
+catalog refuses as one to the other library (409 `other_library`) is an
+issue (`not_linkable`), never a crash; the run carries on.
 
 **Linking** fills the entry's empty fields from the file
 (`POST /v1/catalog/{id}/fill-up`), writes only the link
@@ -606,11 +643,14 @@ file as tried. Its record is `library-identify-<run id>.dry-run.json`.
 **Report:** counts for `waiting`, `fingerprinted_unlinked` (files an
 earlier run sent to fingerprinting that are still unidentified: left for the
 owner, or not run yet), `tried`, `linked`, `written`, `would_write`,
-`filled_up`, `to_fingerprint` and `failed`, with every file by its path.
+`filled_up`, `to_fingerprint`, `owner_edits`, `owner_edit_hints`, `fx_entries` (FX files
+given a new fx entry, each named), `not_linkable` and `failed`, with every
+file by its path.
 The fingerprint function's run for a library file is reported under
 `library-identify` too, but sent only when it has an issue: a chunk sends
 one run per file, so a run that went as expected is logged and kept in its
-run record, not posted.
+run record, not posted; an owner edit's cut-from hint is posted, naming
+it.
 
 ## library-reconcile
 
@@ -977,6 +1017,14 @@ other. Each linked set is split into its edits; every edit with two or
 more files is a group, listing the song's other edits marked kept on
 purpose with why, so the page can never send them to the trash.
 
+**Owner edits** (ADR-0008, decided 2026-11-11): a file linked to an entry
+the catalog marks as an owner edit (`<…>` in its title) is an edit of its
+own, never a duplicate of the published song's files, even with the same
+md5. Listed in the published song's group, it is kept on purpose as an
+owner edit. Files on one owner-edit entry are grouped as copies of it like
+any other, the published song's files shown kept beside them. In FX Music
+an owner edit is not listed as a copy across folders either.
+
 **Per root** ([ADR-0009](decisions/ADR-0009-library-folders.md), decision
 4). Files are grouped only with files of the same root: a file in FX Music
 and one in the main library are never duplicates of each other.
@@ -1175,6 +1223,13 @@ built with `RunReport` from common-python-utils and version-stamped by
 - **WARN** when anything was counted as an issue: a failed set, a rejected
   ingest, a Spotify failure, a move that did not happen.
 - **ERROR** from the worker, when a run raised or a message was unprocessable.
+
+Every report a queued run sends says who asked for it, when its message
+carries a `request`: under **Requested**, the caller (`asked by …`, when the
+API knows it) and the request id (`request …`). These are counters, so they
+never make a quiet run send or change its severity. A message without a
+`request` reports as before. The request is only reported: it changes
+neither which run is chosen nor how messages are deduplicated.
 
 Reports are sent only where an API base URL resolves for the environment
 (see [CONFIGURATION.md](CONFIGURATION.md)). Local-only flows never send.

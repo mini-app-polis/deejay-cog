@@ -38,9 +38,8 @@ from mini_app_polis.api.contract import (
 from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
-from mini_app_polis.pipeline_status import run_report
 
-from deejay_cog._pipeline_eval import REPO
+from deejay_cog._pipeline_eval import REPO, run_report
 from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client

@@ -9,6 +9,12 @@ enqueues one message:
 
     {"type": "deejay.run", "version": 1, "payload": {"mode": "<mode>"}}
 
+A message queued from a request also carries ``request`` (its id, when it
+was asked for, and the caller when the API knows it); every run report the
+run sends names the caller and the request id. A message without one runs
+and reports as before. The request is only reported: it never changes which
+run is chosen or how messages are deduplicated.
+
 **Nothing is deleted until the work is done.** This code deletes nothing
 at all: the event source mapping deletes every record the handler does not
 name in ``batchItemFailures``. So "do not delete" means "name it", and
@@ -55,7 +61,7 @@ from mini_app_polis.lambda_worker import (
 from mini_app_polis.sentry import init_sentry
 
 import deejay_cog.config as config
-from deejay_cog._pipeline_eval import post_run_finding
+from deejay_cog._pipeline_eval import post_run_finding, requested
 from deejay_cog.fingerprint_jobs import QUEUE_URL_VAR
 from deejay_cog.ingest_live_history import ingest_live_history
 from deejay_cog.library_backfill import CHUNK_SIZE_VAR as BACKFILL_CHUNK_SIZE_VAR
@@ -185,13 +191,19 @@ except Exception:  # noqa: BLE001 — the report is not the job
     log.exception("worker: could not log the effective settings")
 
 
-def _mode_of(body: str) -> str:
-    """The mode a message asks for. Raises UnprocessableMessage otherwise."""
+def _message_of(body: str) -> DeejayRunMessage:
+    """The run message, with a mode this worker runs. Raises
+    UnprocessableMessage otherwise."""
     message = parse_message(body, DeejayRunMessage)
     mode = message.payload.mode
     if mode not in MODES:
         raise UnprocessableMessage(f"unknown mode {mode!r}; supported: {sorted(MODES)}")
-    return mode
+    return message
+
+
+def _mode_of(body: str) -> str:
+    """The mode a message asks for. Raises UnprocessableMessage otherwise."""
+    return _message_of(body).payload.mode
 
 
 def process_message(body: str, *, run_id: str) -> None:
@@ -203,10 +215,17 @@ def process_message(body: str, *, run_id: str) -> None:
     time, and live history re-sends the most recent file's plays, which
     the API deduplicates.
     """
-    mode = _mode_of(body)
+    message = _message_of(body)
+    mode = message.payload.mode
+    request = message.request
     log.info("worker: run %s mode=%s rss=%sMB", run_id, mode, _rss_mb())
+    if request is not None:
+        log.info(
+            "worker: run %s request=%s caller=%s", run_id, request.id, request.caller
+        )
     try:
-        MODES[mode](run_id=run_id)
+        with requested(request):
+            MODES[mode](run_id=run_id)
     finally:
         # A warm container runs every mode in turn: the memory each run
         # starts and ends at shows which one leaves it behind.

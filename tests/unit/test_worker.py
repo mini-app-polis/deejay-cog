@@ -415,3 +415,106 @@ def test_a_run_logs_its_memory_when_it_starts_and_when_it_ends(
         line.startswith("worker: run m-1 ended rss=") and "peak=" in line
         for line in lines
     )
+
+
+# ---------------------------------------------------------------------------
+# Who asked for the run: the message's optional request
+# ---------------------------------------------------------------------------
+
+_REQUEST = {
+    "id": "req-7",
+    "requested_at": "2026-11-11T09:30:00Z",
+    "caller": "watcher-cog",
+}
+
+
+@pytest.fixture
+def sent(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """The run reports the flows send, as the shared library posts them."""
+    from mini_app_polis import pipeline_status
+
+    fake = MagicMock()
+    monkeypatch.setattr(pipeline_status, "post_run_finding", fake)
+    return fake
+
+
+@pytest.fixture
+def reporting_flow(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """A mode whose flow sends a run report both ways the flows do: through
+    ``run_report`` and by building a ``RunReport``."""
+    from deejay_cog._pipeline_eval import RunReport, run_report
+
+    def flow(*, run_id: str) -> None:
+        with run_report("library-backfill", repo="deejay-cog", run_id=run_id) as rep:
+            rep.ok(1)
+        built = RunReport(flow_name="ingest-live-history", repo="deejay-cog")
+        built.send(notable=True)
+
+    fake = MagicMock(side_effect=flow)
+    monkeypatch.setitem(worker.MODES, "library-backfill", fake)
+    return fake
+
+
+def test_the_run_report_names_the_caller_and_request_id(
+    reporting_flow: MagicMock, sent: MagicMock, reported: MagicMock
+) -> None:
+    result = worker.lambda_handler(
+        _event(_body("library-backfill", request=_REQUEST)), None
+    )
+
+    assert result == {"batchItemFailures": []}
+    reporting_flow.assert_called_once_with(run_id="m-0")
+    assert sent.call_count == 2
+    for call in sent.call_args_list:
+        assert call.kwargs["requested_by"] == "watcher-cog"
+        assert call.kwargs["request_id"] == "req-7"
+        assert call.kwargs["counter_sections"]["request_id"] == "Requested"
+    # Naming the request never makes a quiet run notable.
+    assert sent.call_args_list[0].kwargs["notable"] is False
+
+
+def test_a_request_without_a_caller_names_its_id_only(
+    reporting_flow: MagicMock, sent: MagicMock, reported: MagicMock
+) -> None:
+    request = {k: v for k, v in _REQUEST.items() if k != "caller"}
+
+    worker.lambda_handler(_event(_body("library-backfill", request=request)), None)
+
+    for call in sent.call_args_list:
+        assert call.kwargs["request_id"] == "req-7"
+        assert "requested_by" not in call.kwargs
+
+
+def test_a_message_without_a_request_runs_and_reports_as_before(
+    reporting_flow: MagicMock, sent: MagicMock, reported: MagicMock
+) -> None:
+    result = worker.lambda_handler(_event(_body("library-backfill")), None)
+
+    assert result == {"batchItemFailures": []}
+    reporting_flow.assert_called_once_with(run_id="m-0")
+    assert sent.call_count == 2
+    for call in sent.call_args_list:
+        assert "requested_by" not in call.kwargs
+        assert "request_id" not in call.kwargs
+
+
+def test_the_request_is_named_only_during_its_run(
+    reporting_flow: MagicMock, sent: MagicMock, reported: MagicMock
+) -> None:
+    worker.lambda_handler(
+        _event(_body("library-backfill", request=_REQUEST), _body("library-backfill")),
+        None,
+    )
+
+    first, _, second, _ = sent.call_args_list
+    assert first.kwargs["request_id"] == "req-7"
+    assert "request_id" not in second.kwargs
+
+
+def test_the_request_is_logged_with_the_run(
+    reporting_flow: MagicMock, sent: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO):
+        worker.lambda_handler(_event(_body("library-backfill", request=_REQUEST)), None)
+
+    assert "request=req-7 caller=watcher-cog" in caplog.text

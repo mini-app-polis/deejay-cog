@@ -31,8 +31,23 @@ this step takes the next ``LIBRARY_IDENTIFY_CHUNK_SIZE`` of them (default
 cut the owner made himself) is linked only to an owner-edit entry, never to
 the published song's: by its tags when the catalog has one, otherwise to an
 owner-edit entry made from its own title, artist and year. Its tags are the
-owner's choice, so it is not sent to fingerprinting (ADR-0008, decided
-2026-11-11).
+owner's choice, so the fingerprint never identifies it: once it is linked it
+is sent to the fingerprint function for a hint only, the published
+recording it was cut from, which changes nothing else (ADR-0008, decided
+2026-11-11, decision 4).
+
+**Each library root** (ADR-0009): the main library's unidentified files are
+tried first, then FX Music's. **An FX Music file** links only to an fx
+entry, never to a main-library one, however well its tags or fingerprint
+match it, and a main-library file never links to an fx entry (ADR-0009,
+decision 3). The catalog lookup searches main entries only, so an FX file
+is not looked up or fingerprinted: the catalog is asked for the fx entry of
+its own title and artist (``POST /v1/catalog/library/entries`` with library
+``fx``), which it finds or makes. Its tags win over the catalog (ADR-0010),
+so, as for any file, only the link is written to it. An FX file whose tags
+name no song is left for the owner. A link the catalog refuses as one to
+the other library (``OtherLibraryError``) is reported as not linkable, and
+the run carries on.
 
 **Linking a file** (:func:`link_and_write`): the file's values go up to the
 catalog's empty fields (``POST /v1/catalog/{id}/fill-up``); only the link
@@ -74,6 +89,7 @@ from time import monotonic
 from typing import Any, Protocol, cast
 
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.api import OtherLibraryError
 from mini_app_polis.api.contract import (
     CatalogDisplay,
     CatalogDisplayRequest,
@@ -91,14 +107,18 @@ from mini_app_polis.api.contract import (
 from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
-from mini_app_polis.pipeline_status import run_report
 
-from deejay_cog._pipeline_eval import REPO, post_run_finding
+from deejay_cog._pipeline_eval import REPO, post_run_finding, run_report
 from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
 from deejay_cog.fingerprint_jobs import FingerprintJobs, fingerprint_jobs_from_env
-from deejay_cog.library_backfill import BackfillSettings, StateFile, StateProblem
+from deejay_cog.library_backfill import (
+    BackfillSettings,
+    LibraryRoot,
+    StateFile,
+    StateProblem,
+)
 from deejay_cog.music_safety import (
     AudioChanged,
     FlowMode,
@@ -238,6 +258,9 @@ TAGS_NOTE = "identified by its own tags"
 
 #: How the registry marks an owner edit linked by its own tags.
 OWNER_EDIT_NOTE = "an owner edit, identified by its own tags"
+
+#: How the registry marks an FX Music file linked to its fx entry.
+FX_NOTE = "an FX Music file, identified by its own tags"
 
 #: An artist that names no one.
 _NO_ARTIST = re.compile(r"^(?:unknown(?: artist)?|various(?: artists)?|va|n/?a)$", re.I)
@@ -467,6 +490,14 @@ class IdentifySummary:
     #: Owner edits linked to an owner-edit entry made from their tags (or,
     #: in a dry run, that would be).
     owner_edits: list[str] = field(default_factory=list)
+    #: Owner edits sent to the fingerprint function for a cut-from hint (or,
+    #: in a dry run, that would be).
+    owner_edit_hints: list[str] = field(default_factory=list)
+    #: FX Music files given a new fx entry (or, in a dry run, that would be).
+    fx_entries: list[str] = field(default_factory=list)
+    #: Files the catalog refused to link because the entry is of the other
+    #: library (main or fx).
+    not_linkable: list[str] = field(default_factory=list)
     no_queue: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
@@ -512,6 +543,8 @@ class Identify:
         self.jobs = jobs
         self.tried = tried
         self.again = again
+        #: The library root of the file being tried; set per file.
+        self.root: LibraryRoot = settings.roots[0]
 
     def _mark(self, row: LibraryFile, outcome: str) -> None:
         entry: dict[str, Any] = {"outcome": outcome, "at": _now()}
@@ -528,12 +561,18 @@ class Identify:
             return
         name = str(meta.get("name") or row.path.rsplit("/", 1)[-1])
         data: bytes = self.drive.download_file_bytes(row.drive_file_id).data
+        if self.root.key == "fx":
+            self._fx(row, name, data)
+            return
         tags = read_tag_row(data)
         track = ingest_track(tags)
         match = None
         if track is not None:
             match = self.api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
         if match is not None and not owner_edit_fits(tags["title"], match):
+            match = None
+        # A main-library file never links to an fx entry (ADR-0009).
+        if match is not None and match.library != "main":
             match = None
         if match is None and is_owner_edit(tags["title"]):
             self._owner_edit(row, name, data)
@@ -552,7 +591,7 @@ class Identify:
             self.record,
             file_id=row.drive_file_id,
             name=name,
-            root=self.settings.root,
+            root=self.root.root_id,
             path=row.path,
             data=data,
             catalog_id=str(match.id),
@@ -567,13 +606,15 @@ class Identify:
         if linked.filled:
             summary.filled.append(f"{row.path} ({', '.join(linked.filled)})")
         self._mark(row, "linked")
+        if match.owner_edit:
+            self._hint(row, name)
 
     def _owner_edit(self, row: LibraryFile, name: str, data: bytes) -> None:
         """Take in an owner edit the catalog has no owner-edit entry for: an
         entry is made from its own tags (the API reads the ``< >`` version
         as an owner edit) and the file is linked to it. Its tags are the
-        owner's own choice, so it is not sent to fingerprinting, which would
-        name the published recording (ADR-0008, decided 2026-11-11)."""
+        owner's own choice, so the fingerprint never identifies it; once
+        linked, it is sent for a cut-from hint (:meth:`_hint`)."""
         summary = self.summary
         tags = read_tag_row(data)
         if usable_track(tags, name) is None:
@@ -583,7 +624,7 @@ class Identify:
                 record_unidentified(
                     self.api,
                     file_id=row.drive_file_id,
-                    root=self.settings.root,
+                    root=self.root.root_id,
                     path=row.path,
                     data=data,
                     note=note,
@@ -598,6 +639,14 @@ class Identify:
                 preview=not self.mode_writes,
             )
         )
+        if made.entry.library != "main":
+            summary.not_linkable.append(
+                f"{row.path} (the catalog answered with an {made.entry.library} "
+                "entry; nothing linked)"
+            )
+            if self.mode_writes:
+                self._mark(row, "other_library")
+            return
         if not made.entry.owner_edit:
             summary.failed.append(
                 f"{row.path} (the catalog did not take {tags['title']!r} as an "
@@ -616,7 +665,7 @@ class Identify:
             self.record,
             file_id=row.drive_file_id,
             name=name,
-            root=self.settings.root,
+            root=self.root.root_id,
             path=row.path,
             data=data,
             catalog_id=str(entry.id),
@@ -631,6 +680,101 @@ class Identify:
         if linked.filled:
             summary.filled.append(f"{row.path} ({', '.join(linked.filled)})")
         self._mark(row, "linked")
+        self._hint(row, name)
+
+    def _hint(self, row: LibraryFile, name: str) -> None:
+        """Send a linked owner edit to the fingerprint function for a hint
+        only: the published recording it was cut from, recorded there and
+        nothing else (ADR-0008, decided 2026-11-11, decision 4). A dry run
+        sends nothing; the hint is not the link, so a missing queue is
+        named and the file stays linked."""
+        summary = self.summary
+        if not self.mode_writes:
+            summary.owner_edit_hints.append(row.path)
+            return
+        if self.jobs is None:
+            summary.no_queue.append(f"{row.path} (owner edit: no cut-from hint)")
+            return
+        self.jobs.send(
+            row.drive_file_id,
+            name,
+            flow="library-identify",
+            mode=self.record.mode.value,  # type: ignore[arg-type]
+            library_root_id=self.root.root_id,
+            path=row.path,
+        )
+        summary.owner_edit_hints.append(row.path)
+
+    def _fx(self, row: LibraryFile, name: str, data: bytes) -> None:
+        """Take in an FX Music file: it links only to an fx entry, the one
+        the catalog has for its own title and artist or one made from them
+        (``POST /v1/catalog/library/entries`` with library ``fx``), never
+        to a main-library entry, however well its tags or its fingerprint
+        match one (ADR-0009, decision 3). Its tags win over the catalog
+        (ADR-0010), so it is not looked up or fingerprinted, and only the
+        link is written to it."""
+        summary = self.summary
+        tags = read_tag_row(data)
+        if usable_track(tags, name) is None:
+            note = "an FX Music file whose tags do not name a song: set its title and artist"
+            summary.skipped.append(f"{row.path} ({note})")
+            if self.mode_writes:
+                record_unidentified(
+                    self.api,
+                    file_id=row.drive_file_id,
+                    root=self.root.root_id,
+                    path=row.path,
+                    data=data,
+                    note=note,
+                )
+                self._mark(row, "fx_unnamed")
+            return
+        made = self.api.create_library_entry(
+            LibraryEntryCreate(
+                title=tags["title"].strip(),
+                artist=tags["artist"].strip(),
+                release_year=_release_year(tags.get("year")),
+                preview=not self.mode_writes,
+                library="fx",
+            )
+        )
+        entry = made.entry
+        label = f"{row.path} -> {entry.artist} - {entry.title}"
+        if entry.library != "fx":
+            summary.not_linkable.append(
+                f"{row.path} (the catalog answered with a main-library entry for "
+                "an FX Music file; nothing linked)"
+            )
+            if self.mode_writes:
+                self._mark(row, "other_library")
+            return
+        if made.created or made.previewed:
+            summary.fx_entries.append(label)
+        if made.previewed:
+            # A dry run that would make the entry has no real id to link to.
+            return
+        linked = link_and_write(
+            self.drive,
+            self.api,
+            self.record,
+            file_id=row.drive_file_id,
+            name=name,
+            root=self.root.root_id,
+            path=row.path,
+            data=data,
+            catalog_id=str(entry.id),
+            identified_by="own tags (FX Music)",
+            note=FX_NOTE,
+        )
+        summary.linked.append(label)
+        if linked.written:
+            summary.written.append(row.path)
+        if linked.would_write:
+            summary.would_write.append(row.path)
+        if linked.filled:
+            summary.filled.append(f"{row.path} ({', '.join(linked.filled)})")
+        if self.mode_writes:
+            self._mark(row, "linked")
 
     def _fingerprint(self, row: LibraryFile, name: str, why: str, data: bytes) -> None:
         summary = self.summary
@@ -640,7 +784,7 @@ class Identify:
         record_unidentified(
             self.api,
             file_id=row.drive_file_id,
-            root=self.settings.root,
+            root=self.root.root_id,
             path=row.path,
             data=data,
             note=f"its tags did not identify it ({why}); sent to fingerprinting",
@@ -653,7 +797,7 @@ class Identify:
             name,
             flow="library-identify",
             mode=self.record.mode.value,  # type: ignore[arg-type]
-            library_root_id=self.settings.root,
+            library_root_id=self.root.root_id,
             path=row.path,
         )
         summary.to_fingerprint.append(f"{row.path} ({why})")
@@ -692,7 +836,13 @@ def _identify(
         summary.problems.append(str(exc))
         return
     tried: dict[str, Any] = dict(tried_doc.get("files") or {})
-    unidentified = _unidentified(api, settings.root)
+    # Every root's files (ADR-0009): the main library's, then FX Music's.
+    root_of: dict[str, LibraryRoot] = {}
+    unidentified: list[LibraryFile] = []
+    for root in settings.roots:
+        for row in _unidentified(api, root.root_id):
+            root_of[row.drive_file_id] = root
+            unidentified.append(row)
     again = [r for r in unidentified if _second_opinion_due(r, tried)]
     waiting = [r for r in unidentified if r.drive_file_id not in tried] + again
     summary.waiting = len(waiting)
@@ -729,8 +879,16 @@ def _identify(
                 status = "stopped"
                 break
             summary.tried += 1
+            work.root = root_of[row.drive_file_id]
             try:
                 work.one(row)
+            except OtherLibraryError as exc:
+                # A backstop: the entry is checked before linking, so this is
+                # the catalog refusing a link the step thought was its own
+                # library's. The file is not linked; any link already
+                # written is in the run record, for music_rollback.
+                summary.not_linkable.append(f"{row.path} ({exc})")
+                work._mark(row, "other_library")
             except AudioChanged as exc:
                 summary.aborted = f"{row.path}: {exc}"
                 work._mark(row, "audio_changed")
@@ -849,6 +1007,9 @@ def _record(report: Any, summary: IdentifySummary, duration_sec: float) -> None:
     report.count("filled_up", len(summary.filled))
     report.count("to_fingerprint", len(summary.to_fingerprint))
     report.count("owner_edits", len(summary.owner_edits))
+    report.count("owner_edit_hints", len(summary.owner_edit_hints))
+    report.count("fx_entries", len(summary.fx_entries))
+    report.count("not_linkable", len(summary.not_linkable))
     report.count("failed", len(summary.failed))
     writes = summary.mode.writes
     for item in summary.linked:
@@ -864,6 +1025,18 @@ def _record(report: Any, summary: IdentifySummary, duration_sec: float) -> None:
         report.updated("catalog filled up", item)
     for item in summary.owner_edits:
         report.notice("owner_edit" if writes else "would_link_owner_edit", item)
+    for item in summary.owner_edit_hints:
+        report.notice(
+            "sent_for_cut_from_hint" if writes else "would_send_for_cut_from_hint",
+            item,
+        )
+    for item in summary.fx_entries:
+        if writes:
+            report.created("fx entry made", item)
+        else:
+            report.notice("would_make_fx_entry", item)
+    for item in summary.not_linkable:
+        report.issue("not_linkable", item)
     for item in summary.to_fingerprint:
         report.notice("sent_to_fingerprint" if writes else "would_fingerprint", item)
     for item in summary.no_queue:

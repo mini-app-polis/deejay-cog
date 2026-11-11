@@ -57,6 +57,14 @@ whichever side a second source backs, and left for the owner when none
 does or both are. That run
 is reported under ``library-identify`` and follows the stricter of the
 message's mode and ``flags.deejay_cog.library_identify``.
+
+**Owner edits.** A library file whose own title names an owner edit (a
+version in ``< >``) is fingerprinted as a hint only (ADR-0008, decided
+2026-11-11, decision 4): a confident match to a published recording is
+recorded as the one it was cut from (the registry note and the run report),
+and nothing else changes. No match, or another recording, is expected: it is
+never reported as wrong, held, retitled, relinked or given a second opinion,
+and nothing is submitted to AcoustID or asked of Spotify.
 """
 
 from __future__ import annotations
@@ -64,10 +72,12 @@ from __future__ import annotations
 import enum
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from time import monotonic
@@ -78,10 +88,12 @@ import musicbrainzngs
 from googleapiclient.http import DEFAULT_HTTP_TIMEOUT_SEC
 from mini_app_polis import load_secrets, timing
 from mini_app_polis import logger as logger_mod
+from mini_app_polis.api import OtherLibraryError
 from mini_app_polis.api.contract import (
     CatalogLookupRequest,
     CatalogMatch,
     LibraryEntryCreate,
+    LibraryFileRegister,
 )
 from mini_app_polis.deadline import RunDeadlineReached
 from mini_app_polis.environment import api_base_url, log_settings
@@ -128,6 +140,8 @@ from deejay_cog.music_tags import (
     CatalogLookup,
     DriveFiles,
     ingest_track,
+    is_owner_edit,
+    linked_catalog_id,
     read_tag_row,
     replace_contents,
     tags_agree,
@@ -767,6 +781,18 @@ def intake_by_fingerprint(
 #: A library file the fingerprint could not identify, linked by its own tags.
 LINKED_BY_TAGS = "linked_by_tags"
 
+#: A library file the catalog refused to link: the entry is of the other
+#: library (main or fx). Not linked, and reported.
+NOT_LINKABLE = "not_linkable"
+
+#: An owner edit whose fingerprint matched a published recording: the
+#: recording is recorded as the one it was cut from, and nothing else changes.
+OWNER_EDIT_CUT_FROM = "owner_edit_cut_from"
+
+#: An owner edit whose fingerprint gave no hint (no match, an unconfident
+#: one, or the edit's own entry): expected, never reported as wrong.
+OWNER_EDIT_NO_HINT = "owner_edit_no_hint"
+
 
 @dataclass
 class LibraryIdentifyResult:
@@ -780,6 +806,10 @@ class LibraryIdentifyResult:
     written: bool = False
     would_write: bool = False
     filled: tuple[str, ...] = ()
+    #: For an owner edit, the published recording it was cut from, as the
+    #: fingerprint suggests it: "Artist - Title", and its catalog entry when
+    #: the catalog has one.
+    cut_from: str = ""
 
 
 def identify_library_file(
@@ -800,7 +830,38 @@ def identify_library_file(
     ``threshold`` nothing changes. A match that disagrees with the file's
     own tags is linked by whichever side a second opinion backs
     (:mod:`deejay_cog.second_opinion`, with ``search`` as its Spotify), and
-    otherwise left for the owner."""
+    otherwise left for the owner. A link the catalog refuses as one to the
+    other library (:class:`OtherLibraryError`) is :data:`NOT_LINKABLE`, not
+    an error."""
+    try:
+        return _identify_library_file(
+            drive,
+            api,
+            identifier,
+            record,
+            file_id=file_id,
+            root=root,
+            path=path,
+            threshold=threshold,
+            search=search,
+        )
+    except OtherLibraryError as exc:
+        log.warning("library-identify fingerprint: %s not linkable: %s", path, exc)
+        return LibraryIdentifyResult(path, NOT_LINKABLE)
+
+
+def _identify_library_file(
+    drive: Any,
+    api: Any,
+    identifier: Identifier,
+    record: RunRecord,
+    *,
+    file_id: str,
+    root: str,
+    path: str,
+    threshold: float,
+    search: TrackSearch | None = None,
+) -> LibraryIdentifyResult:
     meta = file_meta(drive, file_id)
     if meta.get("trashed"):
         return LibraryIdentifyResult(path, "in_trash")
@@ -809,6 +870,18 @@ def identify_library_file(
     data: bytes = downloaded.data
     if not _is_mp3(downloaded, name):
         return LibraryIdentifyResult(path, Outcome.NOT_MP3.value)
+    if is_owner_edit(read_tag_row(data)["title"]):
+        return _owner_edit_hint(
+            api,
+            identifier,
+            record,
+            file_id=file_id,
+            name=name,
+            root=root,
+            path=path,
+            data=data,
+            threshold=threshold,
+        )
 
     # The best match's score, once there is one; read when a note is made.
     score: float | None = None
@@ -963,6 +1036,94 @@ def identify_library_file(
     )
 
 
+def _owner_edit_hint(
+    api: Any,
+    identifier: Identifier,
+    record: RunRecord,
+    *,
+    file_id: str,
+    name: str,
+    root: str,
+    path: str,
+    data: bytes,
+    threshold: float,
+) -> LibraryIdentifyResult:
+    """An owner edit's fingerprint, taken as a hint only (ADR-0008, decided
+    2026-11-11, decision 4).
+
+    A confident match to a published recording of the edit's own song (its
+    title without the ``< >`` version, and its artist) is recorded as the one
+    the edit was cut from: in the registry's note for the file (when it is
+    linked; its link and status are sent unchanged) and in the result, for
+    the run report. Nothing else changes: the file is never retitled,
+    relinked, held or given a second opinion, no entry is made, and no
+    match, an unconfident one, or the edit's own entry is not reported as
+    wrong. Nothing is sent to a third party as the official recording: the
+    one AcoustID lookup asks what the audio matches and submits nothing,
+    MusicBrainz is asked only for the matched recording's details, and
+    Spotify is not asked."""
+    try:
+        result = _identify(identifier, name, data)
+    except AudioUnreadable:
+        return LibraryIdentifyResult(path, OWNER_EDIT_NO_HINT)
+    chosen = result.chosen
+    score = float(chosen.confidence or 0.0) if chosen is not None else 0.0
+    metadata = result.metadata or {}
+    title = str(metadata.get("title") or "").strip()
+    artist = str(metadata.get("artist") or "").strip()
+    no_hint = LibraryIdentifyResult(path, OWNER_EDIT_NO_HINT, score)
+    if chosen is None or score < threshold or metadata.get(NOT_SERVED):
+        return no_hint
+    own = read_tag_row(data)
+    song = " ".join(_OWNER_EDIT_VERSION.sub(" ", own["title"]).split())
+    if not tags_agree(song, own["artist"], title, artist):
+        return no_hint  # another recording: expected, and not a hint
+    track = ingest_track({"title": title, "artist": artist, "year": ""})
+    if track is None:
+        return no_hint
+    match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+    linked = linked_catalog_id(data)
+    if match is not None and (match.owner_edit or str(match.id) == linked):
+        return no_hint  # the edit's own entry, or another edit: not an original
+    if match is not None:
+        cut_from = f"{match.artist} - {match.title} (catalog entry {match.id})"
+    else:
+        cut_from = f"{artist} - {title} (not in the catalog)"
+    if record.mode.writes and _is_uuid(linked):
+        api.register_library_file(
+            LibraryFileRegister(
+                drive_file_id=file_id,
+                library_root_id=root,
+                path=path,
+                identification_status="identified",
+                catalog_id=uuid.UUID(linked),
+                identify_note=(
+                    f"{library_identify.OWNER_EDIT_NOTE}; fingerprint hint: cut "
+                    f"from {cut_from}, score {score:.2f}"
+                ),
+            )
+        )
+    return LibraryIdentifyResult(
+        path,
+        OWNER_EDIT_CUT_FROM,
+        score,
+        catalog_id=str(match.id) if match is not None else "",
+        cut_from=cut_from,
+    )
+
+
+#: An owner edit's version in its title, ``<Intro Cut>``.
+_OWNER_EDIT_VERSION = re.compile(r"<[^<>]*>")
+
+
+def _is_uuid(text: str) -> bool:
+    try:
+        uuid.UUID(text)
+    except ValueError:
+        return False
+    return True
+
+
 def library_identify_by_fingerprint(
     file_id: str,
     name: str = "",
@@ -1050,7 +1211,8 @@ def _record_library(
     only and is not sent: its file is in the run record, and the next
     identify report counts what is still unidentified
     (``fingerprinted_unlinked``). Only an issue (a missing setting, a
-    changed audio check, an exception) reaches the channel.
+    changed audio check, an exception) reaches the channel, and an owner
+    edit's cut-from hint, named so the owner sees it.
     """
     report.duration_sec = duration_sec
     if result is None:
@@ -1058,6 +1220,14 @@ def _record_library(
     item = result.path
     if result.score is not None:
         item = f"{item} (score {result.score:.2f})"
+    if result.outcome == NOT_LINKABLE:
+        report.issue(
+            "not_linkable",
+            f"{item}: the catalog refused the link, to an entry of the other library",
+        )
+    if result.outcome == OWNER_EDIT_CUT_FROM:
+        report.notice("owner_edit_cut_from", f"{item}: cut from {result.cut_from}")
+    report.count("owner_edit_hints", 1 if result.outcome == OWNER_EDIT_CUT_FROM else 0)
     report.count("scanned", 1)
     report.count("linked", 1 if result.outcome == "linked" else 0)
     report.count("linked_by_tags", 1 if result.outcome == LINKED_BY_TAGS else 0)

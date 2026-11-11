@@ -24,7 +24,7 @@ decision), **Decision** (what change is being made), and
 - [ADR-0004: Best-effort pipeline evaluation posting](./ADR-0004-best-effort-pipeline-eval.md) — amended: reports go to `/v1/notify`; amended by ADR-0007
 - [ADR-0005: Resilient `serve()` startup — retry, restart policy, and the `startup` finding source](./ADR-0005-serve-startup-resilience.md) — amends ADR-0001; superseded by ADR-0006
 - [ADR-0006: Run on Lambda behind SQS, not Prefect on Railway](./ADR-0006-lambda-behind-sqs.md) — supersedes ADR-0001 and ADR-0005; amended (FIFO queue, reserved concurrency); amended by ADR-0007
-- [ADR-0007: Tag the Drive music library from the catalog, on Lambda](./ADR-0007-music-tagging-redesign.md) — amends ADR-0001, ADR-0002, ADR-0004 and ADR-0006; amended 2026-11-03 (two flows, safety rules)
+- [ADR-0007: Tag the Drive music library from the catalog, on Lambda](./ADR-0007-music-tagging-redesign.md) — amends ADR-0001, ADR-0002, ADR-0004 and ADR-0006; amended 2026-11-03 (two flows, safety rules); amended 2026-11-07 (new music trusts its own tags); amended 2026-11-11 (incoming music takes the library's path)
 - [ADR-0008: The catalog is the source of truth for the music library](./ADR-0008-catalog-source-of-truth.md) — builds on ADR-0007; amended by ADR-0009 (the library spans more than one folder)
 - [ADR-0009: The library spans more than one Drive folder](./ADR-0009-library-folders.md) — builds on ADR-0008; how each library is tagged is decided in ADR-0010
 - [ADR-0010: Each library is tagged by a named rule profile](./ADR-0010-tagging-rule-profiles.md) — builds on ADR-0009

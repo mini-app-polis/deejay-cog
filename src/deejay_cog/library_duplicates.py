@@ -23,6 +23,13 @@ files is split into its edits; every edit with two or more files is a
 group, and the files of the song's other edits are shown in it marked kept
 on purpose, with why, so they can never be sent to the trash through it.
 
+**Owner edits** (ADR-0008, decided 2026-11-11): a file linked to an
+owner-edit entry (a cut the owner made himself, ``Song <Intro Cut>``) is
+an edit of its own, never a copy of the published song's files, even with
+the same md5. Files on one owner-edit entry are grouped as copies of that
+entry like any other; shown beside the published song's files, it is kept on
+purpose, as an owner edit.
+
 **Per library root** (ADR-0009, decision 4). Files are grouped only with
 files of the same root, so an FX Music file and a main-library file are
 never duplicates of each other. In the main library (its own folder and New
@@ -63,9 +70,8 @@ from mini_app_polis.api.contract import (
     LibraryFile,
 )
 from mini_app_polis.environment import api_base_url
-from mini_app_polis.pipeline_status import run_report
 
-from deejay_cog._pipeline_eval import REPO
+from deejay_cog._pipeline_eval import REPO, run_report
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
 from deejay_cog.library_backfill import BackfillSettings, LibraryRoot
@@ -184,13 +190,22 @@ class _Links:
                 self.parent[max(a, b)] = min(a, b)
 
 
-def _edits(files: list[LibraryFile]) -> list[list[LibraryFile]]:
-    """The song's files split into edits: by release label, then by
-    duration, a gap of more than the tolerance starting a new edit. A file
-    of unknown length joins the label's largest edit."""
-    by_label: dict[str, list[LibraryFile]] = defaultdict(list)
+def _owner_edit(f: LibraryFile, owner_edits: frozenset[uuid.UUID]) -> str:
+    """The owner-edit entry ``f`` is linked to, as text; "" for any other file."""
+    return str(f.catalog_id) if f.catalog_id in owner_edits else ""
+
+
+def _edits(
+    files: list[LibraryFile], owner_edits: frozenset[uuid.UUID] = frozenset()
+) -> list[list[LibraryFile]]:
+    """The song's files split into edits: the files of each owner-edit entry
+    apart from the rest, then by release label, then by duration, a gap of
+    more than the tolerance starting a new edit. A file of unknown length
+    joins the label's largest edit."""
+    by_label: dict[tuple[str, str], list[LibraryFile]] = defaultdict(list)
     for f in files:
-        by_label[(f.edit_label or "").casefold()].append(f)
+        key = (_owner_edit(f, owner_edits), (f.edit_label or "").casefold())
+        by_label[key].append(f)
     out: list[list[LibraryFile]] = []
     for label in sorted(by_label):
         known = sorted(
@@ -219,7 +234,16 @@ def _edits(files: list[LibraryFile]) -> list[list[LibraryFile]]:
     return out
 
 
-def _why_kept(f: LibraryFile, edit: list[LibraryFile]) -> str:
+def _why_kept(
+    f: LibraryFile,
+    edit: list[LibraryFile],
+    owner_edits: frozenset[uuid.UUID] = frozenset(),
+) -> str:
+    mine, group = _owner_edit(f, owner_edits), _owner_edit(edit[0], owner_edits)
+    if mine != group:
+        if mine:
+            return "an owner edit (its own entry, not the published song)"
+        return "the published song (this group is of an owner edit)"
     theirs = (edit[0].edit_label or "").casefold()
     if (f.edit_label or "").casefold() != theirs:
         return f"a different release label ({f.edit_label or 'none'})"
@@ -265,11 +289,12 @@ def find_groups(
     """The duplicate groups among ``files``, sorted by key; the same files
     always give the same groups."""
     songs, links = _songs(files, shown)
+    owner_edits = frozenset(i for i, d in shown.items() if d.owner_edit)
     groups: list[DuplicateGroupReport] = []
     for song in songs:
         if len(song) < 2:
             continue
-        for edit in _edits(song):
+        for edit in _edits(song, owner_edits):
             if len(edit) < 2:
                 continue
             ids = {f.drive_file_id for f in edit}
@@ -285,7 +310,7 @@ def find_groups(
                 DuplicateMember(
                     drive_file_id=f.drive_file_id,
                     kept_on_purpose=True,
-                    why_kept=_why_kept(f, edit),
+                    why_kept=_why_kept(f, edit, owner_edits),
                 )
                 for f in song
                 if f.drive_file_id not in ids
@@ -321,10 +346,19 @@ def find_fx_groups(
     groups: list[DuplicateGroupReport] = []
     for folder in sorted(by_folder):
         groups.extend(find_groups(by_folder[folder], shown))
+    # An owner edit is never a copy of the published song, across folders
+    # either: each owner-edit entry's files are a set of their own.
+    owner_edits = frozenset(i for i, d in shown.items() if d.owner_edit)
+    sets: list[list[LibraryFile]] = []
+    for song in _songs(files, shown)[0]:
+        parts: dict[str, list[LibraryFile]] = defaultdict(list)
+        for f in song:
+            parts[_owner_edit(f, owner_edits)].append(f)
+        sets.extend(parts.values())
     across = [
-        sorted(f.path for f in song)
-        for song in _songs(files, shown)[0]
-        if len({_folder(f.path) for f in song}) > 1
+        sorted(f.path for f in part)
+        for part in sets
+        if len({_folder(f.path) for f in part}) > 1
     ]
     return sorted(groups, key=lambda g: g.key), sorted(across)
 

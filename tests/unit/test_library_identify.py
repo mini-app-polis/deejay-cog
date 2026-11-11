@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from mini_app_polis import pipeline_status
+from mini_app_polis.api import OtherLibraryError
 from mini_app_polis.api.contract import (
     CatalogDisplay,
     CatalogDisplayRequest,
@@ -96,8 +97,9 @@ class FakeApi:
     def list_library_files(self, **kwargs) -> list[LibraryFile]:
         assert kwargs["identification_status"] == "unidentified"
         assert kwargs["present"] is True
+        rows = [r for r in self.rows if r.library_root_id == kwargs["library_root_id"]]
         start = kwargs["offset"]
-        return self.rows[start : start + kwargs["limit"]]
+        return rows[start : start + kwargs["limit"]]
 
     def lookup_catalog(self, payload: CatalogLookupRequest):
         return [self.known.get(t.title.lower()) for t in payload.tracks]
@@ -181,13 +183,15 @@ def wired(
     monkeypatch.setattr(ident, "shared_deadline_passed", lambda: False)
 
 
-def _unidentified(drive: FakeDrive, api: FakeApi, name: str, data: bytes) -> str:
-    drive_id = drive.add(name, ROOT, data)
+def _unidentified(
+    drive: FakeDrive, api: FakeApi, name: str, data: bytes, root: str = ROOT
+) -> str:
+    drive_id = drive.add(name, root, data)
     api.rows.append(
         LibraryFile(
             id=uuid.uuid4(),
             drive_file_id=drive_id,
-            library_root_id=ROOT,
+            library_root_id=root,
             path=f"New/{name}",
             identification_status="unidentified",
             present=True,
@@ -1102,8 +1106,11 @@ def test_an_owner_edit_gets_an_owner_edit_entry_of_its_own(
     [reg] = api.registrations
     assert reg.catalog_id == _CUT and reg.edit_label is None
     assert reg.identify_note == ident.OWNER_EDIT_NOTE
-    # The owner's tags are his choice: nothing is sent to fingerprinting.
-    assert jobs.sent == []
+    # The owner's tags identify it; once linked, the fingerprint is asked
+    # for a hint only (what it was cut from).
+    [hint] = jobs.sent
+    assert hint["file_id"] == drive_id and hint["flow"] == "library-identify"
+    assert summary.owner_edit_hints == ["New/baby.mp3"]
     assert summary.owner_edits == [f"New/baby.mp3 -> Etta James - {title}"]
     assert _state(drive, ident.TRIED_NAME)["files"][drive_id]["outcome"] == "linked"
 
@@ -1122,7 +1129,8 @@ def test_an_owner_edit_is_linked_to_the_owner_edit_entry_the_catalog_has(
 
     ident.library_identify(run_id="i-1")
 
-    assert api.created == [] and jobs.sent == []
+    assert api.created == []
+    assert [s["file_id"] for s in jobs.sent] == [drive_id]  # a hint only
     assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(existing)
     [reg] = api.registrations
     assert reg.catalog_id == existing and reg.edit_label == "Clean"
@@ -1168,3 +1176,415 @@ def test_an_unmarked_file_is_linked_to_the_published_song_as_before(
 
     assert api.created == [] and summary.owner_edits == []
     assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(_ENTRY)
+
+
+# ---------------------------------------------------------------------------
+# FX Music: its files link only to fx entries, and main files never do
+# ---------------------------------------------------------------------------
+
+FX = "fx-root"
+_FX_ENTRY = uuid.UUID("0f0f0f0f-0000-4000-8000-000000000003")
+
+
+class FxApi(FakeApi):
+    """A catalog that keeps fx entries apart: a new entry is of the library
+    asked for, and a link across libraries is refused."""
+
+    fx_known: dict[str, uuid.UUID]
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.fx_known = {}
+        self.library_of: dict[uuid.UUID, str] = {_ENTRY: "main"}
+
+    def create_library_entry(self, payload: LibraryEntryCreate):
+        self.created.append(payload)
+        if payload.library != "fx":
+            return super().create_library_entry(payload)
+        key = payload.title.lower()
+        existing = key in self.fx_known
+        entry = self.fx_known.get(key, _FX_ENTRY)
+        if not payload.preview:
+            self.fx_known[key] = entry
+            self.library_of[entry] = "fx"
+            self.displays[entry] = _display(
+                entry, title=payload.title, artist=payload.artist
+            )
+        return LibraryEntryCreated(
+            entry=CatalogMatch(
+                id=entry, title=payload.title, artist=payload.artist, library="fx"
+            ),
+            created=not existing and not payload.preview,
+            previewed=not existing and payload.preview,
+        )
+
+    def register_library_file(self, payload: LibraryFileRegister):
+        if payload.catalog_id is not None:
+            library = self.library_of.get(payload.catalog_id, "main")
+            root_library = "fx" if payload.library_root_id == FX else "main"
+            if library != root_library:
+                raise OtherLibraryError(
+                    status_code=409, message="other_library", path="/files"
+                )
+        return super().register_library_file(payload)
+
+
+@pytest.fixture
+def fx_api(monkeypatch: pytest.MonkeyPatch, wired) -> FxApi:
+    monkeypatch.setenv(backfill.FX_ROOT_FOLDER_VAR, FX)
+    api = FxApi(known={"temple": _match()}, displays={_ENTRY: _display()})
+    monkeypatch.setattr(ident, "api_client", lambda **_: api)
+    return api
+
+
+def test_an_fx_file_gets_an_fx_entry_even_when_its_tags_match_a_main_entry(
+    settings, fx_api, drive, jobs
+) -> None:
+    api = fx_api
+    # "temple" is a main-library song the lookup knows.
+    drive_id = _unidentified(drive, api, "temple.mp3", _song(), root=FX)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    [made] = api.created
+    assert made.library == "fx" and made.title == "temple"
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TXXX:CATALOG_ID"] == str(_FX_ENTRY)  # not the main entry's
+    # Only the link is written: the FX file's own tags win (ADR-0010).
+    assert frames["TIT2"] == "temple" and frames["TPE1"] == "thomas gold"
+    [reg] = api.registrations
+    assert reg.catalog_id == _FX_ENTRY and reg.library_root_id == FX
+    assert reg.identify_note == ident.FX_NOTE
+    assert jobs.sent == []  # never fingerprinted
+    assert summary.fx_entries == ["New/temple.mp3 -> thomas gold - temple"]
+    assert _state(drive, ident.TRIED_NAME)["files"][drive_id]["outcome"] == "linked"
+
+
+def test_an_fx_file_links_to_the_fx_entry_the_catalog_already_has(
+    settings, fx_api, drive
+) -> None:
+    api = fx_api
+    api.fx_known["temple"] = _FX_ENTRY
+    api.library_of[_FX_ENTRY] = "fx"
+    api.displays[_FX_ENTRY] = _display(_FX_ENTRY)
+    drive_id = _unidentified(drive, api, "temple.mp3", _song(), root=FX)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(_FX_ENTRY)
+    assert summary.fx_entries == [] and len(summary.linked) == 1
+
+
+def test_an_fx_file_the_fingerprint_would_match_is_never_fingerprinted(
+    settings, fx_api, drive, jobs
+) -> None:
+    api = fx_api
+    drive_id = _unidentified(drive, api, "clip.mp3", _no_tags(), root=FX)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert jobs.sent == [] and api.created == []
+    assert "TXXX:CATALOG_ID" not in _frames(drive.items[drive_id].data)
+    [reg] = api.registrations
+    assert reg.identification_status == "unidentified" and "FX Music" in (
+        reg.identify_note or ""
+    )
+    assert summary.skipped
+
+
+def test_a_dry_run_names_the_fx_entry_it_would_make_and_changes_nothing(
+    settings, fx_api, drive, jobs, posted, monkeypatch
+) -> None:
+    monkeypatch.setitem(FLAGS, ident.MODE_FLAG, "dry-run")
+    api = fx_api
+    data = _song()
+    drive_id = _unidentified(drive, api, "temple.mp3", data, root=FX)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert [(c.library, c.preview) for c in api.created] == [("fx", True)]
+    assert drive.items[drive_id].data == data
+    assert api.registrations == [] and jobs.sent == []
+    assert summary.fx_entries == ["New/temple.mp3 -> thomas gold - temple"]
+    assert "would_make_fx_entry" in _text(posted)
+
+
+def test_the_report_names_fx_files_given_new_entries(
+    settings, fx_api, drive, posted
+) -> None:
+    _unidentified(drive, fx_api, "temple.mp3", _song(), root=FX)
+
+    ident.library_identify(run_id="i-1")
+
+    assert "New/temple.mp3 -> thomas gold - temple" in _text(posted)
+
+
+def test_a_main_file_never_links_to_an_fx_entry(settings, fx_api, drive, jobs) -> None:
+    api = fx_api
+    # Were the lookup ever to answer with an fx entry, it is not taken.
+    api.known["temple"] = CatalogMatch(
+        id=_FX_ENTRY, title="Temple", artist="Thomas Gold", library="fx"
+    )
+    drive_id = _unidentified(drive, api, "temple.mp3", _song())
+
+    ident.library_identify(run_id="i-1")
+
+    assert "TXXX:CATALOG_ID" not in _frames(drive.items[drive_id].data)
+    assert [s["file_id"] for s in jobs.sent] == [drive_id]
+
+
+def test_main_and_fx_files_each_link_within_their_own_library(
+    settings, fx_api, drive
+) -> None:
+    api = fx_api
+    main_id = _unidentified(drive, api, "temple.mp3", _song())
+    fx_id = _unidentified(drive, api, "walkon.mp3", _song(), root=FX)
+
+    ident.library_identify(run_id="i-1")
+
+    assert _frames(drive.items[main_id].data)["TXXX:CATALOG_ID"] == str(_ENTRY)
+    assert _frames(drive.items[fx_id].data)["TXXX:CATALOG_ID"] == str(_FX_ENTRY)
+    assert {(r.library_root_id, r.catalog_id) for r in api.registrations} == {
+        (ROOT, _ENTRY),
+        (FX, _FX_ENTRY),
+    }
+
+
+def test_a_link_the_catalog_refuses_as_the_other_librarys_is_reported_not_raised(
+    settings, fx_api, drive, posted
+) -> None:
+    api = fx_api
+    # A main-library entry the catalog holds as fx: the link is refused.
+    api.library_of[_ENTRY] = "fx"
+    _unidentified(drive, api, "temple.mp3", _song())
+    other = _unidentified(drive, api, "clip.mp3", _song(), root=FX)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert summary.not_linkable and summary.not_linkable[0].startswith("New/temple.mp3")
+    assert summary.failed == [] and not summary.aborted
+    # The run carries on to the next file.
+    assert _frames(drive.items[other].data)["TXXX:CATALOG_ID"] == str(_FX_ENTRY)
+    assert "not_linkable" in _text(posted)
+
+
+def test_the_fingerprint_reports_a_link_to_the_other_library_as_not_linkable(
+    drive,
+) -> None:
+    api = FxApi(known={"temple": _match()}, displays={_ENTRY: _display()})
+    api.library_of[_ENTRY] = "fx"
+    drive_id = drive.add("temple.mp3", ROOT, _no_tags())
+    identifier = FakeIdentifier()
+
+    result = fp.identify_library_file(
+        drive,
+        api,
+        identifier,
+        _record(drive),
+        file_id=drive_id,
+        root=ROOT,
+        path="temple.mp3",
+        threshold=0.5,
+    )
+
+    assert result.outcome == fp.NOT_LINKABLE
+
+
+# ---------------------------------------------------------------------------
+# Owner edits: the fingerprint is a hint at what the edit was cut from
+# ---------------------------------------------------------------------------
+
+
+def _linked_edit(drive: FakeDrive, title: str = f"{_BABY} <Intro Cut>") -> str:
+    from mutagen.id3 import TXXX
+
+    data = mp3(
+        TIT2(encoding=3, text=[title]),
+        TPE1(encoding=3, text=["Etta James"]),
+        TXXX(encoding=3, desc="CATALOG_ID", text=[str(_CUT)]),
+    )
+    return drive.add("baby.mp3", ROOT, data)
+
+
+class SpySearch:
+    """A Spotify search that must never be asked."""
+
+    def tracks(self, artist: str, title: str) -> list[Recording]:
+        raise AssertionError(f"Spotify asked for {artist} - {title}")
+
+
+@pytest.fixture
+def no_second_opinion(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("an owner edit was given a second opinion")
+
+    monkeypatch.setattr(fp, "second_opinion", refuse)
+
+
+def _hint(drive, api, identifier, mode: FlowMode = FlowMode.WRITE):
+    drive_id = _linked_edit(drive)
+    before = drive.items[drive_id].data
+    result = fp.identify_library_file(
+        drive,
+        api,
+        identifier,
+        _record(drive, mode),
+        file_id=drive_id,
+        root=ROOT,
+        path="Blues/baby.mp3",
+        threshold=0.9,
+        search=SpySearch(),
+    )
+    # Never retitled, relinked or written in any way.
+    assert drive.items[drive_id].data == before
+    assert drive.writes(except_folder=STATE) == []
+    return drive_id, result
+
+
+def _baby_api() -> FakeApi:
+    return FakeApi(
+        known={
+            _BABY.lower(): CatalogMatch(id=_ENTRY, title=_BABY, artist="Etta James")
+        },
+        displays={_ENTRY: _display(title=_BABY, artist="Etta James")},
+    )
+
+
+def test_an_owner_edits_fingerprint_records_the_published_song_it_was_cut_from(
+    drive, no_second_opinion
+) -> None:
+    api = _baby_api()
+    identifier = FakeIdentifier(metadata={"title": _BABY, "artist": "Etta James"})
+
+    drive_id, result = _hint(drive, api, identifier)
+
+    assert result.outcome == fp.OWNER_EDIT_CUT_FROM
+    assert result.catalog_id == str(_ENTRY)
+    assert str(_ENTRY) in result.cut_from and _BABY in result.cut_from
+    # Recorded on the file's registry row; its link and status unchanged.
+    [reg] = api.registrations
+    assert reg.drive_file_id == drive_id
+    assert reg.catalog_id == _CUT and reg.identification_status == "identified"
+    assert "cut from" in (reg.identify_note or "")
+    assert str(_ENTRY) in (reg.identify_note or "")
+    assert reg.synced_at is None and reg.tags is None
+    # Nothing else changes: no entry made, nothing filled up.
+    assert api.created == [] and api.fills == []
+
+
+def test_an_owner_edit_with_no_fingerprint_match_changes_nothing(
+    drive, no_second_opinion
+) -> None:
+    api = _baby_api()
+
+    _, result = _hint(drive, api, FakeIdentifier(score=0.2))
+
+    assert result.outcome == fp.OWNER_EDIT_NO_HINT
+    # Not recorded as unidentified, not held for review.
+    assert api.registrations == [] and api.created == []
+
+
+def test_an_owner_edit_matched_to_another_recording_is_not_held_or_relinked(
+    drive, no_second_opinion
+) -> None:
+    api = _baby_api()
+    api.known["don't worry"] = _match()
+    identifier = FakeIdentifier(metadata={"title": "Don't Worry", "artist": "Madcon"})
+
+    _, result = _hint(drive, api, identifier)
+
+    assert result.outcome == fp.OWNER_EDIT_NO_HINT
+    assert api.registrations == [] and api.created == []
+
+
+def test_an_owner_edit_matched_to_its_own_entry_is_no_hint(
+    drive, no_second_opinion
+) -> None:
+    api = _baby_api()
+    title = f"{_BABY} <Intro Cut>"
+    api.known[_BABY.lower()] = CatalogMatch(
+        id=_CUT, title=title, artist="Etta James", owner_edit=True
+    )
+    identifier = FakeIdentifier(metadata={"title": _BABY, "artist": "Etta James"})
+
+    _, result = _hint(drive, api, identifier)
+
+    assert result.outcome == fp.OWNER_EDIT_NO_HINT
+    assert api.registrations == []
+
+
+def test_a_dry_run_owner_edit_hint_records_nothing(drive, no_second_opinion) -> None:
+    api = _baby_api()
+    identifier = FakeIdentifier(metadata={"title": _BABY, "artist": "Etta James"})
+
+    _, result = _hint(drive, api, identifier, FlowMode.DRY_RUN)
+
+    assert result.outcome == fp.OWNER_EDIT_CUT_FROM
+    assert api.registrations == []
+
+
+def test_an_owner_edit_is_never_given_a_second_opinion() -> None:
+    from deejay_cog import second_opinion
+
+    verdict = second_opinion.decide(
+        f"{_BABY} <Intro Cut>",
+        "Etta James",
+        "Don't Worry",
+        "Madcon",
+        Heard(150.0, ()),
+        SpySearch(),
+    )
+
+    assert verdict.side is None
+    assert verdict.why == second_opinion.OWNER_EDIT_NO_OPINION
+
+
+def test_the_cut_from_hint_is_named_in_the_run_report(
+    monkeypatch, drive, posted
+) -> None:
+    monkeypatch.setitem(FLAGS, ident.MODE_FLAG, "write")
+    monkeypatch.setenv(backfill.STATE_FOLDER_VAR, STATE)
+    api = _baby_api()
+    drive_id = _linked_edit(drive)
+
+    fp.library_identify_by_fingerprint(
+        drive_id,
+        "baby.mp3",
+        root=ROOT,
+        path="Blues/baby.mp3",
+        run_id="m-1",
+        sender_mode=FlowMode.WRITE,
+        drive=drive,
+        api=api,
+        identifier=FakeIdentifier(metadata={"title": _BABY, "artist": "Etta James"}),
+        search=SpySearch(),
+    )
+
+    text = _text(posted)
+    assert "owner_edit_cut_from" in text and str(_ENTRY) in text
+
+
+def test_an_unflagged_file_still_gets_a_second_opinion(drive) -> None:
+    api = FakeApi()
+    _, result = _disagreeing(drive, api, Heard(150.0, ()), FakeSearch())
+
+    assert result.outcome == fp.DISAGREES_WITH_TAGS
+
+
+def test_a_dry_run_names_the_owner_edit_it_would_send_for_a_hint(
+    settings, owner_edit_api, drive, jobs, monkeypatch
+) -> None:
+    monkeypatch.setitem(FLAGS, ident.MODE_FLAG, "dry-run")
+    api = owner_edit_api
+    title = f"{_BABY} <Intro Cut>"
+    existing = uuid.uuid4()
+    api.known[title.lower()] = CatalogMatch(
+        id=existing, title=title, artist="Etta James", owner_edit=True
+    )
+    api.displays[existing] = _display(existing, owner_edit=True)
+    _unidentified(drive, api, "baby.mp3", _song(title, "Etta James"))
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert jobs.sent == []
+    assert summary.owner_edit_hints == ["New/baby.mp3"]

@@ -8,7 +8,10 @@ Accepted. Amended 2026-11-03 (owner): two flows and the safety rules, in
 [its section](#amended-2026-11-03-owner-two-flows-and-the-safety-rules).
 Amended 2026-11-07 (owner): new music is identified by its own tags,
 standardized by the catalog, with no fingerprint, in
-[the section at the end](#amended-2026-11-07-owner-new-music-trusts-its-own-tags-standardized-by-the-catalog).
+[its section](#amended-2026-11-07-owner-new-music-trusts-its-own-tags-standardized-by-the-catalog).
+Amended 2026-11-11 (owner): incoming music takes the library's path, its
+tags a starting point verified by every check, in
+[the section at the end](#amended-2026-11-11-owner-incoming-music-takes-the-librarys-path).
 
 Supersedes, once built, the retag-music parts of
 [ADR-0002](./ADR-0002-production-vs-local-flow-tiers.md) (retag-music as a
@@ -361,3 +364,58 @@ whichever way it was identified.
   catalog. It has no plays and no present file, as any library entry can.
 - The 2026-11-03 amendment's "a new release AcoustID does not know yet
   scores low and goes to needs-review" no longer applies to new music.
+
+## Amended 2026-11-11 (owner): incoming music takes the library's path
+
+### Context
+
+The 2026-11-07 amendment trusts a new-music file's own tags: intake makes
+or finds the song's entry from them and writes the catalog's values at
+once, with no fingerprint. Meanwhile the library itself reached its
+current state through more checks: identify (tags, then the fingerprint
+and a second opinion), the duplicates page, the reconcile page and the
+sync. A song the library already had could come in as a second copy, found
+only later by the duplicates step. The owner wants one path for every
+song, documented case by case
+([ADDING-AND-REMOVING-SONGS.md](../ADDING-AND-REMOVING-SONGS.md)).
+
+### Decision
+
+- **A file's own tags are the starting point, not the final word.**
+  Incoming music goes through every check the library's files went
+  through: identified from its tags and checked against the fingerprint,
+  linked to its catalog entry (or one made from its tags), grouped with any
+  copy the library already has on the duplicates page, its differences
+  with the catalog reviewed on the reconcile page, and only then tagged by
+  the sync. This replaces the 2026-11-07 rule that new music trusts its own
+  tags as final; the fingerprint is no longer skipped. Files whose tags are
+  deliberately misleading are out of scope.
+- **The new-music input folder is the way in.** Intake checks a file can
+  be taken in (an MP3 with a usable title and artist; anything else goes,
+  unchanged, to needs-review) and puts a copy into New Music, its tags and
+  audio unchanged, named from its own tags; the library's steps do the
+  rest. A file put straight into a library folder can't be prevented, and
+  takes the same path from the scan on.
+- **A copy of a song the library already has (the same release)** is
+  grouped with the existing file on the duplicates page; neither is
+  trashed until the owner chooses. Replacing a file with a better copy is
+  that choice: the owner adds the new copy through the input folder and
+  keeps it on the duplicates page.
+- **Releases and versions stay as they are:** a release label (Clean,
+  Explicit, Radio Edit, an official No Intro Edit) is a second file on the
+  song's entry; a remix or other version has an entry of its own; an owner
+  edit in `< >` has an entry of its own (ADR-0008).
+- **Removing a song never removes its entry.** A file leaves the library
+  only through Drive's trash (the duplicates page, or the owner trashing
+  it); its catalog entry stays, with its plays and links, even when no file
+  is left.
+
+### Consequences
+
+- Intake no longer makes catalog entries or writes tags; identify,
+  reconcile and sync do, as for every library file. A new song's tags reach
+  the catalog's standard one sync after its differences are settled, not on
+  intake.
+- Every incoming file is fingerprinted when its tags alone would have
+  linked it, so the fingerprint function and AcoustID see more files.
+- An entry left with no file and no plays is kept rather than archived.
