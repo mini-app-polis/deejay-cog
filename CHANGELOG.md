@@ -1,3 +1,19 @@
+# [2.53.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.52.0...v2.53.0) (2026-11-11)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 9.7.0 ([a68abfd](https://github.com/mini-app-polis/deejay-cog/commit/a68abfdd336232fa739d05c3ae94701a6bec8d2e))
+
+
+### Features
+
+* **fingerprint:** take an owner edit's fingerprint as a hint at what it was cut from ([0491455](https://github.com/mini-app-polis/deejay-cog/commit/04914555f77cfedf44661e3a5379a7386460f6d0))
+* **library-duplicates:** keep owner edits apart from the published song's files ([fe91fd8](https://github.com/mini-app-polis/deejay-cog/commit/fe91fd8b6daa81d1354db9c667254d1680149c32))
+* **library-identify:** check a tag match against the fingerprint before linking ([cb1592d](https://github.com/mini-app-polis/deejay-cog/commit/cb1592df19ddc96ca84da217072c9d450872bc66))
+* **library-identify:** give FX Music files fx entries and never link across libraries ([46232de](https://github.com/mini-app-polis/deejay-cog/commit/46232de9f0b4b558d8ba0cf736f0cb4b6eb19761))
+* **worker:** name who asked for the run in its run reports ([09ad073](https://github.com/mini-app-polis/deejay-cog/commit/09ad073faa4dbdb4b07bc3d380b14724ab59ba7a))
+
 # [2.52.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.51.0...v2.52.0) (2026-11-11)
 
 
