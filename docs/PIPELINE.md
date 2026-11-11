@@ -542,7 +542,33 @@ it) to try again.
 
 1. In the trash → left to the scan, named.
 2. Its tags (a UTF-8 tag marked Latin-1 is read as UTF-8) are looked up in
-   the catalog with the set import's matching. A match → **linked** (below).
+   the catalog with the set import's matching. A match is a starting point,
+   not the final word
+   ([ADR-0007, amended 2026-11-11](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-11-owner-incoming-music-takes-the-librarys-path)):
+   nothing is linked here. The file is sent to the fingerprint function
+   (flow `library-identify`) with the entry its tags found as the one
+   expected, and stays unidentified until it has run (note `its tags match
+   <artist> - <title> in the catalog; sent to fingerprinting to confirm
+   it`). There:
+   - a confident AcoustID match (`RETAG_MIN_CONFIDENCE`) to the same song
+     (the recording's title and artist agree with the file's, or the
+     catalog holds the recording as that very entry) → **linked** (below)
+     to that entry, its registry note `identified by its own tags,
+     confirmed by the fingerprint (score <score>)`;
+   - a confident match to another song → the second opinion (step 5). When
+     it backs the tags, the file is linked to the entry its tags found;
+     when it backs the fingerprint, to the recording's entry, its note
+     saying why (`identified by its fingerprint (…)`); otherwise it is left
+     for the owner;
+   - no fingerprint result (no match, none confident, a recording
+     MusicBrainz does not serve or that has no title or artist, audio
+     fpcalc cannot read) → linked by its tags to the entry they found, its
+     note `identified by its own tags (<the fingerprint's note>)`: the
+     fingerprint did not confirm it.
+
+   A match to an owner-edit entry is the exception: the owner's tags
+   identify it, so it is **linked** here and then sent for a hint only
+   (below).
 3. No usable title or artist, or tags the catalog does not know → sent to
    the fingerprint function (flow `library-identify`). There a confident
    AcoustID match (`RETAG_MIN_CONFIDENCE`) is looked up in the catalog, or
@@ -643,7 +669,8 @@ file as tried. Its record is `library-identify-<run id>.dry-run.json`.
 **Report:** counts for `waiting`, `fingerprinted_unlinked` (files an
 earlier run sent to fingerprinting that are still unidentified: left for the
 owner, or not run yet), `tried`, `linked`, `written`, `would_write`,
-`filled_up`, `to_fingerprint`, `owner_edits`, `owner_edit_hints`, `fx_entries` (FX files
+`filled_up`, `to_fingerprint` (tag matches sent to be confirmed among them,
+each named with the entry its tags found), `owner_edits`, `owner_edit_hints`, `fx_entries` (FX files
 given a new fx entry, each named), `not_linkable` and `failed`, with every
 file by its path.
 The fingerprint function's run for a library file is reported under

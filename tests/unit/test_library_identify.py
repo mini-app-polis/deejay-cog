@@ -35,7 +35,7 @@ from mutagen.id3 import COMM, ID3, TBPM, TCON, TDRC, TIT2, TPE1
 from deejay_cog import fingerprint as fp
 from deejay_cog import library_backfill as backfill
 from deejay_cog import library_identify as ident
-from deejay_cog.fingerprint_jobs import FingerprintJobMessage
+from deejay_cog.fingerprint_jobs import FingerprintJobMessage, FingerprintJobs
 from deejay_cog.music_safety import FlowMode, RunRecord
 from deejay_cog.second_opinion import Heard, Recording
 from flag_fakes import FLAGS
@@ -231,74 +231,64 @@ def test_off_reads_nothing(
     posted.assert_not_called()
 
 
-def test_a_file_the_catalog_knows_is_linked_written_and_registered(
-    settings, wired, drive, api, posted
+def test_a_file_the_catalog_knows_is_sent_to_the_fingerprint_not_linked(
+    settings, wired, drive, api, jobs
 ) -> None:
-    drive_id = _unidentified(
-        drive,
-        api,
-        "temple.mp3",
-        _song("temple", "thomas gold", genre="House", bpm="125"),
-    )
+    data = _song("temple", "thomas gold", genre="House", bpm="125")
+    drive_id = _unidentified(drive, api, "temple.mp3", data)
 
     summary = ident.library_identify(run_id="i-1")
 
-    assert summary.linked and summary.written == ["New/temple.mp3"]
-    frames = _frames(drive.items[drive_id].data)
-    # Only the link is written; every owned field is the reconcile's.
-    assert frames["TIT2"] == "temple"
-    assert frames["TPE1"] == "thomas gold"
-    assert frames["TCON"] == "House"
-    assert frames["TBPM"] == "125"
-    assert frames["TXXX:CATALOG_ID"] == str(_ENTRY)
-    assert frames["COMM::eng"] == "cue: drop at 1:02"  # the comment is kept
-    # Fill-up first, with the file's own values.
-    [(catalog_id, fill)] = api.fills
-    assert catalog_id == str(_ENTRY) and fill.genre == "House" and fill.bpm == 125.0
-    [reg] = api.registrations
-    assert reg.identification_status == "identified" and reg.catalog_id == _ENTRY
-    assert reg.comment_backup == "cue: drop at 1:02"
-    assert reg.synced_at is not None
-    assert reg.md5 is not None
-    # Written safely: revision kept, run record saved.
-    assert drive.items[drive_id].kept
-    record = _state(drive, "library-identify-i-1.json")
-    assert record["entries"][0]["action"] == "in_place"
-    assert _state(drive, ident.TRIED_NAME)["files"][drive_id]["outcome"] == "linked"
-    # Never renamed, moved or trashed.
-    assert drive.items[drive_id].name == "temple.mp3"
-    assert drive.items[drive_id].parents == [ROOT]
-
-
-def test_linking_writes_only_the_link_when_the_owned_fields_differ(
-    settings, wired, drive, api
-) -> None:
-    song = _song("temple", "thomas gold", genre="House", bpm="140")
-    before = _frames(song)
-    drive_id = _unidentified(drive, api, "temple.mp3", song)
-    api.displays[_ENTRY] = _display(artist="Thomas  GOLD", release_year=2021, bpm=125.5)
-
-    summary = ident.library_identify(run_id="i-1")
-
-    assert summary.written == ["New/temple.mp3"]
-    after = _frames(drive.items[drive_id].data)
-    assert after.pop("TXXX:CATALOG_ID") == str(_ENTRY)
-    assert after == before
-    assert len(api.fills) == 1 and len(api.registrations) == 1
-
-
-def test_the_files_own_release_label_stays_in_its_title(
-    settings, wired, drive, api
-) -> None:
-    drive_id = _unidentified(
-        drive, api, "temple.mp3", _song("Temple (No Intro Edit)", "Thomas Gold")
+    # Its tags are a starting point: nothing is linked or written here.
+    assert summary.linked == [] and summary.written == []
+    assert drive.items[drive_id].data == data
+    assert api.fills == []
+    [job] = jobs.sent
+    assert job["file_id"] == drive_id and job["flow"] == "library-identify"
+    assert job["expected_catalog_id"] == str(_ENTRY)
+    assert (job["library_root_id"], job["path"], job["mode"]) == (
+        ROOT,
+        "New/temple.mp3",
+        "write",
     )
-    api.known["temple (no intro edit)"] = _match()
+    [note] = api.registrations
+    assert note.identification_status == "unidentified" and note.catalog_id is None
+    assert note.identify_note == (
+        "its tags match Thomas Gold - Temple in the catalog; sent to "
+        "fingerprinting to confirm it"
+    )
+    assert summary.to_fingerprint == [
+        "New/temple.mp3 (its tags match Thomas Gold - Temple; the fingerprint "
+        "is to confirm it)"
+    ]
+    assert _state(drive, ident.TRIED_NAME)["files"][drive_id]["outcome"] == (
+        "sent_to_fingerprint"
+    )
 
+
+def test_a_tag_match_sent_to_the_fingerprint_is_not_sent_again(
+    settings, wired, drive, api, jobs
+) -> None:
+    _unidentified(drive, api, "temple.mp3", _song())
     ident.library_identify(run_id="i-1")
 
-    assert _frames(drive.items[drive_id].data)["TIT2"] == "Temple (No Intro Edit)"
-    assert api.registrations[0].edit_label == "No Intro Edit"
+    summary = ident.library_identify(run_id="i-2")
+
+    assert summary.tried == 0 and len(jobs.sent) == 1
+
+
+def test_a_file_already_identified_is_not_sent(
+    settings, wired, drive, api, jobs
+) -> None:
+    _unidentified(drive, api, "temple.mp3", _song())
+    api.rows[0] = api.rows[0].model_copy(update={"identification_status": "identified"})
+    api.list_library_files = lambda **kw: [  # type: ignore[method-assign]
+        r for r in api.rows if r.identification_status == kw["identification_status"]
+    ]
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert summary.tried == 0 and jobs.sent == []
 
 
 def test_garbled_tags_are_read_repaired(settings, wired, drive, api) -> None:
@@ -507,14 +497,13 @@ def test_a_dry_run_changes_nothing_and_tries_the_same_files_again(
     first = ident.library_identify(run_id="i-1")
     second = ident.library_identify(run_id="i-2")
 
-    assert first.would_write == ["New/temple.mp3"]
-    assert first.to_fingerprint and second.tried == 2
+    assert first.would_write == [] and first.linked == []
+    assert len(first.to_fingerprint) == 2 and second.tried == 2
     assert drive.items[known].data == before
     assert drive.writes(except_folder=STATE) == []
     assert api.fills == [] and api.registrations == [] and jobs.sent == []
     assert _state(drive, ident.TRIED_NAME) is None
-    assert _state(drive, "library-identify-i-1.dry-run.json") is not None
-    assert "would_link" in _text(posted)
+    assert "would_fingerprint" in _text(posted)
 
 
 def test_a_file_in_the_trash_is_left_to_the_scan(
@@ -533,6 +522,8 @@ def test_audio_that_would_change_stops_the_run(
 ) -> None:
     from deejay_cog import music_safety
 
+    # An owner-edit entry its tags find is linked here, so it is written.
+    api.known["temple"] = _match().model_copy(update={"owner_edit": True})
     _unidentified(drive, api, "temple.mp3", _song())
     _unidentified(drive, api, "temple2.mp3", _song())
     finding = MagicMock()
@@ -1047,6 +1038,263 @@ def test_a_fingerprint_that_agrees_with_the_tags_is_linked(drive, api) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The fingerprint checks a tag match before it is linked
+# ---------------------------------------------------------------------------
+
+
+def _confirm(
+    drive,
+    api,
+    data: bytes,
+    identifier: Any = None,
+    *,
+    mode: FlowMode = FlowMode.WRITE,
+    search: Any = None,
+    name: str = "temple.mp3",
+):
+    """The fingerprint run for a file whose tags found ``_ENTRY``."""
+    drive_id = drive.add(name, ROOT, data)
+    result = fp.identify_library_file(
+        drive,
+        api,
+        identifier if identifier is not None else FakeIdentifier(),
+        _record(drive, mode),
+        file_id=drive_id,
+        root=ROOT,
+        path=f"New/{name}",
+        threshold=0.9,
+        search=search,
+        expected=str(_ENTRY),
+    )
+    return drive_id, result
+
+
+def test_a_fingerprint_that_confirms_the_tag_match_links_it_written_and_registered(
+    drive, api
+) -> None:
+    drive_id, result = _confirm(
+        drive, api, _song("temple", "thomas gold", genre="House", bpm="125")
+    )
+
+    assert result.outcome == "linked" and result.catalog_id == str(_ENTRY)
+    assert not result.entry_created and api.created == []
+    frames = _frames(drive.items[drive_id].data)
+    # Only the link is written; every owned field is the reconcile's.
+    assert frames["TIT2"] == "temple"
+    assert frames["TPE1"] == "thomas gold"
+    assert frames["TCON"] == "House"
+    assert frames["TBPM"] == "125"
+    assert frames["TXXX:CATALOG_ID"] == str(_ENTRY)
+    assert frames["COMM::eng"] == "cue: drop at 1:02"  # the comment is kept
+    assert not any(k.startswith("TXXX:MusicBrainz") for k in frames)
+    # Fill-up first, with the file's own values.
+    [(catalog_id, fill)] = api.fills
+    assert catalog_id == str(_ENTRY) and fill.genre == "House" and fill.bpm == 125.0
+    [reg] = api.registrations
+    assert reg.identification_status == "identified" and reg.catalog_id == _ENTRY
+    assert reg.identify_note == (
+        "identified by its own tags, confirmed by the fingerprint (score 0.95)"
+    )
+    assert reg.comment_backup == "cue: drop at 1:02"
+    assert reg.synced_at is not None and reg.md5 is not None
+    # Written safely: revision kept, run record saved; never renamed or moved.
+    assert drive.items[drive_id].kept
+    record = _state(drive, "library-identify-m-1.json")
+    assert record["entries"][0]["action"] == "in_place"
+    assert drive.items[drive_id].name == "temple.mp3"
+    assert drive.items[drive_id].parents == [ROOT]
+
+
+def test_a_confirmed_link_writes_only_the_link_when_the_owned_fields_differ(
+    drive, api
+) -> None:
+    song = _song("temple", "thomas gold", genre="House", bpm="140")
+    before = _frames(song)
+    api.displays[_ENTRY] = _display(artist="Thomas  GOLD", release_year=2021, bpm=125.5)
+
+    drive_id, result = _confirm(drive, api, song)
+
+    assert result.written
+    after = _frames(drive.items[drive_id].data)
+    assert after.pop("TXXX:CATALOG_ID") == str(_ENTRY)
+    assert after == before
+    assert len(api.fills) == 1 and len(api.registrations) == 1
+
+
+def test_a_confirmed_files_own_release_label_stays_in_its_title(drive, api) -> None:
+    drive_id, result = _confirm(
+        drive, api, _song("Temple (No Intro Edit)", "Thomas Gold")
+    )
+
+    assert result.outcome == "linked"
+    assert _frames(drive.items[drive_id].data)["TIT2"] == "Temple (No Intro Edit)"
+    assert api.registrations[0].edit_label == "No Intro Edit"
+
+
+def test_a_recording_the_catalog_holds_as_the_tag_match_confirms_it(drive, api) -> None:
+    # Credited differently, so the tags and the recording do not agree by
+    # name; the catalog names the recording as the very entry the tags found.
+    identifier = FakeIdentifier(metadata={"title": "Temple", "artist": "T. Gold"})
+
+    _, result = _confirm(drive, api, _song("Temple", "Thomas Gold"), identifier)
+
+    assert result.outcome == "linked" and result.catalog_id == str(_ENTRY)
+    assert api.registrations[0].identify_note == (
+        "identified by its own tags, confirmed by the fingerprint (score 0.95)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("identifier", "why"),
+    [
+        (
+            FakeIdentifier(score=0.0, metadata={}),
+            "fingerprint: no confident match (score 0.00)",
+        ),
+        (
+            FakeIdentifier(score=0.5),
+            "fingerprint: no confident match (best guess Thomas Gold - Temple, "
+            "score 0.50)",
+        ),
+        (
+            FakeIdentifier(
+                metadata={
+                    "_provider": "musicbrainz",
+                    "_mbid": "mbid-1",
+                    fp.NOT_SERVED: True,
+                }
+            ),
+            "fingerprint: matched recording mbid-1 (score 0.95), which MusicBrainz "
+            "does not serve",
+        ),
+    ],
+)
+def test_no_fingerprint_result_links_the_tag_match_by_its_tags(
+    drive, api, identifier, why: str
+) -> None:
+    drive_id, result = _confirm(drive, api, _song(), identifier)
+
+    assert result.outcome == fp.LINKED_BY_TAGS and result.catalog_id == str(_ENTRY)
+    assert api.created == []
+    [reg] = api.registrations
+    assert reg.identification_status == "identified" and reg.catalog_id == _ENTRY
+    assert reg.identify_note == f"identified by its own tags ({why})"
+    assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(_ENTRY)
+
+
+def test_unreadable_audio_links_the_tag_match_by_its_tags(drive, api) -> None:
+    class Unreadable:
+        def identify(self, path: str, *, fetch_metadata: bool = True):
+            del path, fetch_metadata
+            raise fp.AudioUnreadable("fpcalc exited with status 3: ERROR")
+
+    _, result = _confirm(drive, api, _song(), Unreadable())
+
+    assert result.outcome == fp.LINKED_BY_TAGS and result.catalog_id == str(_ENTRY)
+    [reg] = api.registrations
+    assert reg.catalog_id == _ENTRY
+    assert reg.identify_note == (
+        "identified by its own tags (fingerprint: the audio could not be read "
+        "(fpcalc exited with status 3: ERROR))"
+    )
+
+
+def _another_song(drive, api, heard: Heard | None, search: Any = None):
+    """A file whose tags found ``_ENTRY`` (Madcon - Beggin) and whose
+    fingerprint names another song."""
+    api.known.clear()
+    api.known["beggin"] = CatalogMatch(id=_ENTRY, title="Beggin", artist="Madcon")
+    return _confirm(
+        drive,
+        api,
+        _song("Beggin", "Madcon"),
+        FakeIdentifier(
+            metadata={"title": "Don't Worry", "artist": "Madcon"}, heard=heard
+        ),
+        search=search,
+        name="Beggin_Madcon.mp3",
+    )
+
+
+def test_a_confident_match_to_another_song_held_when_no_second_source_decides(
+    drive, api
+) -> None:
+    _, result = _another_song(drive, api, Heard(214.0), FakeSearch())
+
+    assert result.outcome == fp.DISAGREES_WITH_TAGS
+    assert drive.writes(except_folder=STATE) == []
+    [note] = api.registrations
+    assert note.identification_status == "unidentified" and note.catalog_id is None
+    assert "disagrees with the file's own tags (Madcon - Beggin)" in (
+        note.identify_note or ""
+    )
+
+
+def test_a_second_opinion_for_the_tags_links_the_tag_match(drive, api) -> None:
+    heard = Heard(
+        214.0, (Recording("Don't Worry", "Madcon"), Recording("Beggin'", "Madcon"))
+    )
+
+    _, result = _another_song(drive, api, heard)
+
+    assert result.outcome == fp.LINKED_BY_TAGS and result.catalog_id == str(_ENTRY)
+    assert api.created == []
+    [row] = api.registrations
+    assert row.catalog_id == _ENTRY
+    assert "AcoustID also links this audio to Madcon - Beggin'" in (
+        row.identify_note or ""
+    )
+
+
+def test_a_second_opinion_for_the_fingerprint_links_its_song_with_why(
+    drive, api
+) -> None:
+    search = FakeSearch({"Don't Worry": [Recording("Don't Worry", "Madcon", 214.5)]})
+
+    _, result = _another_song(drive, api, Heard(214.0), search)
+
+    assert result.outcome == "linked" and result.entry_created
+    assert result.catalog_id != str(_ENTRY)
+    [made] = api.created
+    assert (made.title, made.artist) == ("Don't Worry", "Madcon")
+    [row] = api.registrations
+    assert (row.identify_note or "").startswith(
+        "identified by its fingerprint (fingerprint: Madcon - Don't Worry"
+    )
+
+
+def test_a_dry_run_confirmation_changes_nothing(drive, api) -> None:
+    data = _song()
+
+    drive_id, result = _confirm(drive, api, data, mode=FlowMode.DRY_RUN)
+
+    assert result.outcome == "linked" and result.would_write
+    assert drive.items[drive_id].data == data
+    assert api.registrations == [] and api.fills == [] and api.created == []
+
+
+def test_a_message_carries_the_entry_the_tags_found(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        fp, "library_identify_by_fingerprint", lambda *a, **kw: seen.update(kw, args=a)
+    )
+    sqs = MagicMock()
+    FingerprintJobs("https://sqs.test/q.fifo", sqs).send(
+        "f1",
+        "temple.mp3",
+        flow="library-identify",
+        mode="write",
+        library_root_id=ROOT,
+        path="New/temple.mp3",
+        expected_catalog_id=str(_ENTRY),
+    )
+
+    fp.process_message(sqs.send_message.call_args.kwargs["MessageBody"], run_id="m-1")
+
+    assert seen["expected"] == str(_ENTRY)
+
+
+# ---------------------------------------------------------------------------
 # Owner edits: a version in < >, set by the owner in the file's tags
 # ---------------------------------------------------------------------------
 
@@ -1131,6 +1379,7 @@ def test_an_owner_edit_is_linked_to_the_owner_edit_entry_the_catalog_has(
 
     assert api.created == []
     assert [s["file_id"] for s in jobs.sent] == [drive_id]  # a hint only
+    assert jobs.sent[0].get("expected_catalog_id") is None
     assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(existing)
     [reg] = api.registrations
     assert reg.catalog_id == existing and reg.edit_label == "Clean"
@@ -1166,16 +1415,17 @@ def test_a_dry_run_previews_an_owner_edit_entry_and_changes_nothing(
     assert len(summary.owner_edits) == 1
 
 
-def test_an_unmarked_file_is_linked_to_the_published_song_as_before(
-    settings, owner_edit_api, drive
+def test_an_unmarked_file_is_sent_to_confirm_the_published_song(
+    settings, owner_edit_api, drive, jobs
 ) -> None:
     api = owner_edit_api
-    drive_id = _unidentified(drive, api, "baby.mp3", _song(_BABY, "Etta James"))
+    _unidentified(drive, api, "baby.mp3", _song(_BABY, "Etta James"))
 
     summary = ident.library_identify(run_id="i-1")
 
     assert api.created == [] and summary.owner_edits == []
-    assert _frames(drive.items[drive_id].data)["TXXX:CATALOG_ID"] == str(_ENTRY)
+    [job] = jobs.sent
+    assert job["expected_catalog_id"] == str(_ENTRY)
 
 
 # ---------------------------------------------------------------------------
@@ -1334,7 +1584,7 @@ def test_a_main_file_never_links_to_an_fx_entry(settings, fx_api, drive, jobs) -
 
 
 def test_main_and_fx_files_each_link_within_their_own_library(
-    settings, fx_api, drive
+    settings, fx_api, drive, jobs
 ) -> None:
     api = fx_api
     main_id = _unidentified(drive, api, "temple.mp3", _song())
@@ -1342,10 +1592,13 @@ def test_main_and_fx_files_each_link_within_their_own_library(
 
     ident.library_identify(run_id="i-1")
 
-    assert _frames(drive.items[main_id].data)["TXXX:CATALOG_ID"] == str(_ENTRY)
+    # The main file's tag match goes to the fingerprint to confirm; the FX
+    # file is never fingerprinted and links to its fx entry.
+    [job] = jobs.sent
+    assert job["file_id"] == main_id and job["expected_catalog_id"] == str(_ENTRY)
     assert _frames(drive.items[fx_id].data)["TXXX:CATALOG_ID"] == str(_FX_ENTRY)
     assert {(r.library_root_id, r.catalog_id) for r in api.registrations} == {
-        (ROOT, _ENTRY),
+        (ROOT, None),
         (FX, _FX_ENTRY),
     }
 
@@ -1354,8 +1607,10 @@ def test_a_link_the_catalog_refuses_as_the_other_librarys_is_reported_not_raised
     settings, fx_api, drive, posted
 ) -> None:
     api = fx_api
-    # A main-library entry the catalog holds as fx: the link is refused.
+    # A main-library entry the catalog holds as fx: the link is refused. An
+    # owner-edit entry, so this step links it rather than the fingerprint.
     api.library_of[_ENTRY] = "fx"
+    api.known["temple"] = _match().model_copy(update={"owner_edit": True})
     _unidentified(drive, api, "temple.mp3", _song())
     other = _unidentified(drive, api, "clip.mp3", _song(), root=FX)
 
