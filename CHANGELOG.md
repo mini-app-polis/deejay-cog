@@ -1,3 +1,10 @@
+# [2.49.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.48.2...v2.49.0) (2026-11-11)
+
+
+### Features
+
+* **library-reconcile:** settle approved differences first, ahead of the cursor ([aa5742a](https://github.com/mini-app-polis/deejay-cog/commit/aa5742a67a0fc4f3f833ecc8ae6e82151ed0ac58))
+
 ## [2.48.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.48.1...v2.48.2) (2026-11-10)
 
 
