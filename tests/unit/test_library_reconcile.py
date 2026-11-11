@@ -881,6 +881,68 @@ def _age_open(drive: FakeDrive, days: int) -> None:
     store.save(held)
 
 
+def _held_open(drive: FakeDrive, drive_id: str, name: str, kind: str) -> None:
+    """An open difference an earlier run recorded on ``drive_id``."""
+    StateFile(drive, STATE, rec.OPEN_NAME).save(
+        {
+            "open": {
+                f"{drive_id}|{name}": {
+                    "since": "2026-11-10T00:00:00+00:00",
+                    "kind": kind,
+                    "path": "x.mp3",
+                    "file": "Neo Soul",
+                    "catalog": "Pop",
+                }
+            }
+        }
+    )
+
+
+def test_a_file_with_an_approved_difference_is_settled_before_the_cursor(
+    settings, writing, drive, monkeypatch
+) -> None:
+    monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "1")
+    ids = _library(drive, writing, [{}, {}, {"genre": "Neo Soul"}])
+    _held_open(drive, ids[2], "genre", "genre_remapped")
+    _approve(writing, kinds=["genre_remapped"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.approved_first == 1
+    assert _frames(drive.items[ids[2]].data)["TCON"] == "Pop"
+    # The cursor still took its own next file, and moved past that one only.
+    assert summary.reviewed == [ids[2], ids[0]]
+    assert _state(drive, rec.CURSOR_NAME)["position"] == 1
+    assert f"{ids[2]}|genre" not in _state(drive, rec.OPEN_NAME)["open"]
+
+
+def test_a_cursor_file_already_settled_first_is_passed_over(
+    settings, writing, drive, monkeypatch
+) -> None:
+    monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "1")
+    ids = _library(drive, writing, [{"genre": "Neo Soul"}, {}])
+    _held_open(drive, ids[0], "genre", "genre_remapped")
+    _approve(writing, kinds=["genre_remapped"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.approved_first == 1 and summary.compared == 1
+    assert _state(drive, rec.CURSOR_NAME)["position"] == 1
+
+
+def test_an_unapproved_open_difference_waits_for_the_cursor(
+    settings, writing, drive, monkeypatch
+) -> None:
+    monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "1")
+    ids = _library(drive, writing, [{}, {"genre": "Neo Soul"}])
+    _held_open(drive, ids[1], "genre", "genre_remapped")
+    _approve(writing, kinds=["case_punctuation"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert summary.approved_first == 0 and summary.reviewed == [ids[0]]
+
+
 def test_each_open_difference_is_recorded_with_when_it_was_first_seen(
     settings, wired, drive, catalog
 ) -> None:
