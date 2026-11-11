@@ -27,7 +27,8 @@ watcher-cog ──POST /v1/deejay/runs {mode}──▶ api-kaianolevine-com
   the library jobs on their schedules (below).
 - **api-kaianolevine-com** validates the mode and enqueues
   `{"type": "deejay.run", "version": 1, "payload": {"mode": "<mode>"}}`. It is
-  the queue's only producer.
+  the queue's only producer. A message queued from a request also carries
+  `request` (`id`, `requested_at`, and `caller` when the API knows it).
 - **The Lambda** runs one flow per message, under the message id as its run
   id, so a run can be traced from watcher's log to its report.
 - **library-backfill** and **library-reconcile** are the modes meant to run
@@ -1194,6 +1195,13 @@ built with `RunReport` from common-python-utils and version-stamped by
 - **WARN** when anything was counted as an issue: a failed set, a rejected
   ingest, a Spotify failure, a move that did not happen.
 - **ERROR** from the worker, when a run raised or a message was unprocessable.
+
+Every report a queued run sends says who asked for it, when its message
+carries a `request`: under **Requested**, the caller (`asked by …`, when the
+API knows it) and the request id (`request …`). These are counters, so they
+never make a quiet run send or change its severity. A message without a
+`request` reports as before. The request is only reported: it changes
+neither which run is chosen nor how messages are deduplicated.
 
 Reports are sent only where an API base URL resolves for the environment
 (see [CONFIGURATION.md](CONFIGURATION.md)). Local-only flows never send.

@@ -63,9 +63,8 @@ from mini_app_polis.api.contract import (
     LibraryFile,
 )
 from mini_app_polis.environment import api_base_url
-from mini_app_polis.pipeline_status import run_report
 
-from deejay_cog._pipeline_eval import REPO
+from deejay_cog._pipeline_eval import REPO, run_report
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
 from deejay_cog.library_backfill import BackfillSettings, LibraryRoot

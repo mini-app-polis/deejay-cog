@@ -42,9 +42,13 @@ run that raised through ``post_run_finding``. Local-only flows
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+from mini_app_polis.api.contract import QueueRequest
 from mini_app_polis.pipeline_status import (
     DeliveryReport,
     Severity,
@@ -56,6 +60,9 @@ from mini_app_polis.pipeline_status import (
 from mini_app_polis.pipeline_status import (
     post_run_finding as _post_run_finding,
 )
+from mini_app_polis.pipeline_status import (
+    run_report as _run_report,
+)
 
 from deejay_cog._version import __version__
 
@@ -63,11 +70,59 @@ REPO = "deejay-cog"
 """Repo identifier sent on every self-reported finding from this cog."""
 
 
+#: The request that asked for the run in progress (the queue message's
+#: ``request``), set by the worker; None for a run no request asked for.
+_REQUEST: ContextVar[QueueRequest | None] = ContextVar(
+    "deejay_run_request", default=None
+)
+
+#: The section of a run report that says who asked for the run.
+REQUEST_SECTION = "Requested"
+
+
+@contextmanager
+def requested(request: QueueRequest | None) -> Iterator[None]:
+    """Every run report opened inside the block names ``request``: who
+    asked for the run and the request's id. None names nothing."""
+    token = _REQUEST.set(request)
+    try:
+        yield
+    finally:
+        _REQUEST.reset(token)
+
+
+def name_request(report: _RunReport) -> None:
+    """Put the run's request, when there is one, on ``report``: the caller
+    (when the API knows it) and the request id. Counters, so they never
+    make a quiet run notable or change its severity."""
+    request = _REQUEST.get()
+    if request is None:
+        return
+    if request.caller:
+        report.count(
+            "requested_by", request.caller, label="asked by {}", section=REQUEST_SECTION
+        )
+    report.count("request_id", request.id, label="request {}", section=REQUEST_SECTION)
+
+
 @dataclass
 class RunReport(_RunReport):
-    """:class:`mini_app_polis.pipeline_status.RunReport`, carrying this cog's version."""
+    """:class:`mini_app_polis.pipeline_status.RunReport`, carrying this cog's
+    version and the run's request (:func:`name_request`)."""
 
     version: str | None = __version__
+
+    def __post_init__(self) -> None:
+        name_request(self)
+
+
+@contextmanager
+def run_report(flow_name: str, **kwargs: Any) -> Iterator[_RunReport]:
+    """:func:`mini_app_polis.pipeline_status.run_report`, naming the run's
+    request on the report (:func:`name_request`)."""
+    with _run_report(flow_name, **kwargs) as report:
+        name_request(report)
+        yield report
 
 
 # Counters that callers may pass as kwargs but which deejay-cog does not
@@ -136,8 +191,12 @@ def post_run_finding(
 
 __all__ = [
     "REPO",
+    "REQUEST_SECTION",
     "RunReport",
     "Severity",
     "get_prefect_logger",
+    "name_request",
     "post_run_finding",
+    "requested",
+    "run_report",
 ]
