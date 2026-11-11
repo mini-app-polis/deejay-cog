@@ -1,7 +1,7 @@
 """The ``library-identify`` step of the nightly library run: identify the
-library files the registry holds as unidentified, link each confident one
-to its catalog entry, and write the catalog's values to it (ADR-0008,
-decisions 2 and 5).
+library files the registry holds as unidentified and link each confident
+one to its catalog entry, writing only the link to the file; the reconcile
+brings its owned fields in step (ADR-0008, decisions 2 and 5).
 
 The library scan registers a file new to the library as ``unidentified``,
 and the backfill does the same for a file it could not match. Each night

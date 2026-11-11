@@ -259,7 +259,9 @@ catalog (stats, summaries, the collection) uses the same rules.
    catalog has wrong; its entry is fixed instead.
 9. **Reviews run through `python -m deejay_cog.reconcile_admin`**, which
    groups the differences by kind and records the approvals in the state
-   folder.
+   folder. (Superseded the same day: the approvals moved to the API and
+   are set on the owner's review page on the WCS site; `reconcile_admin`
+   now reads them and no longer records them.)
 
 ## Decided with the owner, 2026-11-10 (every difference closes)
 
@@ -281,6 +283,22 @@ catalog (stats, summaries, the collection) uses the same rules.
    split into parts cleanly, a genre off the vocabulary, a one-character
    label): such a difference stays on the review page with the reason, for
    the entry to be fixed in the editor.
+5. **A fill-up the catalog refuses is the one difference that never
+   closes.** Under decision 5 of 2026-11-07 the file keeps such a value
+   (the `E`/`C` clean and explicit markers, a genre off the vocabulary)
+   and nothing goes up; the owner is fine with the review page not
+   listing it, as long as the file keeps it (2026-11-09).
+
+## Decided with the owner, 2026-11-10 (an approval settles on the next run)
+
+1. **An approved difference is settled on the next reconcile run**, not
+   when the run's cursor next reaches its file. Each write run first takes
+   the files with an approved difference still open, up to its chunk
+   size, then carries on with its cursor. A full pass over the library
+   takes many runs, so an approval could otherwise wait most of a day.
+2. **An approved difference a run tried and could not settle** (a refused
+   fill-up, a value the API held) is not taken first again; the cursor
+   still reaches it, and it does not count as open too long.
 
 ## Decided with the owner, 2026-11-09 (files the fingerprint finds nothing for)
 

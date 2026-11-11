@@ -948,6 +948,30 @@ def test_an_approved_difference_that_stays_open_is_not_put_first_again(
     assert again.approved_first == 0
 
 
+def test_a_refused_fill_up_is_not_counted_as_long_open(
+    settings, wired, drive, catalog
+) -> None:
+    [drive_id] = _library(drive, catalog, [{}])
+    StateFile(drive, STATE, rec.OPEN_NAME).save(
+        {
+            "open": {
+                "other-file|genre": {
+                    "since": "2026-01-01T00:00:00+00:00",
+                    "kind": "fill_up",
+                    "path": "x.mp3",
+                    "file": "Girl Group",
+                    "catalog": "",
+                    "tried": "2026-01-02T00:00:00+00:00",
+                }
+            }
+        }
+    )
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert drive_id and summary.long_open == {} and not summary.long_open_warn
+
+
 def test_an_unapproved_open_difference_waits_for_the_cursor(
     settings, writing, drive, monkeypatch
 ) -> None:

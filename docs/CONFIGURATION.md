@@ -82,7 +82,7 @@ the API does not have, a flag switched off, and an empty or unknown value
 | `flags.deejay_cog.library_trash` | library-trash | `write` moves the files the owner sent to the trash on the WCS duplicates page to Drive's trash (never deleted) and marks them not present. |
 | `flags.deejay_cog.library_identify` | library-identify | Off, the step reads nothing and sends no report. The fingerprint function reads it too, and uses the stricter of it and the sender's mode. |
 | `flags.deejay_cog.library_backfill` | library-backfill | |
-| `flags.deejay_cog.library_sync` | library-sync | Off, the step reads nothing and sends no report. Keep it off until the library is reconciled. |
+| `flags.deejay_cog.library_sync` | library-sync | Off, the step reads nothing and sends no report. It was kept off until the library was reconciled (ADR-0008); off again, catalog edits stop reaching the files and edits made in VirtualDJ stop going up. |
 | `flags.deejay_cog.library_duplicates` | library-duplicates | Groups files that look like copies of one song. `dry-run` lists the groups in the run report; `write` also sends them to the API for the duplicates page. Never writes a music file. |
 | `flags.deejay_cog.library_reconcile` | library-reconcile | Off, the step reads nothing and sends no report. `write` applies only what the owner approved on the review page (read from the API), and writes nothing until any approvals are set. Every run sends its differences to the review. |
 
@@ -156,8 +156,8 @@ regardless. See [PIPELINE.md](PIPELINE.md#library-scan).
 
 Between the scan and the backfill's chunk the nightly job runs the
 **library-identify** step: unidentified library files are identified (by
-their tags, else by the fingerprint function), linked to the catalog and
-written with its values. It reads `LIBRARY_ROOT_FOLDER_ID` and
+their tags, else by the fingerprint function) and linked to the catalog;
+only the link is written to the file. It reads `LIBRARY_ROOT_FOLDER_ID` and
 `MUSIC_TAGGING_STATE_FOLDER_ID` as the backfill does, sends to
 `DEEJAY_FINGERPRINT_QUEUE_URL`, and:
 
@@ -177,20 +177,20 @@ catalog; a dry run reads only, a write run applies what the owner approved. It r
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_RECONCILE_CHUNK_SIZE` | `50` | Linked files compared per run; a whole number of at least 1. Each is downloaded to read its tags. |
+| `LIBRARY_RECONCILE_CHUNK_SIZE` | `50` | Linked files compared per run after the cursor, and at most as many files with an approved difference settled first; a whole number of at least 1. Each is downloaded to read its tags, so the chunk is bounded by the worker's timeout. |
 
 See [PIPELINE.md](PIPELINE.md#library-reconcile).
 
 ## Library sync
 
-The sixth step of the nightly job, **library-sync**, writes catalog edits
+The fifth step of the nightly job, **library-sync**, writes catalog edits
 and display-rule changes to the files they affect. It reads
 `LIBRARY_ROOT_FOLDER_ID` and `MUSIC_TAGGING_STATE_FOLDER_ID` as the
 backfill does, and:
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `LIBRARY_SYNC_CHUNK_SIZE` | `50` | Files written per run; a whole number of at least 1. Each is downloaded to write its tags. |
+| `LIBRARY_SYNC_CHUNK_SIZE` | `50` | Files the API lists as needing a sync taken per run; a whole number of at least 1. Only a file with a field that moved is downloaded and written; the rest are recorded as synced without reading Drive. |
 | `LIBRARY_SYNC_EDIT_FLOOD` | `1000` | A backstop: more files changed outside the pipeline than this in one run is a bulk change the value check did not catch: nothing goes up to the catalog and nothing is written; the files keep what they hold, and the run reports it. Below it, a changed field holding a value the pipeline replaced in that file is put back, and every other change goes up (see [PIPELINE.md](PIPELINE.md#library-sync)). A whole number of at least 1. |
 
 See [PIPELINE.md](PIPELINE.md#library-sync).

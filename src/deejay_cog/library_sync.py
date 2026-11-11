@@ -67,8 +67,8 @@ is not, until a frame for it is decided.
 or a rule change can be followed to the files it touched.
 
 **Safety:** ``flags.deejay_cog.library_sync`` is ``off`` unless ``dry-run`` or
-``write``, and stays off until the library is reconciled: before then the
-reconcile, with the owner's approvals, decides what is written. A dry run
+``write``. It was kept off until the library was reconciled, so the
+reconcile, with the owner's approvals, decided the first writes. A dry run
 reads and plans, writes no music, and records nothing as synced, so the
 same files come up again. An audio mismatch stops the run with an ERROR
 finding; that file is not marked synced, so it comes up again first.
