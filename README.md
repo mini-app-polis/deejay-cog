@@ -10,6 +10,8 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 
 **Production** runs on AWS Lambda behind its own FIFO SQS queue — see [ADR-0006](docs/decisions/ADR-0006-lambda-behind-sqs.md). The queue, function and alarm are declared in [`mini-app-polis/infra`](https://github.com/mini-app-polis/infra). **watcher-cog** detects Drive changes and POSTs `/v1/deejay/runs` with a `mode` (one of the production modes below); api-kaianolevine-com enqueues one message, and `deejay_cog.worker.lambda_handler` runs the matching flow. Nothing runs between triggers except the two library jobs, which watcher-cog sends on their own schedules (declared in `mini-app-polis/infra`): `library-backfill` and `library-reconcile` ([ADR-0003](docs/decisions/ADR-0003-on-demand-no-cadence.md), amended). Either can be run on demand; see [PIPELINE.md](docs/PIPELINE.md#running-a-library-job-on-demand).
 
+**Adding and removing songs:** every case, with what to do and what happens, is in [ADDING-AND-REMOVING-SONGS.md](docs/ADDING-AND-REMOVING-SONGS.md).
+
 ---
 
 ## Flow inventory
