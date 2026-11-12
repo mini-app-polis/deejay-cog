@@ -137,6 +137,7 @@ from deejay_cog.music_safety import (
     TagEmptied,
     file_meta,
     flow_mode,
+    is_rate_limited,
     local_run_id,
     md5,
     write_in_place,
@@ -520,6 +521,9 @@ class IdentifySummary:
     not_linkable: list[str] = field(default_factory=list)
     no_queue: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    #: Files left for the next run because Drive's rate limit outlasted the
+    #: backoff (:func:`deejay_cog.music_safety.drive_call`).
+    rate_limited: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     aborted: str = ""
 
@@ -925,7 +929,7 @@ def _identify(
     )
     status = "complete"
     try:
-        for row in chunk:
+        for index, row in enumerate(chunk):
             if shared_deadline_passed():
                 status = "stopped"
                 break
@@ -949,6 +953,14 @@ def _identify(
                 summary.failed.append(f"{row.path} ({exc})")
             except Exception as exc:  # noqa: BLE001 — one file must not end the run
                 if shared_deadline_passed():
+                    status = "stopped"
+                    break
+                if is_rate_limited(exc):
+                    # Drive still says slow down after the backoff: this
+                    # file and the rest of the chunk wait for the next run
+                    # (none is marked tried).
+                    log.warning("library-identify: Drive rate limit on %s", row.path)
+                    summary.rate_limited.extend(r.path for r in chunk[index:])
                     status = "stopped"
                     break
                 log.exception("library-identify: failed on %s", row.path)
@@ -1096,6 +1108,8 @@ def _record(report: Any, summary: IdentifySummary, duration_sec: float) -> None:
         report.notice("skipped", item)
     for item in summary.failed:
         report.issue("failed", item)
+    for item in summary.rate_limited:
+        report.issue("drive_rate_limited", item)
     if summary.aborted:
         report.issue("audio_changed_run_stopped", summary.aborted)
     report.ok(len(summary.linked))

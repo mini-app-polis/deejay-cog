@@ -91,6 +91,11 @@ def requested(request: QueueRequest | None) -> Iterator[None]:
         _REQUEST.reset(token)
 
 
+def current_request() -> QueueRequest | None:
+    """The request that asked for the run in progress, or None."""
+    return _REQUEST.get()
+
+
 def name_request(report: _RunReport) -> None:
     """Put the run's request, when there is one, on ``report``: the caller
     (when the API knows it) and the request id. Counters, so they never
@@ -193,6 +198,7 @@ __all__ = [
     "REPO",
     "REQUEST_SECTION",
     "RunReport",
+    "current_request",
     "Severity",
     "get_prefect_logger",
     "name_request",

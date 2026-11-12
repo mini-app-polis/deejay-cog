@@ -102,7 +102,11 @@ The **new-music** worker mode reads its mode from
 - `MUSIC_TAGGING_STATE_FOLDER_ID` — where every music-writing flow saves
   its run records, and where `music_rollback` reads them.
 - `NEW_MUSIC_MAX_FILES_PER_RUN` — files handled per run (default 25; 0 for
-  no cap).
+  no cap). Files past the cap are not left for the watcher: a writing run
+  that moved a file asks for a follow-up new-music run
+  (`POST /v1/deejay/runs`, which needs the `deejay.runs.create` scope on
+  this cog's identity), and the runs follow one another until the input
+  folder is empty ([PIPELINE.md](PIPELINE.md#new-music)).
 
 None of the folders has a default. With any of them unset, or two of them
 the same folder, the run does nothing and its report (WARN) names the

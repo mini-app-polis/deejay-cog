@@ -7,7 +7,9 @@ MP3 with a usable title and artist is copied, tags and audio unchanged, into
 New Music under a name built from its own tags, and the library's steps
 take it from there (scan, identify with its fingerprint check, duplicates,
 reconcile and sync). Anything else goes, unchanged, to needs-review. At
-most ``NEW_MUSIC_MAX_FILES_PER_RUN`` files a run.
+most ``NEW_MUSIC_MAX_FILES_PER_RUN`` files a run; when more are waiting, a
+writing run that moved any file asks for a follow-up new-music run before it
+ends (:func:`queue_follow_up`), so a batch past the cap drains run after run.
 
 A file taken in is **copied**, never changed: its bytes are uploaded as a new file named ``{title}_{artist}.<ext>`` into
 ``NEW_MUSIC_DESTINATION_FOLDER_ID``, and the original is then moved,
@@ -17,9 +19,14 @@ name is already taken, in the destination or by any file in the library
 (the API's library registry), the featured artists are added. Characters
 a file name can't hold are left out, ``<`` and ``>`` among them, so an
 owner edit's name carries its version without them. A file that is not
-an MP3 or has no usable title or artist, whose name is taken even so (or has
+an MP3, is a byte-identical copy of a file in the main library (its md5
+matches a present registry file not marked for the trash, in the main
+folder or New Music; FX Music's files never match), has no usable title or
+artist, whose title tag looks like an old
+file name (:func:`file_name_title`), whose name is taken even so (or has
 no featured artists to add), or whose name cannot be checked because the
-registry cannot be read, is moved unchanged to ``NEW_MUSIC_REVIEW_FOLDER_ID``. Nothing
+registry cannot be read (so neither its copy nor its name can be checked),
+is moved unchanged to ``NEW_MUSIC_REVIEW_FOLDER_ID``. Nothing
 is deleted and nothing is overwritten. This is the only flow that names a
 file; files already in the library are never renamed.
 
@@ -34,21 +41,30 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Any, Protocol
 
 from mini_app_polis import logger as logger_mod
-from mini_app_polis.deadline import without_run_deadline
+from mini_app_polis.api.contract import DeejayRunAccepted, DeejayRunRequest
+from mini_app_polis.deadline import remaining_seconds, without_run_deadline
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.lambda_worker import RunOutOfTime
 
-from deejay_cog._pipeline_eval import REPO, post_run_finding, run_report
+from deejay_cog._pipeline_eval import (
+    REPO,
+    current_request,
+    post_run_finding,
+    run_report,
+)
 from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
-from deejay_cog.api_client import api_client
+from deejay_cog.api_client import MACHINE_NAME, api_client
+from deejay_cog.library_backfill import FX_ROOT_FOLDER_VAR
 from deejay_cog.music_safety import (
     MP3_MIME_TYPE,
     SOURCE_PROPERTY,
@@ -79,6 +95,13 @@ MODE_FLAG = "flags.deejay_cog.new_music"
 #: Files per run when ``NEW_MUSIC_MAX_FILES_PER_RUN`` is unset; 0 is no cap.
 MAX_FILES_VAR = "NEW_MUSIC_MAX_FILES_PER_RUN"
 DEFAULT_MAX_FILES_PER_RUN = 25
+
+#: How long the API's queue collapses identical run requests into one: its
+#: deduplication window (``job_queue.DEDUP_WINDOW_SECONDS`` in
+#: api-kaianolevine-com). Two follow-ups this far apart are never collapsed.
+FOLLOW_UP_WINDOW_SECONDS = 60
+#: Added to the window, for the clocks of this run and the API not agreeing.
+FOLLOW_UP_MARGIN_SECONDS = 5
 
 #: Every folder the flow needs, by role. All must be set, and all differ.
 FOLDER_VARS = {
@@ -158,6 +181,12 @@ class IntakeSummary:
     no_longer_in_input: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     aborted: str = ""
+    #: Files in the input folder past this run's cap, left for a later run.
+    left_past_cap: int = 0
+    #: The queue message of the follow-up run this run asked for.
+    follow_up: str = ""
+    #: Why the follow-up run was not queued, when it was due and was not.
+    follow_up_problem: str = ""
 
 
 def safe_name_part(text: str) -> str:
@@ -207,6 +236,53 @@ def delivery_names(tags: dict[str, str], original_name: str) -> list[str]:
     return names
 
 
+#: A number at the end of a title, as a file name carries its BPM ("… 95").
+_TRAILING_NUMBER = re.compile(r"\s(\d{2,3})$")
+#: The BPMs a trailing number is read as: a "Route 66" or "Area 51" is not one.
+_BPM_RANGE = range(70, 181)
+#: A word run into the next: three lowercase letters, then a capital
+#: ("BoxingUnderwater", "featCailin"), or then two digits ("Kahlo113").
+#: "McDonald", "DeBarge" and "M4SONIC" are not.
+_RUN_TOGETHER = re.compile(r"[^\W\d_]*[^\W\d_A-Z]{3}(?:[A-Z]|\d{2})")
+#: A bracketed part of a title: a version, a feature, a label.
+_BRACKETED = re.compile(r"[(\[][^)\]]*[)\]]")
+#: A bracket holding a single word: "(Bridges)".
+_ONE_WORD_BRACKET = re.compile(r"[(\[]\s*[^\s()\[\]]+\s*[)\]]")
+
+
+def _folded(text: str) -> str:
+    return re.sub(r"[\W_]+", "", text.casefold())
+
+
+def file_name_title(title: str, artist: str) -> str | None:
+    """Which check finds ``title`` (with ``artist``, the artist tag) looking
+    like an old file name a tagger copied into the title tag, or None when
+    it reads as a title: underscores; a BPM-like number at its end
+    (70-180); words run together; the main artist again outside its
+    brackets; or three or more brackets of one word each. A file whose name
+    this would build is sent to review rather than named by it."""
+    title = title.strip()
+    if "_" in title:
+        return "underscores"
+    number = _TRAILING_NUMBER.search(title)
+    if number and int(number.group(1)) in _BPM_RANGE:
+        return "a trailing BPM number"
+    if any(_RUN_TOGETHER.match(word) for word in title.split()):
+        return "run-together words"
+    bare = _BRACKETED.sub(" ", title)
+    words = {_folded(w) for w in bare.split()}
+    main, _featured = split_artist(artist)
+    for name in main:
+        folded = _folded(name)
+        if len(folded) < 3 or folded == _folded(bare):
+            continue  # too short to tell, or a song named after its artist
+        if folded in words or (" " in name.strip() and folded in _folded(bare)):
+            return "the artist repeated in the title"
+    if len(_ONE_WORD_BRACKET.findall(title)) >= 3:
+        return "words in brackets one by one"
+    return None
+
+
 def delivery_name(tags: dict[str, str], original_name: str) -> str | None:
     """The first name a delivered file may take, or None."""
     names = delivery_names(tags, original_name)
@@ -232,37 +308,71 @@ class RegistryUnavailable(Exception):  # noqa: N818 — named for what happened
 
 
 class LibraryNames:
-    """The file names already in the library, from the API's library
-    registry: read once, on the first name checked, then kept for the run."""
+    """The file names and md5s already in the library, from the API's
+    library registry: read once, on the first check, then kept for the run."""
 
     PAGE = 500
 
     def __init__(self, api: LibraryFiles | None) -> None:
         self.api = api
         self._names: set[str] | None = None
+        #: By md5: (drive file id, path) of each present main-library file
+        #: not marked for the trash.
+        self._md5s: dict[str, list[tuple[str, str]]] = {}
+
+    def _load(self) -> set[str]:
+        if self._names is not None:
+            return self._names
+        assert self.api is not None
+        fx_root = os.getenv(FX_ROOT_FOLDER_VAR, "").strip()
+        names: set[str] = set()
+        md5s: dict[str, list[tuple[str, str]]] = {}
+        offset = 0
+        try:
+            while True:
+                page = self.api.list_library_files(
+                    present=True, limit=self.PAGE, offset=offset
+                )
+                for row in page:
+                    path = str(row.path)
+                    names.add(path.rsplit("/", 1)[-1].lower())
+                    checksum = str(getattr(row, "md5", None) or "").lower()
+                    root = str(getattr(row, "library_root_id", "") or "")
+                    if (
+                        checksum
+                        and not getattr(row, "trash_requested", False)
+                        and not (fx_root and root == fx_root)
+                    ):
+                        file_id = str(getattr(row, "drive_file_id", "") or "")
+                        md5s.setdefault(checksum, []).append((file_id, path))
+                if len(page) < self.PAGE:
+                    break
+                offset += self.PAGE
+        except Exception as exc:
+            raise RegistryUnavailable(f"{type(exc).__name__}: {exc}") from exc
+        self._names, self._md5s = names, md5s
+        return names
 
     def taken(self, name: str) -> bool:
         """Whether a present library file already has this name (any case)."""
         if self.api is None:
             return False
-        if self._names is None:
-            names: set[str] = set()
-            offset = 0
-            try:
-                while True:
-                    page = self.api.list_library_files(
-                        present=True, limit=self.PAGE, offset=offset
-                    )
-                    names.update(
-                        str(row.path).rsplit("/", 1)[-1].lower() for row in page
-                    )
-                    if len(page) < self.PAGE:
-                        break
-                    offset += self.PAGE
-            except Exception as exc:
-                raise RegistryUnavailable(f"{type(exc).__name__}: {exc}") from exc
-            self._names = names
-        return name.lower() in self._names
+        return name.lower() in self._load()
+
+    def copy_of(
+        self, checksum: str, *, besides: frozenset[str] = frozenset()
+    ) -> str | None:
+        """The path of a present main-library file (its main folder or New
+        Music, not FX Music) not marked for the trash whose md5 is
+        ``checksum``, leaving out the files in ``besides``; None when there
+        is none. A registry row with no md5 never matches."""
+        if self.api is None:
+            return None
+        self._load()
+        for file_id, path in self._md5s.get(checksum.lower(), []):
+            if file_id not in besides:
+                return path
+        return None
 
 
 def is_mp3(downloaded: Any, name: str) -> bool:
@@ -499,8 +609,39 @@ def intake_one(intake: Intake, file_id: str) -> None:
     if not is_mp3(downloaded, name):
         intake.review(file_id, name, None, "not an MP3: only ID3 tags are read")
         return
-    if ingest_track(read_tag_row(data)) is None:
+    # A copy an earlier run of this file made is the file itself, not a
+    # library file it duplicates.
+    earlier = frozenset(
+        intake.drive.find_files_by_app_property(
+            intake.folders.destination, key=SOURCE_PROPERTY, value=file_id
+        )
+    )
+    try:
+        copy = intake.library.copy_of(md5(data), besides=earlier)
+    except RegistryUnavailable as exc:
+        intake.review(
+            file_id,
+            name,
+            data,
+            "the library registry could not be read to check for an exact copy "
+            f"({exc})",
+        )
+        return
+    if copy is not None:
+        intake.review(file_id, name, data, f"exact copy of a library file ({copy})")
+        return
+    tags = read_tag_row(data)
+    if ingest_track(tags) is None:
         intake.review(file_id, name, data, "no usable title or artist")
+        return
+    check = file_name_title(tags["title"], tags["artist"])
+    if check is not None:
+        intake.review(
+            file_id,
+            name,
+            data,
+            f"its title tag looks like a file name ({check}): {tags['title']!r}",
+        )
         return
     intake.deliver(file_id, name, data, data, identified_by="own tags")
 
@@ -518,9 +659,10 @@ def intake_files(
     fails: the run stops there. Any other failure is that file's alone.
     """
     summary = intake.summary
-    for f in files:
+    for index, f in enumerate(files):
         if max_files > 0 and summary.scanned >= max_files:
             log.info("new-music: reached %d files for this run", max_files)
+            summary.left_past_cap = len(files) - index
             break
         name = str(getattr(f, "name", "") or getattr(f, "id", ""))
         if shared_deadline_passed():
@@ -538,6 +680,62 @@ def intake_files(
                 raise RunOutOfTime(f"run deadline reached processing {name}") from exc
             log.exception("new-music: failed on %s", name)
             summary.failed.append(f"{name} ({type(exc).__name__}: {exc})")
+
+
+class RunRequests(Protocol):
+    """The part of the API client that asks for a deejay-cog run."""
+
+    def request_deejay_run(self, payload: DeejayRunRequest) -> DeejayRunAccepted:
+        """``POST /v1/deejay/runs``."""
+        ...
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def queue_follow_up(api: RunRequests, summary: IntakeSummary) -> None:
+    """Ask for the next new-music run (``POST /v1/deejay/runs``), so the
+    files past this run's cap are taken in by the run after it, with no
+    wait for the watcher's next look at the folder.
+
+    It names no file, so no file is claimed: the claims the watcher took
+    stay as they are. The API collapses an identical request made within
+    :data:`FOLLOW_UP_WINDOW_SECONDS` into the first, and this run's own
+    follow-up is the same request as the one that started it when that was
+    a follow-up too: so it is sent no sooner than the window after that one
+    (waiting the rest, when the run's deadline allows). A follow-up the API
+    still answers as collapsed, or that cannot be sent, is named in the
+    report; the watcher's next claim renewal then starts the next run."""
+    request = current_request()
+    if request is not None and request.caller == MACHINE_NAME:
+        asked = request.requested_at
+        if asked.tzinfo is None:
+            asked = asked.replace(tzinfo=UTC)
+        due = asked + timedelta(
+            seconds=FOLLOW_UP_WINDOW_SECONDS + FOLLOW_UP_MARGIN_SECONDS
+        )
+        wait = (due - _now()).total_seconds()
+        left = remaining_seconds()
+        if wait > 0 and (left is None or left - wait > FOLLOW_UP_MARGIN_SECONDS):
+            log.info("new-music: follow-up waits %.0fs for the API's window", wait)
+            _sleep(wait)
+    try:
+        accepted = api.request_deejay_run(DeejayRunRequest(mode="new-music"))
+    except Exception as exc:  # noqa: BLE001 — the run's own work is done
+        log.exception("new-music: the follow-up run could not be queued")
+        summary.follow_up_problem = f"{type(exc).__name__}: {exc}"
+        return
+    if accepted.deduplicated:
+        summary.follow_up_problem = (
+            f"collapsed by the queue into {accepted.message_id or 'an earlier run'}"
+        )
+        return
+    summary.follow_up = accepted.message_id or "queued"
 
 
 def run_intake(
@@ -621,6 +819,11 @@ def new_music(*, run_id: str | None = None) -> IntakeSummary:
     def work(intake: Intake) -> None:
         files = list_audio_files(intake.drive, intake.folders.input)
         intake_files(intake, files, max_files=max_files_per_run())
+        # Files past the cap: the next run takes them. Only after a run that
+        # moved a file, so files that fail every time cannot loop runs.
+        moved = any(entry.move for entry in intake.record.entries)
+        if intake.summary.left_past_cap and intake.mode.writes and moved:
+            queue_follow_up(api, intake.summary)
 
     return run_intake(stage="intake", run_id=run_id, mode=mode, work=work, library=api)
 
@@ -648,6 +851,7 @@ def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
     report.count("collisions", len(summary.collisions))
     report.count("failed", len(summary.failed))
     report.count("no_longer_in_input", len(summary.no_longer_in_input))
+    report.count("left_past_cap", summary.left_past_cap)
     if dry:
         planned = (
             len(summary.identified)
@@ -668,6 +872,18 @@ def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
         report.issue("failed", name)
     if summary.aborted:
         report.issue("audio_changed_run_stopped", summary.aborted)
+    if summary.follow_up:
+        report.notice(
+            "follow_up_queued",
+            f"{summary.left_past_cap} files past the cap: the next run is "
+            f"{summary.follow_up}",
+        )
+    if summary.follow_up_problem:
+        report.issue(
+            "follow_up_not_queued",
+            f"{summary.left_past_cap} files past the cap wait for the "
+            f"watcher's next sweep: {summary.follow_up_problem}",
+        )
 
 
 if __name__ == "__main__":

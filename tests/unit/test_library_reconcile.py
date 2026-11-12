@@ -1688,3 +1688,41 @@ def test_a_root_that_fails_does_not_stop_the_other(
 
     assert [k.drive_file_id for k in writing.kept] == [fx_id]
     assert f"{backfill.ROOT_FOLDER_VAR}: the run over this root failed" in _text(posted)
+
+
+def test_a_held_difference_is_reported_once_not_on_every_run(
+    settings, wired, drive, catalog, posted
+) -> None:
+    ids = _library(drive, catalog, [{"genre": "Neo Soul"}, {"label": "Other"}])
+    first = rec.library_reconcile(run_id="r-1")
+    assert "0.mp3: genre" in _text(posted) and "1.mp3: label" in _text(posted)
+
+    posted.reset_mock()
+    _forget_seen(drive)  # both compared again, unchanged
+    again = rec.library_reconcile(run_id="r-2")
+
+    assert again.compared == 2 and again.reported_before == {
+        f"{ids[0]}|genre",
+        f"{ids[1]}|label",
+    }
+    text = _text(posted)
+    assert "0.mp3: genre" not in text and "1.mp3: label" not in text
+    # Still in the review data.
+    assert {d.drive_file_id for d in catalog.reviews[-1].differences} == set(ids)
+    assert len(first.open) == len(again.open) == 2
+
+
+def test_a_held_difference_that_changed_or_is_new_is_reported_again(
+    settings, wired, drive, catalog, posted
+) -> None:
+    ids = _library(drive, catalog, [{"genre": "Neo Soul"}, {}])
+    rec.library_reconcile(run_id="r-1")
+
+    drive.items[ids[0]].data = _song(catalog.rows[0].catalog_id, genre="Jazz")
+    drive.items[ids[1]].data = _song(catalog.rows[1].catalog_id, label="Other")
+    _forget_seen(drive)
+    again = rec.library_reconcile(run_id="r-2")
+
+    assert again.reported_before == set()
+    text = _text(posted)
+    assert "0.mp3: genre 'Jazz'" in text and "1.mp3: label 'Other'" in text

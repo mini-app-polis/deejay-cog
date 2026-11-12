@@ -174,7 +174,8 @@ unless all five of its folders are set and different (see
 [CONFIGURATION.md](CONFIGURATION.md#music-tagging-safety-and-new-music)).
 
 Lists the audio files in `NEW_MUSIC_INPUT_FOLDER_ID`, at most
-`NEW_MUSIC_MAX_FILES_PER_RUN` (25; 0 for no cap) a run. Intake does not look
+`NEW_MUSIC_MAX_FILES_PER_RUN` (25; 0 for no cap) a run (see **A batch past
+the cap**, below). Intake does not look
 a file up, make catalog entries or write tags: it puts the file into New
 Music as it came, and the library's steps take it from there (scan,
 identify with its fingerprint check, duplicates, reconcile and sync; see
@@ -182,8 +183,29 @@ identify with its fingerprint check, duplicates, reconcile and sync; see
 
 1. **Not an MP3** → moved, unchanged, to needs-review (the main library
    takes MP3s only).
-2. **No usable title or artist** → moved, unchanged, to needs-review.
-3. **Otherwise** → taken in: copied, tags and audio unchanged, into New
+2. **A byte-identical copy of a library file** → moved, unchanged and
+   unrenamed, to needs-review, reported as `needs_review` with the reason
+   `exact copy of a library file` and the library file's path. Its md5 (as
+   Drive reports it) is checked against the library registry, read once a
+   run: a present file not marked for the trash, in the main library (its
+   main folder or New Music; FX Music's files never match) with the same
+   md5. A registry row with no md5 never matches, and the copy an earlier
+   run of this file made in New Music is not counted. If the registry cannot
+   be read, the file goes to needs-review with the reason, as the name check
+   does. Nothing is trashed or overwritten.
+3. **No usable title or artist** → moved, unchanged, to needs-review.
+4. **A title tag that looks like an old file name** → moved, unchanged and
+   unrenamed, to needs-review, the reason naming the check that found it
+   (`new_music.file_name_title`): underscores; a number from 70 to 180 at
+   its end (a BPM, as in `… Kahlo 113`); words run together (three
+   lowercase letters then a capital or two digits: `BoxingUnderwater`,
+   `Kahlo113`; `McDonald` or `M4SONIC` are not); the main artist again
+   outside the title's brackets (a song named after its artist aside); or
+   three or more brackets of one word each (`Burning (Bridges) (Sistek)
+   (Remix) (Ella)`). Named by such a tag, the file would carry the old name
+   into the library; a false alarm costs only a review. A dry run moves
+   nothing; the record lists the move it would make.
+5. **Otherwise** → taken in: copied, tags and audio unchanged, into New
    Music, named from its own tags.
 
 A release label in the file's own title (Clean, Explicit, Radio Edit, an
@@ -219,6 +241,25 @@ original's id and checked, rather than uploaded twice. Nothing is ever
 deleted or overwritten; names are sanitized (no `/ \ : * ? " < > |` or
 control characters).
 
+**A batch past the cap** drains run after run. When files are left in the
+input folder past `NEW_MUSIC_MAX_FILES_PER_RUN` (`left_past_cap`), a
+writing run that moved at least one file asks for the next new-music run
+before it ends (`POST /v1/deejay/runs` with `{"mode": "new-music"}`; scope
+`deejay.runs.create`), and that run takes the next files, and so on until
+the folder is empty, with no gap between them. The request names no file,
+so the API claims none: the watcher's claims (`dispatch_claims`, scope
+`deejay:new-music`) are left as they are, and no file waits behind the cap
+long enough for its claim to be renewed or given up on. The API's queue
+collapses an identical request made within its window
+(`job_queue.DEDUP_WINDOW_SECONDS`, 60 s) into the first, and a run started
+by this cog's own follow-up would ask for the same thing again; such a run
+sends its follow-up no sooner than 65 s after the request that started it,
+waiting the rest when its deadline allows. The report names the follow-up
+(`follow_up_queued`); one the API refuses or still collapses is a WARN
+(`follow_up_not_queued`), and the files wait for the watcher's next sweep.
+A dry run, or a run that moved no file (every file failed), asks for
+nothing; a run stopped at its deadline is delivered again instead.
+
 **Audio check failure** stops the run at once: nothing is written for that
 file (after an upload, the bad copy goes to the Drive trash and the original
 stays in the input folder), the rest of the folder waits, and an ERROR
@@ -232,7 +273,7 @@ destinations.
 
 **Report:** counts for `scanned`, `identified` (taken in),
 `needs_review`, `collisions`, `failed`,
-`no_longer_in_input` (and `not_written_dry_run` in a dry run), with the files
+`no_longer_in_input`, `left_past_cap` (and `not_written_dry_run` in a dry run), with the files
 by name. Off, the report says only that the flow is off; a missing setting
 is a WARN naming it.
 
@@ -353,6 +394,29 @@ Each library root follows a tagging rule profile
   packets but the comment header, the M4A `mdat` atoms, the WAV `fmt `/`data`
   and AIFF `COMM`/`SSND` chunks; and mutagen's stream info), the file sent
   back as its own format, and every write in the run record.
+
+### Naming FX Music files whose tags name no song
+
+Identify skips an FX Music file whose tags name no song, and no step fills
+them in (the file wins). `python -m deejay_cog.fx_untagged`, run locally
+under `doppler run --config prd`, does it from a list the owner approves:
+
+```bash
+doppler run --config prd -- uv run python -m deejay_cog.fx_untagged propose --out fx-untagged.csv
+doppler run --config prd -- uv run python -m deejay_cog.fx_untagged apply fx-untagged.csv          # what it would do
+doppler run --config prd -- uv run python -m deejay_cog.fx_untagged apply fx-untagged.csv --write  # do it
+```
+
+`propose` writes one CSV row per such file: `tag` with a title and artist
+read from its name ("Artist - Title", or "Title_Artist"; "VA" is not taken
+as an artist), `trash` for a copy of another file in the same folder ("…
+copy"), or `skip` when the name gives no title or artist. The owner edits
+the CSV. `apply --write` then writes each approved title and artist to the
+file in its own format (the one write to an FX file's own tags, and only
+with his approval), the safe way and recorded as an `fx-untagged` run that
+`music_rollback` can undo, and moves each approved `trash` file to Drive's
+trash, marking it not present. Nothing is renamed or moved, and a row with
+an empty title or artist is never written.
 
 ### Running a library job on demand
 
@@ -851,7 +915,12 @@ the catalog leaves empty) and `other`.
 every difference under its kind (path, field, the file's value, the
 catalog's); a write run's is `library-reconcile-<run id>.differences.json`.
 The report counts each kind, shows a few examples of each, and names every
-`other` file.
+`other` file. **A held difference is reported once:** one not approved that
+an earlier run's report already named with the same values (kept as
+`reported` in `library-reconcile-open.json`, below) is left out of the
+report's counts and examples, and counted as `held_reported_before`
+instead. It is still in the record and still sent to the review. A
+difference whose values changed, or a new one, is reported again.
 
 **Review:** every run, dry or write, sends the API the files it compared
 and the differences still open on them (`POST
@@ -943,6 +1012,18 @@ library does not stop the other (approvals the API can't return stop only the
 main library); a failure is raised once the other has run. With more than one
 root, every line of the report names its root and the counts are over both.
 
+**Edits that share an entry at different tempos keep their BPMs.** When the
+files linked to one entry hold BPMs 1.5 or more apart (`BPM_ROUNDING`; two
+edits of a song cut at different tempos, such as a 3:09 and a 2:53 edit),
+a write run settles no BPM difference on any of them, whatever was
+approved: the file's BPM is not sent up and the catalog's is not written.
+Either would hand one file's tempo to the other through the entry, since
+library-sync writes the entry's BPM to every file on it, and the next run
+would hand it back. The differences stay open, filed as `bpm_differs`, for
+the owner's review; the report names each one an approval would have
+settled (`bpm_split_held`, with every file's BPM). library-sync writes
+neither BPM ([library-sync](#library-sync)).
+
 **Long-open differences:** `library-reconcile-open.json` in the state folder
 keeps when each open difference was first seen; a difference whose values
 change starts again. Every run counts those open more than 7 days
@@ -1025,6 +1106,14 @@ comment and VirtualDJ's frames are left as they are. Then the files are
 recorded as synced with their values
 (`POST /v1/catalog/library/files/synced`), including those that already
 carried them.
+
+**Edits that share an entry at different tempos keep their BPMs.** When a
+file's BPM moved and the files linked to its entry hold BPMs 1.5 or more
+apart (read from their tags, once per entry per run), the BPM is written to
+none of them: each keeps its own, any other moved field is written as
+usual, and the report names each (`bpm_split_kept`). The file is recorded
+as synced, so the same move is not tried again. The reconcile holds their
+BPM differences the same way ([library-reconcile](#library-reconcile)).
 
 **Edits made in a file go up first**
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), 2026-11-09: an
@@ -1235,6 +1324,17 @@ not named again. With more than one root, each root's group count
 root, named by the settings naming its folders; with FX Music set,
 `fx_across_folders` counts its sets of copies across folders.
 
+**No report when nothing changed.** `library-duplicates-seen.json` in the
+state folder keeps a digest of each root's groups (each group's key,
+reasons and files, FX Music's sets across folders, and how many groups were
+left out) as the last run found them. A run whose groups are the same for
+every root, and that the API found nothing added to or dropped from, posts
+no report, dry or write: it names no group, is logged with its counts
+(`files`, `groups`, `unchanged_since_last_run`) and still sends the groups
+to the API in write. A group added, dropped or changed, or a root that
+failed, reports as above. A state file that can't be read or saved is
+named (`last_run_not_compared`) and the run reports as usual.
+
 ### Run records
 
 Every run of a music-writing flow that touches a file leaves a JSON record in
@@ -1376,6 +1476,7 @@ folder is taken in again by the next new-music run: set the
 | What failed | What happens |
 |-------------|--------------|
 | One file (upload, ingest, move) | Contained. Counted, the file is renamed where that helps a retry, the sweep carries on, and the run reports WARN. The message is deleted. |
+| Drive's rate limit (library jobs) | The library jobs' own Drive calls (file metadata, ranged reads, revisions) go through the shared Google retry (`music_safety.drive_call`): a 429, or a 403 whose reason is `userRateLimitExceeded` or `rateLimitExceeded`, is tried again with exponential backoff (1 s doubling to 32 s, six attempts). Any other 403 is not tried again. If library-identify still cannot get through, that file and the rest of its chunk are left untried for the next run and listed as `drive_rate_limited`: the run reports WARN, not `unhandled_exception`. |
 | The run itself (e.g. the drop zone or the history folder cannot be listed) | The flow raises. The worker reports ERROR and returns the message in `batchItemFailures`, so SQS redelivers it. |
 | The deadline | 30 s before the function's timeout the run is stopped (`_deadline.RunOutOfTime`). One request timeout before that, the shared library stops retrying Google and Spotify calls (`run_deadline`); past it the sweep stops between files rather than count each refusal as a failure, and live history stops rather than report the refused file as unreadable. The repair pass and playlist snapshot, which come after the sets are done, do not fail the run: they stop starting jobs, leave the rest for the next run, and the WARN report says `stopped_at_deadline`. A sheet uploaded but not yet ingested is deleted (outside the deadline, so the delete is not refused), the worker reports ERROR, and the message is redelivered. |
 | An unrecognised message (bad JSON, version, type or mode) | Reported once, on its first receive, then returned until it reaches the dead-letter queue, where its own alarm fires. |

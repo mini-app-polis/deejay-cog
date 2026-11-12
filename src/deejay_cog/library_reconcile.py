@@ -74,7 +74,10 @@ the start read, or when an approved difference is written over it.
 (``.differences.json`` for a write run), with each kind's count and every
 difference under it (file, field, the file's value, the catalog's). The run
 report gives each kind's count and a few examples, and names every
-``other`` file.
+``other`` file. A difference not approved that an earlier report named with
+the same values (``reported`` in ``library-reconcile-open.json``) is left
+out of the report and counted as ``held_reported_before``; the record and
+the review still hold it.
 
 **Review.** Every run (dry or write) sends the API the files it compared
 and the differences still open on them (``POST
@@ -83,6 +86,17 @@ in a write run those it did not write or fill up. For those files they
 replace what the API held, so the owner's review page on the WCS site always
 shows each file's latest. A run that cannot send them says so in its report
 and carries on; the next pass sends them again.
+
+**Edits that share an entry at different tempos.** When the files linked
+to one entry hold BPMs further apart than ``BPM_ROUNDING`` (two edits of a
+song cut at different tempos), no BPM difference on any of them is
+settled, whatever was approved: the file's value is not sent up and the
+catalog's is not written. Either would hand one file's tempo to the other
+through the entry (library-sync writes the entry's BPM to every file on it),
+run after run. The differences stay open as filed (``bpm_differs``) for the
+owner's review, and a write run names each such entry (``bpm_split_held``)
+when it held an approved one. library-sync writes no BPM to those files
+either.
 
 **Long-open differences.** ``library-reconcile-open.json`` in the state
 folder keeps when each open difference was first seen (a difference whose
@@ -744,6 +758,14 @@ class ReconcileSummary:
     #: FX Music: each field the copies of one fx entry hold differently,
     #: sent up from none of them: "field: path 'value'; path 'value'".
     fx_copies_disagree: list[str] = field(default_factory=list)
+    #: Approved BPM differences held because the entry's files hold BPMs
+    #: further apart than ``BPM_ROUNDING``: "path: bpm 'a' (entry's files: ...)".
+    bpm_split_held: list[str] = field(default_factory=list)
+    #: Open-difference keys already named in an earlier run's report with
+    #: the same values: left out of this one (still sent to the review).
+    reported_before: set[str] = field(default_factory=set)
+    #: Open-difference keys the owner approved, for either side.
+    approved_keys: set[str] = field(default_factory=set)
     #: With more than one root, each root's own summary, in order.
     roots: list[tuple[LibraryRoot, ReconcileSummary]] = field(default_factory=list)
 
@@ -923,12 +945,14 @@ def _compare_one(
     summary: ReconcileSummary,
     *,
     owner_edits: bool = True,
+    reads: dict[str, TagBytes] | None = None,
 ) -> tuple[str, TagBytes, list[Difference], dict[str, str]] | OwnerEditRetitle | None:
     """Compare one file; return its name, the bytes its tags were read from
     (its start and end, or the whole file when its tag runs past the start
     read), differences and expected values, or None when it could not be
     compared. With ``owner_edits``, a file retitled as an owner edit its
-    entry is not is returned as an :class:`OwnerEditRetitle`, uncompared."""
+    entry is not is returned as an :class:`OwnerEditRetitle`, uncompared.
+    ``reads`` holds tags this run already read, by Drive id."""
     if display is None:
         summary.failed.append(
             f"{row.path} (its catalog entry {row.catalog_id} is gone)"
@@ -939,7 +963,9 @@ def _compare_one(
         summary.failed.append(f"{row.path} (in the trash; the scan will mark it)")
         return None
     name = str(meta.get("name") or row.path.rsplit("/", 1)[-1])
-    read = read_tag_bytes(drive, row.drive_file_id)
+    read = (reads or {}).get(row.drive_file_id) or read_tag_bytes(
+        drive, row.drive_file_id
+    )
     tags = read_tag_row(read.data)
     if owner_edits and needs_owner_edit_entry(tags["title"], display):
         return OwnerEditRetitle(name, read, tags)
@@ -965,6 +991,43 @@ def _compare_one(
     return name, read, diffs, {**wanted, "catalog_id": str(row.catalog_id)}
 
 
+def _bpm_spread(
+    drive: Any,
+    queue: list[LibraryFile],
+    every: list[LibraryFile],
+    reads: dict[str, TagBytes],
+) -> dict[str, str]:
+    """The entries of ``queue`` whose files (every present, identified file
+    linked to them) hold BPMs further apart than ``BPM_ROUNDING``, each with
+    its files' BPMs as the report names them. The tags read are kept in
+    ``reads``, so a file is read once a run."""
+    files: dict[str, list[LibraryFile]] = {}
+    for row in every:
+        if row.catalog_id:
+            files.setdefault(str(row.catalog_id), []).append(row)
+    split: dict[str, str] = {}
+    for entry in dict.fromkeys(str(r.catalog_id) for r in queue if r.catalog_id):
+        linked = files.get(entry) or []
+        if len(linked) < 2:
+            continue
+        bpms: list[tuple[str, str, float]] = []
+        for row in linked:
+            if row.drive_file_id not in reads:
+                try:
+                    reads[row.drive_file_id] = read_tag_bytes(drive, row.drive_file_id)
+                except Exception:  # noqa: BLE001 — the file is compared on its own
+                    log.warning("library-reconcile: BPM of %s not read", row.path)
+                    continue
+            value = read_tag_row(reads[row.drive_file_id].data)["bpm"]
+            number = _number(value)
+            if number is not None:
+                bpms.append((row.path, value, number))
+        numbers = [n for _path, _value, n in bpms]
+        if numbers and max(numbers) - min(numbers) >= BPM_ROUNDING:
+            split[entry] = "; ".join(f"{path} {value!r}" for path, value, _n in bpms)
+    return split
+
+
 def _apply_one(
     drive: Any,
     api: Catalog,
@@ -974,15 +1037,25 @@ def _apply_one(
     compared: tuple[str, TagBytes, list[Difference], dict[str, str]],
     approvals: Approvals,
     summary: ReconcileSummary,
+    bpm_split: str = "",
 ) -> set[str]:
     """Settle one file's approved differences: send those approved for the
     file up to its entry, send its approved fill-ups to the catalog, and
     write those approved for the catalog over the file. Return the fields it
     settled. A write is built from the whole file, downloaded here when the
-    comparison read only its start and end. Raises :class:`AudioChanged`."""
+    comparison read only its start and end. ``bpm_split`` names the BPMs of
+    the entry's files when they are too far apart to share one: then no BPM
+    difference is settled. Raises :class:`AudioChanged`."""
     name, read, diffs, wanted = compared
     approved = [d for d in diffs if approvals.approves(d)]
     summary.not_approved += len(diffs) - len(approved)
+    if bpm_split:
+        for d in approved:
+            if d.field == "bpm":
+                summary.bpm_split_held.append(
+                    f"{row.path}: bpm {d.file_value!r} (the entry's files: {bpm_split})"
+                )
+        approved = [d for d in approved if d.field != "bpm"]
     settled: set[str] = set()
     kept = [d for d in approved if approvals.side(d) == "file"]
     if kept and record.mode.writes:
@@ -1249,9 +1322,15 @@ def _reconcile(
         (row, False) for row in rows if row.drive_file_id not in done_first
     ]
     displays = shown
+    reads: dict[str, TagBytes] = {}
 
     status = "complete"
     try:
+        bpm_split = (
+            _bpm_spread(drive, [row for row, _first in queue], every, reads)
+            if record is not None
+            else {}
+        )
         for row, _is_first in queue:
             if shared_deadline_passed():
                 summary.stopped = f"run deadline reached before {row.path}"
@@ -1259,7 +1338,7 @@ def _reconcile(
                 break
             try:
                 display = displays.get(row.catalog_id) if row.catalog_id else None
-                compared = _compare_one(drive, row, display, summary)
+                compared = _compare_one(drive, row, display, summary, reads=reads)
                 if isinstance(compared, OwnerEditRetitle):
                     if _take_owner_edit(
                         drive, api, record, settings, row, compared, summary
@@ -1275,9 +1354,20 @@ def _reconcile(
                 settled: set[str] = set()
                 if compared is not None and record is not None:
                     settled = _apply_one(
-                        drive, api, record, settings, row, compared, approvals, summary
+                        drive,
+                        api,
+                        record,
+                        settings,
+                        row,
+                        compared,
+                        approvals,
+                        summary,
+                        bpm_split.get(str(row.catalog_id), ""),
                     )
                 if compared is not None and record is not None:
+                    summary.approved_keys |= {
+                        _open_key(d) for d in compared[2] if approvals.approves(d)
+                    }
                     summary.tried |= {
                         _open_key(d)
                         for d in compared[2]
@@ -1701,8 +1791,9 @@ def _open_key(diff: Difference) -> str:
 def _track_open(
     drive: Any, settings: BackfillSettings, summary: ReconcileSummary
 ) -> None:
-    """Keep when each open difference was first seen, and count those open
-    longer than ``LONG_OPEN_DAYS`` by kind.
+    """Keep when each open difference was first seen and first reported,
+    and count those open longer than ``LONG_OPEN_DAYS`` by kind. One already
+    reported with the same values goes in ``summary.reported_before``.
 
     For every file this run compared, its entries are replaced by what is
     open on it now; a difference whose values changed starts again. A run
@@ -1734,6 +1825,10 @@ def _track_open(
             tried = stamp if key in summary.tried else (was or {}).get("tried")
             if tried and (same or key in summary.tried):
                 kept[key]["tried"] = tried
+            reported = (was or {}).get("reported") if same else None
+            if reported:
+                summary.reported_before.add(key)
+            kept[key]["reported"] = reported or stamp
         cutoff = now.timestamp() - LONG_OPEN_DAYS * 86400
         long_open: dict[str, int] = {}
         for value in kept.values():
@@ -1903,10 +1998,25 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
         else set()
     )
     refused_count = len(refused)
+    # A held difference is named once: one an earlier report named with the
+    # same values, and not approved, is left out (the review still has it).
+    hidden = refused | (summary.reported_before - summary.approved_keys)
+    shown_kinds: dict[str, list[Difference]] = {
+        kind: [
+            d
+            for d in summary.differences[kind]
+            if not hidden or _open_key(d) not in hidden
+        ]
+        for kind in KINDS
+    }
     for kind in KINDS:
-        n = len(summary.differences[kind])
-        report.count(kind, n - refused_count if kind == "fill_up" else n)
+        report.count(kind, len(shown_kinds[kind]))
     report.count("fill_up_kept_by_file", refused_count)
+    report.count(
+        "held_reported_before",
+        sum(len(summary.differences[k]) - len(shown_kinds[k]) for k in KINDS)
+        - refused_count,
+    )
     report.count("failed", len(summary.failed))
     report.count("owner_edits", len(summary.owner_edits))
     for item in summary.owner_edits:
@@ -1927,12 +2037,12 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
             report.updated("catalog took the file's value", item)
         for item in summary.kept_held:
             report.notice("kept_held", item)
+        for item in summary.bpm_split_held:
+            report.notice("bpm_split_held", item)
     if summary.aborted:
         report.issue("audio_changed_run_stopped", summary.aborted)
     for kind in KINDS:
-        diffs = summary.differences[kind]
-        if refused:
-            diffs = [d for d in diffs if _open_key(d) not in refused]
+        diffs = shown_kinds[kind]
         shown = diffs if kind == "other" else diffs[:REPORT_EXAMPLES]
         for diff in shown:
             report.notice(kind, diff.example())

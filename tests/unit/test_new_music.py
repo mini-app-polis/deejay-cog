@@ -3,6 +3,7 @@ folder settings, the audio check and the run record."""
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -10,14 +11,22 @@ from unittest.mock import MagicMock
 
 import pytest
 from mini_app_polis import pipeline_status
+from mini_app_polis.api.contract import (
+    DeejayRunAccepted,
+    DeejayRunRequest,
+    QueueRequest,
+)
 from mini_app_polis.lambda_worker import RunOutOfTime
 from music_fakes import AUDIO, FakeDrive, mp3
 from mutagen.id3 import TALB, TIT2, TPE1
 
+from deejay_cog import library_backfill as backfill
 from deejay_cog import new_music as flow
+from deejay_cog._pipeline_eval import requested
 from deejay_cog.music_safety import (
     SOURCE_PROPERTY,
     audio_payload,
+    md5,
     tag_snapshot,
 )
 from flag_fakes import FLAGS
@@ -42,6 +51,14 @@ class FakeApi:
     library: list[str] = field(default_factory=list)
     registry_down: Exception | None = None
     listings: list[dict] = field(default_factory=list)
+    #: Registry rows with more than a path (md5, root, trash), after those.
+    rows: list[SimpleNamespace] = field(default_factory=list)
+    #: The runs asked for (``POST /v1/deejay/runs``).
+    runs: list[DeejayRunRequest] = field(default_factory=list)
+
+    def request_deejay_run(self, payload: DeejayRunRequest) -> DeejayRunAccepted:
+        self.runs.append(payload)
+        return DeejayRunAccepted(message_id=f"q-{len(self.runs)}", mode=payload.mode)
 
     def lookup_catalog(self, _payload):
         raise AssertionError("intake never looks a file up")
@@ -54,8 +71,8 @@ class FakeApi:
         if self.registry_down is not None:
             raise self.registry_down
         start = offset or 0
-        rows = self.library[start : start + (limit or 100)]
-        return [SimpleNamespace(path=p) for p in rows]
+        every = [SimpleNamespace(path=p) for p in self.library] + self.rows
+        return every[start : start + (limit or 100)]
 
 
 @pytest.fixture
@@ -626,3 +643,436 @@ def test_an_owner_edit_is_copied_unchanged_and_named_without_brackets(
 def test_names_never_carry_the_owner_edit_brackets() -> None:
     tags = {"title": f"{_BABY} <Intro Cut>", "artist": "Etta James"}
     assert flow.delivery_name(tags, "x.mp3") == f"{_BABY} Intro Cut_Etta James.mp3"
+
+
+# ---------------------------------------------------------------------------
+# A title tag that is an old file name
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("title", "artist", "check"),
+    [
+        # The title tags behind three names seen on 2026-11-11.
+        (
+            # BoxingUnderwater featCailinRusso Golding featCailinRusso 95_Golding.mp3
+            "BoxingUnderwater featCailinRusso Golding featCailinRusso 95",
+            "Golding",
+            "a trailing BPM number",
+        ),
+        (
+            # Burning (Bridges) (Sistek) (Remix) (Ella)_Vos.mp3
+            "Burning (Bridges) (Sistek) (Remix) (Ella)",
+            "Vos",
+            "words in brackets one by one",
+        ),
+        (
+            # CandyCleanKahlo113 Kahlo 113_Kah-lo.mp3
+            "CandyCleanKahlo113 Kahlo 113",
+            "Kah-lo",
+            "a trailing BPM number",
+        ),
+        ("burning_bridges", "Ella Vos", "underscores"),
+        ("BoxingUnderwater", "Golding", "run-together words"),
+        ("CandyCleanKahlo113", "Kah-lo", "run-together words"),
+        ("Kahlo Candy Clean", "Kah-lo", "the artist repeated in the title"),
+        ("Golding Boxing Underwater", "Golding", "the artist repeated in the title"),
+        ("Burning Bridges Ella Vos", "Ella Vos", "the artist repeated in the title"),
+    ],
+)
+def test_a_title_that_looks_like_a_file_name_is_named(title, artist, check) -> None:
+    assert flow.file_name_title(title, artist) == check
+
+
+@pytest.mark.parametrize(
+    ("title", "artist"),
+    [
+        ("Ain't No Sunshine (Explicit)", "Bill Withers"),
+        ("2 AM", "Adrian Marcel"),
+        ("Dernière danse", "Indila"),
+        ("Alive (M4SONIC Remix)", "Krewella"),
+        ("Alive (M4SONIC Remix)", "M4SONIC"),
+        ("Be Like That", "Kane Brown"),
+        ("Temple", "Thomas Gold"),
+        ("Honesty (feat. Kehlani)", "Pink Sweat$ feat. Kehlani"),
+        ("Attention (Lash Remix) (Clean)", "Charlie Puth"),
+        ("Baby What You Want Me To Do <Intro Cut>", "Etta James"),
+        ("Route 66", "Chuck Berry"),
+        ("McDonald's Theme", "DeBarge"),
+        ("Bad Company", "Bad Company"),
+    ],
+)
+def test_an_ordinary_title_reads_as_a_title(title, artist) -> None:
+    assert flow.file_name_title(title, artist) is None
+
+
+def test_a_file_name_title_goes_to_review_unrenamed(settings, wired, drive) -> None:
+    data = _tagged("CandyCleanKahlo113 Kahlo 113", "Kah-lo")
+    file_id = drive.add("CandyCleanKahlo113.mp3", IN, data)
+    ordinary = drive.add("be.mp3", IN, _tagged("Be Like That", "Kane Brown"))
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.needs_review == [
+        "CandyCleanKahlo113.mp3 (its title tag looks like a file name (a trailing "
+        "BPM number): 'CandyCleanKahlo113 Kahlo 113')"
+    ]
+    item = drive.items[file_id]
+    assert item.parents == [REVIEW] and item.name == "CandyCleanKahlo113.mp3"
+    assert item.data == data
+    assert summary.identified == ["be.mp3 -> Be Like That_Kane Brown.mp3"]
+    assert drive.items[ordinary].parents == [ORIG]
+    [review, deliver] = _record(drive)["entries"]
+    assert review["action"] == "review" and review["file_id"] == file_id
+    assert review["move"] == {"from": IN, "to": REVIEW}
+    assert "a trailing BPM number" in review["reason"]
+    assert deliver["action"] == "deliver"
+
+
+def test_a_dry_run_moves_no_file_name_title(
+    settings, wired, drive, monkeypatch
+) -> None:
+    file_id = drive.add("x.mp3", IN, _tagged("burning_bridges", "Ella Vos"))
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.needs_review and drive.items[file_id].parents == [IN]
+    assert drive.writes(except_folder=STATE) == []
+    [entry] = _record(drive)["entries"]
+    assert entry["action"] == "review" and entry["state"] == "planned"
+
+
+# ---------------------------------------------------------------------------
+# A byte-identical copy of a library file
+# ---------------------------------------------------------------------------
+
+LIBRARY_ROOT, FX_ROOT = "library-root", "fx-root"
+
+
+def _row(path: str, data: bytes | None, **kw) -> SimpleNamespace:
+    values = {
+        "drive_file_id": f"lib-{path}",
+        "path": path,
+        "md5": md5(data) if data is not None else None,
+        "library_root_id": LIBRARY_ROOT,
+        "trash_requested": False,
+        **kw,
+    }
+    return SimpleNamespace(**values)
+
+
+@pytest.fixture
+def fx(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(backfill.FX_ROOT_FOLDER_VAR, FX_ROOT)
+
+
+def test_an_exact_copy_of_a_library_file_goes_to_review(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    data = _tagged()
+    api.rows = [_row("/New Music/Temple_Thomas Gold.mp3", data)]
+    file_id = drive.add("temple copy.mp3", IN, data)
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.needs_review == [
+        "temple copy.mp3 (exact copy of a library file "
+        "(/New Music/Temple_Thomas Gold.mp3))"
+    ]
+    item = drive.items[file_id]
+    assert item.parents == [REVIEW] and item.name == "temple copy.mp3"
+    assert item.data == data and not item.trashed
+    assert drive.in_folder(DEST) == []
+    [entry] = _record(drive)["entries"]
+    assert entry["action"] == "review" and entry["move"] == {"from": IN, "to": REVIEW}
+
+
+def test_a_file_no_library_file_matches_is_taken_in(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    api.rows = [
+        _row("other.mp3", _tagged("Other", "Someone")),
+        _row("no-md5.mp3", None),
+    ]
+    drive.add("track01.mp3", IN, _tagged())
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == [f"track01.mp3 -> {_NAME}"]
+    assert summary.needs_review == []
+
+
+def test_a_copy_of_a_file_marked_for_the_trash_is_taken_in(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    data = _tagged()
+    api.rows = [_row("old/Temple.mp3", data, trash_requested=True)]
+    drive.add("track01.mp3", IN, data)
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == [f"track01.mp3 -> {_NAME}"]
+
+
+def test_a_copy_of_an_fx_music_file_only_is_taken_in(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    data = _tagged()
+    api.rows = [_row("Walk-ons/Temple.mp3", data, library_root_id=FX_ROOT)]
+    drive.add("track01.mp3", IN, data)
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == [f"track01.mp3 -> {_NAME}"]
+
+
+def test_an_unreadable_registry_sends_the_file_to_review_before_copying(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    api.registry_down = RuntimeError("API down")
+    file_id = drive.add("track01.mp3", IN, _tagged())
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.needs_review == [
+        "track01.mp3 (the library registry could not be read to check for an "
+        "exact copy (RuntimeError: API down))"
+    ]
+    assert drive.items[file_id].parents == [REVIEW]
+    assert drive.in_folder(DEST) == []
+
+
+def test_the_copy_an_earlier_run_made_is_not_an_exact_copy(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    data = _tagged()
+    file_id = drive.add("track01.mp3", IN, data)
+    copy_id = drive.add(_NAME, DEST, data, app_properties={SOURCE_PROPERTY: file_id})
+    # The scan registered that copy before this run.
+    api.rows = [_row(f"/New Music/{_NAME}", data, drive_file_id=copy_id)]
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == [f"track01.mp3 -> {_NAME}"]
+    assert drive.items[file_id].parents == [ORIG]
+
+
+def test_a_dry_run_moves_no_exact_copy(
+    settings, wired, drive, api: FakeApi, fx, monkeypatch
+) -> None:
+    data = _tagged()
+    api.rows = [_row("Temple.mp3", data)]
+    file_id = drive.add("track01.mp3", IN, data)
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.needs_review and drive.items[file_id].parents == [IN]
+    assert drive.writes(except_folder=STATE) == []
+
+
+# ---------------------------------------------------------------------------
+# A batch past the cap: a follow-up run, until the folder is empty
+# ---------------------------------------------------------------------------
+
+_EPOCH = dt.datetime(2026, 11, 12, 9, 0, 3, tzinfo=dt.UTC)
+
+
+@dataclass
+class Queue:
+    """The API's deejay queue as a follow-up meets it: an identical request
+    (mode and caller) in the same window bucket is collapsed into the first,
+    as ``job_queue.window_deduplication_id`` and SQS's own memory of an id
+    do; any other is queued for the next run, asked at ``clock``."""
+
+    clock: float = 0.0
+    window: int = 60
+    seen: dict[tuple[str, str, int], float] = field(default_factory=dict)
+    waiting: list[QueueRequest] = field(default_factory=list)
+    collapsed: int = 0
+    sent: int = 0
+
+    def now(self) -> dt.datetime:
+        return _EPOCH + dt.timedelta(seconds=self.clock)
+
+    def sleep(self, seconds: float) -> None:
+        self.clock += seconds
+
+    def ask(self, mode: str, caller: str) -> DeejayRunAccepted:
+        key = (mode, caller, int((_EPOCH.timestamp() + self.clock) // self.window))
+        if key in self.seen and self.clock - self.seen[key] < 300:
+            self.collapsed += 1
+            return DeejayRunAccepted(message_id="kept", mode=mode, deduplicated=True)
+        self.seen[key] = self.clock
+        self.sent += 1
+        self.waiting.append(
+            QueueRequest(id=f"r{self.sent}", requested_at=self.now(), caller=caller)
+        )
+        return DeejayRunAccepted(message_id=f"q-{self.sent}", mode=mode)
+
+
+@pytest.fixture
+def queue(monkeypatch: pytest.MonkeyPatch, api: FakeApi) -> Queue:
+    q = Queue()
+    monkeypatch.setattr(flow, "_now", q.now)
+    monkeypatch.setattr(flow, "_sleep", q.sleep)
+
+    def request_deejay_run(payload: DeejayRunRequest) -> DeejayRunAccepted:
+        api.runs.append(payload)
+        return q.ask(payload.mode, flow.MACHINE_NAME)
+
+    monkeypatch.setattr(api, "request_deejay_run", request_deejay_run)
+    return q
+
+
+def _drain(queue: Queue, *, run_secs: float) -> list[flow.IntakeSummary]:
+    """The watcher's request, then every run the queue holds, one after the
+    other, each taking ``run_secs``."""
+    queue.ask("new-music", "watcher-cog")
+    runs = []
+    while queue.waiting:
+        request = queue.waiting.pop(0)
+        with requested(request):
+            runs.append(flow.new_music(run_id=f"m-{len(runs) + 1}"))
+        queue.clock += run_secs
+        assert len(runs) < 20, "the runs never ended"
+    return runs
+
+
+@pytest.mark.parametrize("run_secs", [1.0, 90.0])
+def test_a_batch_three_times_the_cap_drains_run_after_run(
+    settings, wired, drive, api: FakeApi, queue: Queue, monkeypatch, run_secs
+) -> None:
+    monkeypatch.setenv(flow.MAX_FILES_VAR, "2")
+    ids = [
+        drive.add(f"{n}.mp3", IN, _tagged(f"Song {chr(65 + n)}", "Someone"))
+        for n in range(5)
+    ]
+    ids.append(drive.add("odd.mp3", IN, mp3(TALB(encoding=3, text=["no title"]))))
+
+    runs = _drain(queue, run_secs=run_secs)
+
+    assert [r.scanned for r in runs] == [2, 2, 2]
+    assert [r.left_past_cap for r in runs] == [4, 2, 0]
+    # Every file taken in or sent to review, none left behind.
+    assert drive.in_folder(IN) == []
+    assert {drive.items[i].parents[0] for i in ids} == {ORIG, REVIEW}
+    assert sum(len(r.identified) + len(r.needs_review) for r in runs) == 6
+    # Two follow-ups, neither collapsed, and no file named: nothing claimed.
+    assert [r.follow_up for r in runs] == ["q-2", "q-3", ""]
+    assert queue.collapsed == 0 and all(r.follow_up_problem == "" for r in runs)
+    assert [p.drive_files for p in api.runs] == [None, None]
+
+
+def test_a_follow_up_waits_out_the_queues_collapse_of_identical_requests(
+    settings, wired, drive, api: FakeApi, queue: Queue, monkeypatch
+) -> None:
+    monkeypatch.setenv(flow.MAX_FILES_VAR, "1")
+    for n in range(3):
+        drive.add(f"{n}.mp3", IN, _tagged(f"Song {chr(65 + n)}", "Someone"))
+
+    # Runs that take a second: the second follow-up would be asked for in
+    # the same window as the first, and collapsed into it.
+    runs = _drain(queue, run_secs=1.0)
+
+    assert len(runs) == 3 and drive.in_folder(IN) == []
+    assert queue.collapsed == 0
+    # The second was asked for a full window after the first, which started
+    # its run.
+    times = sorted(queue.seen.values())
+    assert times[-1] - times[-2] >= flow.FOLLOW_UP_WINDOW_SECONDS
+
+
+def test_without_the_wait_the_queue_would_swallow_the_follow_up(
+    settings, wired, drive, api: FakeApi, queue: Queue, monkeypatch
+) -> None:
+    # The check above is a real one: sent at once, the second follow-up
+    # lands in the first's window and the last file is left behind.
+    monkeypatch.setattr(
+        flow, "FOLLOW_UP_WINDOW_SECONDS", -flow.FOLLOW_UP_MARGIN_SECONDS
+    )
+    monkeypatch.setenv(flow.MAX_FILES_VAR, "1")
+    for n in range(3):
+        drive.add(f"{n}.mp3", IN, _tagged(f"Song {chr(65 + n)}", "Someone"))
+
+    runs = _drain(queue, run_secs=1.0)
+
+    assert queue.collapsed == 1 and len(runs) == 2
+    assert len(drive.in_folder(IN)) == 1
+    assert "collapsed" in runs[-1].follow_up_problem
+
+
+def test_a_collapsed_follow_up_is_reported(
+    settings, wired, drive, api: FakeApi, posted, monkeypatch
+) -> None:
+    monkeypatch.setenv(flow.MAX_FILES_VAR, "1")
+    drive.add("a.mp3", IN, _tagged())
+    drive.add("b.mp3", IN, _tagged("brand new", "x"))
+    monkeypatch.setattr(
+        api,
+        "request_deejay_run",
+        lambda p: DeejayRunAccepted(message_id="q-0", mode=p.mode, deduplicated=True),
+    )
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.follow_up == "" and "collapsed" in summary.follow_up_problem
+    assert posted.call_args.args[1] == "WARN"
+    assert "follow_up_not_queued" in posted.call_args.kwargs["text"]
+
+
+def test_a_follow_up_the_api_refuses_is_reported_and_the_run_stands(
+    settings, wired, drive, api: FakeApi, posted, monkeypatch
+) -> None:
+    monkeypatch.setenv(flow.MAX_FILES_VAR, "1")
+    drive.add("a.mp3", IN, _tagged())
+    drive.add("b.mp3", IN, _tagged("brand new", "x"))
+
+    def refused(_payload):
+        raise RuntimeError("403 missing scope deejay.runs.create")
+
+    monkeypatch.setattr(api, "request_deejay_run", refused)
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified and "deejay.runs.create" in summary.follow_up_problem
+    assert posted.call_args.args[1] == "WARN"
+
+
+def test_a_dry_run_queues_no_follow_up(
+    settings, wired, drive, api: FakeApi, monkeypatch
+) -> None:
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
+    monkeypatch.setenv(flow.MAX_FILES_VAR, "1")
+    drive.add("a.mp3", IN, _tagged())
+    drive.add("b.mp3", IN, _tagged("brand new", "x"))
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.left_past_cap == 1 and api.runs == []
+
+
+def test_a_run_that_moved_nothing_queues_no_follow_up(
+    settings, wired, drive, api: FakeApi, monkeypatch
+) -> None:
+    monkeypatch.setenv(flow.MAX_FILES_VAR, "1")
+    drive.add("a.mp3", IN, _tagged())
+    drive.add("b.mp3", IN, _tagged("brand new", "x"))
+    monkeypatch.setattr(
+        flow, "intake_one", lambda *_a: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.failed and summary.left_past_cap == 1 and api.runs == []
+
+
+def test_a_batch_within_the_cap_queues_no_follow_up(
+    settings, wired, drive, api: FakeApi
+) -> None:
+    drive.add("a.mp3", IN, _tagged())
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.left_past_cap == 0 and api.runs == []
