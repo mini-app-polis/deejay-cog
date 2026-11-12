@@ -395,6 +395,29 @@ Each library root follows a tagging rule profile
   and AIFF `COMM`/`SSND` chunks; and mutagen's stream info), the file sent
   back as its own format, and every write in the run record.
 
+### Naming FX Music files whose tags name no song
+
+Identify skips an FX Music file whose tags name no song, and no step fills
+them in (the file wins). `python -m deejay_cog.fx_untagged`, run locally
+under `doppler run --config prd`, does it from a list the owner approves:
+
+```bash
+doppler run --config prd -- uv run python -m deejay_cog.fx_untagged propose --out fx-untagged.csv
+doppler run --config prd -- uv run python -m deejay_cog.fx_untagged apply fx-untagged.csv          # what it would do
+doppler run --config prd -- uv run python -m deejay_cog.fx_untagged apply fx-untagged.csv --write  # do it
+```
+
+`propose` writes one CSV row per such file: `tag` with a title and artist
+read from its name ("Artist - Title", or "Title_Artist"; "VA" is not taken
+as an artist), `trash` for a copy of another file in the same folder ("…
+copy"), or `skip` when the name gives no title or artist. The owner edits
+the CSV. `apply --write` then writes each approved title and artist to the
+file in its own format (the one write to an FX file's own tags, and only
+with his approval), the safe way and recorded as an `fx-untagged` run that
+`music_rollback` can undo, and moves each approved `trash` file to Drive's
+trash, marking it not present. Nothing is renamed or moved, and a row with
+an empty title or artist is never written.
+
 ### Running a library job on demand
 
 `POST /v1/deejay/runs` with `{"mode": "library-backfill"}` or
