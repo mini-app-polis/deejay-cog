@@ -1135,6 +1135,18 @@ other. Each linked set is split into its edits; every edit with two or
 more files is a group, listing the song's other edits marked kept on
 purpose with why, so the page can never send them to the trash.
 
+**Every song with two or more files** ([ADR-0007, amended 2026-11-11](decisions/ADR-0007-music-tagging-redesign.md#amended-2026-11-11-owner-the-duplicates-page-decides-each-file):
+one entry may keep several files): in the main library, a song whose files are all
+different edits, one file each, is still sent as a group, so the page shows
+every file the song has. Its first edit's file is offered; the others are
+listed beside it marked kept on purpose with why (another release label,
+another length, an owner edit), and the page defaults them to their own
+version. Nothing is left out because it is a different edit. A group the
+owner resolved with every file staying (kept together) is not reopened:
+the API skips a reported group with the same key whose files are all files
+of the resolved group, so it comes back only when a file joins it. The cog
+keeps no memory of its own.
+
 **Owner edits** (ADR-0008, decided 2026-11-11): a file linked to an entry
 the catalog marks as an owner edit (`<…>` in its title) is an edit of its
 own, never a duplicate of the published song's files, even with the same
@@ -1151,7 +1163,8 @@ and one in the main library are never duplicates of each other.
   grouped within and across the two folders, as above. Neither folder is
   preferred; the owner picks the keeper on the duplicates page.
 - **FX Music:** files are grouped only within one folder; a different cut
-  (another length or edit) is kept on purpose, as above. Copies linked
+  (another length or edit) is kept on purpose, as above, and a song whose
+  files in a folder are all different cuts is not a group. Copies linked
   across FX folders are kept there on purpose (one per role or event), so
   they are never offered as a group to resolve: each set is listed in the
   run report (`fx_across_folders`, with every path) for the owner to decide

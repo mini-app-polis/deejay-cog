@@ -150,7 +150,7 @@ def test_files_with_nothing_in_common_are_not_grouped() -> None:
 # ── Kept on purpose ───────────────────────────────────────────────────────
 
 
-def test_a_no_intro_edit_is_kept_on_purpose_not_grouped() -> None:
+def test_a_no_intro_edit_is_sent_kept_on_purpose_not_left_out() -> None:
     entry = uuid.uuid4()
     files = [
         _file("full", "Blues/baby_ettajames.mp3", catalog_id=entry, secs=150.0),
@@ -159,7 +159,12 @@ def test_a_no_intro_edit_is_kept_on_purpose_not_grouped() -> None:
         ),
     ]
 
-    assert dup.find_groups(files, {}) == []
+    [group] = dup.find_groups(files, {})
+
+    assert _members(group) == {
+        "cut": None,
+        "full": "a different edit (2:30 against 2:12)",
+    }
 
 
 def test_another_edit_is_shown_kept_in_the_group_of_real_copies() -> None:
@@ -194,7 +199,7 @@ def test_clean_and_explicit_copies_are_kept_on_purpose() -> None:
     assert members["c"] == "a different release label (Clean)"
 
 
-def test_one_of_each_label_is_not_a_group() -> None:
+def test_one_of_each_label_is_one_group_with_the_others_kept_on_purpose() -> None:
     entry = uuid.uuid4()
     files = [
         _file("x", "Pop/song.mp3", catalog_id=entry, label="Explicit"),
@@ -202,7 +207,81 @@ def test_one_of_each_label_is_not_a_group() -> None:
         _file("r", "Pop/song_radio.mp3", catalog_id=entry, label="Radio Edit"),
     ]
 
-    assert dup.find_groups(files, {}) == []
+    [group] = dup.find_groups(files, {})
+
+    assert _members(group) == {
+        "c": None,
+        "r": "a different release label (Radio Edit)",
+        "x": "a different release label (Explicit)",
+    }
+    assert group.reasons == ["same_catalog_id"]
+
+
+def test_an_entry_with_a_clean_and_an_explicit_file_is_sent() -> None:
+    # Gravity [Clean] by Kill J: two files on one entry, one of each label.
+    entry = uuid.uuid4()
+    files = [
+        _file("clean", "Pop/gravity_clean.mp3", catalog_id=entry, label="Clean"),
+        _file("explicit", "New Music/gravity.mp3", catalog_id=entry, secs=203.0),
+    ]
+
+    [group] = dup.find_groups(files, {})
+
+    assert _members(group) == {
+        "explicit": None,
+        "clean": "a different release label (Clean)",
+    }
+
+
+def test_every_entry_with_two_or_more_files_is_sent() -> None:
+    entries = [uuid.uuid4() for _ in range(4)]
+    files = [
+        # Lengths more than three seconds apart.
+        _file("a1", "Pop/2step.mp3", catalog_id=entries[0], secs=150.0),
+        _file("a2", "Pop/2step_radio.mp3", catalog_id=entries[0], secs=170.0),
+        # Another release label.
+        _file("b1", "Pop/worse.mp3", catalog_id=entries[1], label="Explicit"),
+        _file("b2", "Pop/worse_clean.mp3", catalog_id=entries[1], label="Clean"),
+        # Real copies beside another edit.
+        _file("c1", "Pop/jelly.mp3", catalog_id=entries[2], md5="j"),
+        _file("c2", "Pop/jelly (1).mp3", catalog_id=entries[2], md5="j"),
+        _file("c3", "Pop/jelly_long.mp3", catalog_id=entries[2], secs=260.0),
+        # One file: not a group.
+        _file("d1", "Pop/alone.mp3", catalog_id=entries[3]),
+    ]
+
+    groups = dup.find_groups(files, {})
+
+    assert sorted(sorted(_members(g)) for g in groups) == [
+        ["a1", "a2"],
+        ["b1", "b2"],
+        ["c1", "c2", "c3"],
+    ]
+    for group in groups:
+        offered = [m for m in group.files if not m.kept_on_purpose]
+        assert offered, "every group offers a file"
+        assert all(m.why_kept for m in group.files if m.kept_on_purpose)
+
+
+def test_a_song_of_different_edits_gives_the_same_group_every_run() -> None:
+    entry = uuid.uuid4()
+    files = [
+        _file("x", "Pop/song.mp3", catalog_id=entry, label="Explicit"),
+        _file("c", "Pop/song_clean.mp3", catalog_id=entry, label="Clean"),
+    ]
+
+    [first] = dup.find_groups(files, {})
+    [second] = dup.find_groups(list(reversed(files)), {})
+    # A file joining the song keeps the key and adds a file, so the API
+    # reopens a group the owner kept together only when its files change.
+    [grown] = dup.find_groups(
+        [*files, _file("r", "Pop/song_radio.mp3", catalog_id=entry, label="Radio")],
+        {},
+    )
+
+    assert first == second
+    assert grown.key == first.key
+    assert set(_members(grown)) == {"x", "c", "r"}
 
 
 def test_a_file_of_unknown_length_joins_the_largest_edit() -> None:
@@ -240,7 +319,12 @@ def test_an_owner_edit_is_never_a_duplicate_of_the_published_song_even_by_md5() 
         _file("cut", "Blues/baby (1).mp3", catalog_id=_CUT, md5="m"),
     ]
 
-    assert dup.find_groups(files, _SHOWN) == []
+    [group] = dup.find_groups(files, _SHOWN)
+
+    assert _members(group) == {
+        "song": None,
+        "cut": "an owner edit (its own entry, not the published song)",
+    }
 
 
 def test_an_owner_edit_beside_the_published_songs_copies_is_kept_as_an_owner_edit() -> (
@@ -288,7 +372,12 @@ def test_two_owner_edits_of_one_song_are_not_copies_of_each_other() -> None:
         _file("censored", "Blues/baby_censored.mp3", catalog_id=_CUT2, md5="c"),
     ]
 
-    assert dup.find_groups(files, _SHOWN) == []
+    [group] = dup.find_groups(files, _SHOWN)
+
+    offered = [m.drive_file_id for m in group.files if not m.kept_on_purpose]
+    assert len(offered) == 1
+    [kept] = [m for m in group.files if m.kept_on_purpose]
+    assert "owner edit" in (kept.why_kept or "")
 
 
 def test_a_file_kept_as_an_owner_edit_is_never_sent_for_the_trash() -> None:
@@ -412,6 +501,25 @@ def test_write_sends_the_groups_to_the_api() -> None:
     [group] = report.groups
     assert set(_members(group)) == {"a", "b"}
     assert summary.result is not None and summary.result.open_groups == 1
+
+
+def test_write_sends_an_entry_of_different_edits_marked_kept_on_purpose() -> None:
+    entry = uuid.uuid4()
+    catalog = FakeCatalog(
+        rows=[
+            _file("x", "Pop/song.mp3", catalog_id=entry, label="Explicit"),
+            _file("c", "Pop/song_clean.mp3", catalog_id=entry, label="Clean"),
+        ]
+    )
+
+    dup.run_duplicates(run_id="d-1", mode=FlowMode.WRITE, api=catalog)
+
+    [report] = catalog.reports
+    [group] = report.groups
+    assert [(m.drive_file_id, m.kept_on_purpose) for m in group.files] == [
+        ("c", False),
+        ("x", True),
+    ]
 
 
 def test_a_file_already_marked_for_the_trash_is_left_out() -> None:
