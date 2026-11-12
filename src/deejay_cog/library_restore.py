@@ -38,6 +38,7 @@ from deejay_cog.music_safety import (
     STATE_FOLDER_VAR,
     FlowMode,
     RunRecord,
+    drive_call,
     file_meta,
     local_run_id,
     revision_at,
@@ -66,9 +67,8 @@ def changed_since(drive: Any, state: str, root: str, when: datetime) -> list[dic
     for folder_id, folder_path in folders.items():
         token: str | None = None
         while True:
-            page = (
-                drive.service.files()
-                .list(
+            page = drive_call(
+                drive.service.files().list(
                     q=(
                         f"'{folder_id}' in parents and trashed = false and "
                         f"modifiedTime > '{stamp}' and "
@@ -79,8 +79,8 @@ def changed_since(drive: Any, state: str, root: str, when: datetime) -> list[dic
                     pageToken=token,
                     supportsAllDrives=True,
                     includeItemsFromAllDrives=True,
-                )
-                .execute()
+                ),
+                context=f"listing folder {folder_id}",
             )
             for f in page.get("files") or []:
                 name = str(f["name"])

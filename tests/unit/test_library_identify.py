@@ -14,8 +14,10 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
+import httplib2
 import pytest
 from audio_fixtures import NAMES, OTHER_FORMATS, tagged
+from googleapiclient.errors import HttpError
 from mini_app_polis import pipeline_status
 from mini_app_polis.api import OtherLibraryError
 from mini_app_polis.api.contract import (
@@ -30,6 +32,7 @@ from mini_app_polis.api.contract import (
     LibraryFile,
     LibraryFileRegister,
 )
+from mini_app_polis.google import _retry as retry_mod
 from music_fakes import DriveItem, FakeDrive, mp3
 from mutagen.id3 import COMM, ID3, TBPM, TCON, TDRC, TIT2, TPE1
 
@@ -1887,3 +1890,87 @@ def test_a_dry_run_names_the_owner_edit_it_would_send_for_a_hint(
 
     assert jobs.sent == []
     assert summary.owner_edit_hints == ["New/baby.mp3"]
+
+
+# ---------------------------------------------------------------------------
+# Drive's rate limit
+# ---------------------------------------------------------------------------
+
+
+def _rate_limited() -> HttpError:
+    body = {
+        "error": {
+            "code": 403,
+            "message": "User Rate Limit Exceeded",
+            "errors": [{"domain": "usageLimits", "reason": "userRateLimitExceeded"}],
+        }
+    }
+    return HttpError(
+        httplib2.Response({"status": 403}),
+        json.dumps(body).encode(),
+        uri="https://www.googleapis.com/drive/v3/files/f1",
+    )
+
+
+class _Limited:
+    """A request Drive refuses ``times`` times for its rate limit before
+    answering as ``then`` does."""
+
+    def __init__(self, then: Any, times: int) -> None:
+        self.then = then
+        self.times = times
+
+    def execute(self) -> Any:
+        if self.times:
+            self.times -= 1
+            raise _rate_limited()
+        return self.then.execute()
+
+
+def _limit_meta(drive: FakeDrive, file_id: str, times: int) -> None:
+    get = drive._svc_get
+    media = drive._svc_media
+
+    def limited_get(fileId: str, **kw: Any) -> Any:  # noqa: N803
+        request = get(fileId=fileId, **kw)
+        return _Limited(request, times) if fileId == file_id else request
+
+    drive.service.files = lambda: SimpleNamespace(get=limited_get, get_media=media)
+
+
+@pytest.fixture
+def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    waits: list[float] = []
+    monkeypatch.setattr(retry_mod.time, "sleep", waits.append)
+    return waits
+
+
+def test_a_rate_limit_that_passes_is_waited_out(
+    settings, wired, drive, api, jobs, no_sleep
+) -> None:
+    drive_id = _unidentified(drive, api, "temple.mp3", _song())
+    _limit_meta(drive, drive_id, times=2)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert len(no_sleep) == 2
+    assert summary.rate_limited == [] and summary.failed == []
+    assert [job["file_id"] for job in jobs.sent] == [drive_id]
+
+
+def test_a_rate_limit_that_outlasts_the_backoff_leaves_the_chunk_as_warn(
+    settings, wired, drive, api, jobs, posted, no_sleep
+) -> None:
+    first = _unidentified(drive, api, "temple.mp3", _song())
+    _unidentified(drive, api, "other.mp3", _no_tags())
+    _limit_meta(drive, first, times=100)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert summary.rate_limited == ["New/temple.mp3", "New/other.mp3"]
+    assert summary.failed == [] and jobs.sent == []
+    # Neither is marked tried: the next run takes them again.
+    assert (_state(drive, ident.TRIED_NAME) or {}).get("files", {}) == {}
+    assert posted.call_args.args[1] == "WARN"
+    assert "drive_rate_limited" in _text(posted)
+    assert "unhandled_exception" not in _text(posted)

@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import io
 import json
+from types import SimpleNamespace
 
+import httplib2
 import pytest
+from googleapiclient.errors import HttpError
 from mini_app_polis.api import ApiUnavailable, KaianoApiError
 from mini_app_polis.api.contract import FeatureFlagItem
+from mini_app_polis.google import _retry as retry_mod
 from music_fakes import AUDIO, FakeDrive, mp3
 from mutagen.id3 import ID3, TCON, TIT2, TPE1
 
@@ -548,3 +552,111 @@ def test_an_empty_file_falls_back_to_the_whole_file(drive: FakeDrive) -> None:
 )
 def test_the_id3v2_length_is_read_from_its_header(head, length) -> None:
     assert safety.id3v2_length(head) == length
+
+
+# ---------------------------------------------------------------------------
+# Drive's rate limit
+# ---------------------------------------------------------------------------
+
+
+def _http_error(status: int, reason: str = "") -> HttpError:
+    # Drive's own wording: a rate limit's message names it.
+    messages = {
+        "userRateLimitExceeded": "User Rate Limit Exceeded",
+        "rateLimitExceeded": "Rate Limit Exceeded",
+        "storageQuotaExceeded": "The user's Drive storage quota has been exceeded.",
+    }
+    body = {"error": {"code": status, "message": messages.get(reason, "refused")}}
+    if reason:
+        body["error"]["errors"] = [{"domain": "usageLimits", "reason": reason}]
+    return HttpError(
+        httplib2.Response({"status": status}),
+        json.dumps(body).encode(),
+        uri="https://www.googleapis.com/drive/v3/files/f1/revisions/r1",
+    )
+
+
+class _Flaky:
+    """A request that raises ``errors`` in turn, then answers ``result``
+    (or what the request ``then`` answers)."""
+
+    def __init__(self, errors, result="ok", then=None):
+        self.errors = list(errors)
+        self.result = result
+        self.then = then
+        self.calls = 0
+
+    def execute(self):
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return self.then.execute() if self.then is not None else self.result
+
+
+@pytest.fixture
+def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    waits: list[float] = []
+    monkeypatch.setattr(retry_mod.time, "sleep", waits.append)
+    return waits
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _http_error(403, "userRateLimitExceeded"),
+        _http_error(403, "rateLimitExceeded"),
+        _http_error(429),
+    ],
+)
+def test_a_rate_limited_drive_call_is_tried_again_with_backoff(error, no_sleep) -> None:
+    request = _Flaky([error, error])
+
+    assert safety.drive_call(request, context="test") == "ok"
+
+    assert request.calls == 3
+    assert len(no_sleep) == 2 and no_sleep[1] > no_sleep[0]
+
+
+def test_a_drive_call_still_rate_limited_gives_up_after_its_attempts(
+    no_sleep,
+) -> None:
+    error = _http_error(403, "userRateLimitExceeded")
+    request = _Flaky([error] * 20)
+
+    with pytest.raises(HttpError) as raised:
+        safety.drive_call(request, context="test")
+
+    assert raised.value is error and safety.is_rate_limited(raised.value)
+    assert request.calls == safety.DRIVE_RETRY.max_retries
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _http_error(403, "insufficientFilePermissions"),
+        _http_error(403, "storageQuotaExceeded"),
+        _http_error(404, "notFound"),
+    ],
+)
+def test_other_refusals_are_not_tried_again(error, no_sleep) -> None:
+    request = _Flaky([error])
+
+    with pytest.raises(HttpError) as raised:
+        safety.drive_call(request, context="test")
+
+    assert raised.value is error and not safety.is_rate_limited(error)
+    assert request.calls == 1 and no_sleep == []
+
+
+def test_keeping_a_revision_waits_out_drives_rate_limit(no_sleep) -> None:
+    drive = FakeDrive()
+    file_id = drive.add("song.mp3", "lib", mp3())
+    update = drive._svc_rev_update
+
+    def limited(**kw):
+        return _Flaky([_http_error(403, "userRateLimitExceeded")], then=update(**kw))
+
+    drive.service.revisions = lambda: SimpleNamespace(update=limited)
+
+    assert safety.keep_head_revision(drive, file_id, "r1") == "r1"
+    assert drive.items[file_id].kept == {"r1"} and len(no_sleep) == 1

@@ -45,6 +45,7 @@ from googleapiclient.errors import HttpError
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
+from mini_app_polis.google._retry import RetryConfig, execute_with_retry
 from mutagen.id3 import ID3, ID3NoHeaderError
 
 from deejay_cog import audio_formats
@@ -320,17 +321,89 @@ def md5(data: bytes) -> str:
 # Drive metadata and revisions (not on the shared facade)
 # ---------------------------------------------------------------------------
 
+#: The 403 reasons Drive gives when it wants requests slowed down: the only
+#: 403s worth trying again (a 429 is always one).
+RATE_LIMIT_REASONS = frozenset({"userRateLimitExceeded", "rateLimitExceeded"})
+
+#: Backoff for the Drive calls made here: 1 s doubling to at most 32 s,
+#: six attempts in all (about a minute of waiting before giving up).
+DRIVE_RETRY = RetryConfig(max_retries=6, base_delay_s=1.0, max_delay_s=32.0)
+
+
+def _status(error: HttpError) -> int | None:
+    return getattr(getattr(error, "resp", None), "status", None)
+
+
+def _reasons(error: HttpError) -> set[str]:
+    """The ``reason`` of each error Drive's response body lists."""
+    found: set[str] = set()
+    for detail in getattr(error, "error_details", None) or []:
+        if isinstance(detail, dict) and detail.get("reason"):
+            found.add(str(detail["reason"]))
+    try:
+        body = json.loads(error.content.decode("utf-8"))
+    except (AttributeError, ValueError):
+        return found
+    errors = (body.get("error") or {}).get("errors") if isinstance(body, dict) else []
+    for item in errors or []:
+        if isinstance(item, dict) and item.get("reason"):
+            found.add(str(item["reason"]))
+    return found
+
+
+def is_rate_limited(error: BaseException) -> bool:
+    """Whether ``error`` is Drive asking for requests to slow down: a 429,
+    or a 403 whose reason is ``userRateLimitExceeded`` or
+    ``rateLimitExceeded``. Any other 403 is a refusal, not a rate limit."""
+    if not isinstance(error, HttpError):
+        return False
+    status = _status(error)
+    if status == 429:
+        return True
+    return status == 403 and bool(_reasons(error) & RATE_LIMIT_REASONS)
+
+
+@dataclass(frozen=True)
+class _Refused:
+    error: HttpError
+
+
+def drive_call(request: Any, *, context: str) -> Any:
+    """``request.execute()``, with the shared Google retry and backoff
+    (:data:`DRIVE_RETRY`): a rate limit (:func:`is_rate_limited`), a 5xx or
+    a dropped connection is tried again; any other 403 is raised at once.
+    An error the retries cannot get past is raised as it came, for the
+    caller to handle (:func:`is_rate_limited` tells a rate limit apart).
+    The shared helper knows a rate-limit 403 by Drive's message, which
+    names the rate limit."""
+
+    def attempt() -> Any:
+        try:
+            return request.execute()
+        except HttpError as exc:
+            if _status(exc) == 403 and not is_rate_limited(exc):
+                # Returned, not raised: the shared helper would try a 403
+                # that mentions a quota again.
+                return _Refused(exc)
+            raise
+
+    result = execute_with_retry(
+        attempt, context=context, retry=DRIVE_RETRY, expected_error=lambda _e: True
+    )
+    if isinstance(result, _Refused):
+        raise result.error
+    return result
+
 
 def file_meta(drive: Any, file_id: str) -> dict[str, Any]:
     """The file's parents, trashed flag, md5 and head revision."""
-    result: dict[str, Any] = (
-        drive.service.files()
-        .get(
+    result: dict[str, Any] = drive_call(
+        drive.service.files().get(
             fileId=file_id,
             fields="id,name,parents,trashed,md5Checksum,headRevisionId",
             supportsAllDrives=True,
-        )
-        .execute()
+        ),
+        context=f"reading file {file_id}",
     )
     return result
 
@@ -376,7 +449,7 @@ def _ranged(drive: Any, file_id: str, span: str) -> bytes | None:
     request = drive.service.files().get_media(fileId=file_id, supportsAllDrives=True)
     request.headers["Range"] = f"bytes={span}"
     try:
-        data = request.execute()
+        data = drive_call(request, context=f"reading part of file {file_id}")
     except HttpError:
         return None
     return bytes(data) if data else None
@@ -419,18 +492,20 @@ def keep_head_revision(drive: Any, file_id: str, revision_id: str | None = None)
     the head revision when the caller already read it with the file."""
     if not revision_id:
         revision_id = str(file_meta(drive, file_id)["headRevisionId"])
-    drive.service.revisions().update(
-        fileId=file_id, revisionId=revision_id, body={"keepForever": True}
-    ).execute()
+    drive_call(
+        drive.service.revisions().update(
+            fileId=file_id, revisionId=revision_id, body={"keepForever": True}
+        ),
+        context=f"keeping revision {revision_id} of file {file_id}",
+    )
     return revision_id
 
 
 def revision_bytes(drive: Any, file_id: str, revision_id: str) -> bytes:
     """The contents of one kept revision."""
-    data = (
-        drive.service.revisions()
-        .get_media(fileId=file_id, revisionId=revision_id)
-        .execute()
+    data = drive_call(
+        drive.service.revisions().get_media(fileId=file_id, revisionId=revision_id),
+        context=f"reading revision {revision_id} of file {file_id}",
     )
     return bytes(data)
 
@@ -441,15 +516,14 @@ def revision_at(drive: Any, file_id: str, when: datetime) -> str | None:
     found: tuple[datetime, str] | None = None
     token: str | None = None
     while True:
-        page: dict[str, Any] = (
-            drive.service.revisions()
-            .list(
+        page: dict[str, Any] = drive_call(
+            drive.service.revisions().list(
                 fileId=file_id,
                 fields="nextPageToken,revisions(id,modifiedTime)",
                 pageSize=1000,
                 pageToken=token,
-            )
-            .execute()
+            ),
+            context=f"listing revisions of file {file_id}",
         )
         for rev in page.get("revisions") or []:
             stamp = rev.get("modifiedTime")
