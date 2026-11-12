@@ -622,3 +622,28 @@ def test_an_owner_edit_entry_is_displayed_with_its_brackets_and_the_files_label(
     display = _shown(f"{_BABY} <Intro Cut>", True)
     fields = music_tags.display_fields(display, label="Clean")
     assert fields["title"] == f"{_BABY} <Intro Cut> (Clean)"
+
+
+def _display_of(title: str) -> CatalogDisplay:
+    return CatalogDisplay(
+        id=uuid.uuid4(),
+        title=title,
+        artist="Desiigner",
+        changed_at=datetime(2026, 11, 11, tzinfo=UTC),
+    )
+
+
+@pytest.mark.parametrize(
+    ("title", "label", "expected"),
+    [
+        ("Panda", "Clean", "Panda (Clean)"),
+        ("Panda", None, "Panda"),
+        # An fx entry made from a file's own title keeps its label.
+        ("Panda [Clean]", "Clean", "Panda [Clean]"),
+        ("Dangerous [Clean] [feat. Akon]", "Clean", "Dangerous [Clean] [feat. Akon]"),
+        # Another label in the title is not this file's.
+        ("Panda [Explicit]", "Clean", "Panda [Explicit] (Clean)"),
+    ],
+)
+def test_a_files_label_is_added_to_the_title_once(title, label, expected) -> None:
+    assert music_tags.display_title(_display_of(title), label) == expected
