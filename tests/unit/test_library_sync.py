@@ -36,7 +36,7 @@ from deejay_cog import library_sync as sync
 from deejay_cog.music_safety import FlowMode
 from flag_fakes import FLAGS
 
-ROOT, STATE = "root", "state"
+ROOT, STATE, FX = "root", "state", "fx"
 _NOW = dt.datetime(2026, 11, 7, tzinfo=dt.UTC)
 
 
@@ -102,9 +102,13 @@ class FakeCatalog:
     edit_answers: dict[str, list[LibraryFieldEdit]] = field(default_factory=dict)
 
     def list_library_files_needing_sync(self, **kwargs: Any) -> list[LibraryFile]:
-        assert kwargs["library_root_id"] == ROOT
         done = {i for m in self.marked for i in m.drive_file_ids}
-        waiting = [r for r in self.rows if r.drive_file_id not in done]
+        waiting = [
+            r
+            for r in self.rows
+            if r.drive_file_id not in done
+            and r.library_root_id == kwargs["library_root_id"]
+        ]
         return waiting[: kwargs["limit"]]
 
     def read_catalog_display(self, payload: CatalogDisplayRequest):
@@ -116,8 +120,9 @@ class FakeCatalog:
 
     def list_library_files(self, **kwargs: Any) -> list[LibraryFile]:
         assert kwargs["present"] is True
+        rows = [r for r in self.rows if r.library_root_id == kwargs["library_root_id"]]
         start = kwargs["offset"]
-        return self.rows[start : start + kwargs["limit"]]
+        return rows[start : start + kwargs["limit"]]
 
     def report_library_file_edited(self, payload: LibraryFileEdited):
         self.edited.append(payload)
@@ -176,13 +181,14 @@ def _linked(
     entry: uuid.UUID,
     label: str | None = None,
     synced: LibraryFileTags | None = SYNCED,
+    root: str = ROOT,
 ) -> str:
-    drive_id = drive.add(name, ROOT, data)
+    drive_id = drive.add(name, root, data)
     catalog.rows.append(
         LibraryFile(
             id=uuid.uuid4(),
             drive_file_id=drive_id,
-            library_root_id=ROOT,
+            library_root_id=root,
             path=f"RnB/{name}",
             identification_status="identified",
             catalog_id=entry,
@@ -198,7 +204,9 @@ def _linked(
     return drive_id
 
 
-def _listed(drive: FakeDrive, changed: dict[str, str]) -> None:
+def _listed(
+    drive: FakeDrive, changed: dict[str, str], name: str = scan.LISTING_NAME
+) -> None:
     """The scan's listing, with when Drive last saw each file change."""
     files = [
         {
@@ -211,7 +219,7 @@ def _listed(drive: FakeDrive, changed: dict[str, str]) -> None:
         for drive_id, when in changed.items()
     ]
     drive.add(
-        scan.LISTING_NAME,
+        name,
         STATE,
         json.dumps({"files": files}).encode(),
         mime_type="application/json",
@@ -1208,3 +1216,107 @@ def test_an_owner_edit_on_its_own_entry_has_its_edits_sent_up_as_before(
 
     [edited] = catalog.edited
     assert edited.tags.title == title and edited.tags.genre == "Blues"
+
+
+# ---------------------------------------------------------------------------
+# More than one library root (ADR-0009, ADR-0010)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def two_roots(settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(backfill.FX_ROOT_FOLDER_VAR, FX)
+
+
+def test_the_catalog_is_never_written_over_an_fx_file(
+    two_roots, wired, drive, catalog, posted
+) -> None:
+    entry, fx_entry = uuid.uuid4(), uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    catalog.displays[fx_entry] = _display(fx_entry)
+    before = {"title": "Honesty (feat. Kehlani)", "artist": "Pink Sweat$"}
+    main = _linked(
+        drive,
+        catalog,
+        "honesty.mp3",
+        _song(entry, "Honesty (feat. Kehlani)", "Pink Sweat$"),
+        entry,
+        synced=_synced(**before),
+    )
+    fx_data = _song(fx_entry, "Honesty (feat. Kehlani)", "Pink Sweat$")
+    fx = _linked(
+        drive,
+        catalog,
+        "bow.mp3",
+        fx_data,
+        fx_entry,
+        synced=_synced(**before),
+        root=FX,
+    )
+
+    summary = sync.library_sync(run_id="y-1")
+
+    (_, main_part), (_, fx_part) = summary.roots
+    assert main_part.written == ["RnB/honesty.mp3 (artist, title)"]
+    assert _frames(drive.items[main].data)["TPE1"] == "Pink Sweat$ feat. Kehlani"
+    # The FX file wins: not written, and recorded with what it already held.
+    assert drive.items[fx].data == fx_data
+    assert fx_part.written == [] and fx_part.fx_kept == ["RnB/bow.mp3 (artist, title)"]
+    marked = {i: m.values[i] for m in catalog.marked for i in m.drive_file_ids}
+    assert marked[fx] == _synced(**before)
+    text = _text(posted)
+    assert f"{backfill.FX_ROOT_FOLDER_VAR}: RnB/bow.mp3 (artist, title)" in text
+    assert f"{backfill.ROOT_FOLDER_VAR}: RnB/honesty.mp3" in text
+
+
+def test_an_edit_made_in_an_fx_file_goes_up_from_its_own_listing(
+    two_roots, wired, drive, catalog
+) -> None:
+    fx_entry = uuid.uuid4()
+    catalog.displays[fx_entry] = _display(fx_entry, title=_BABY, artist="Etta James")
+    # A cut the owner retitled: an FX file's title is its own, so it goes up.
+    retitled = f"{_BABY} <Intro Cut>"
+    fx = _linked(
+        drive,
+        catalog,
+        "baby.mp3",
+        _song(fx_entry, retitled, "Etta James"),
+        fx_entry,
+        synced=_synced(title=_BABY, artist="Etta James"),
+        root=FX,
+    )
+    _listed(drive, {fx: "2026-11-08T09:30:00.000Z"}, scan.listing_name(_fx_root()))
+
+    summary = sync.library_sync(run_id="y-1")
+
+    [edited] = catalog.edited
+    assert edited.drive_file_id == fx and edited.tags.title == retitled
+    assert summary.roots[1][1].owner_edits == []
+
+
+def test_a_root_that_fails_does_not_stop_the_other(
+    two_roots, wired, drive, catalog, posted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fx_entry = uuid.uuid4()
+    catalog.displays[fx_entry] = _display(fx_entry)
+    fx = _linked(drive, catalog, "bow.mp3", b"", fx_entry, synced=None, root=FX)
+    real = catalog.list_library_files_needing_sync
+
+    def needing(**kwargs: Any) -> list[LibraryFile]:
+        if kwargs["library_root_id"] == ROOT:
+            raise RuntimeError("API down")
+        return real(**kwargs)
+
+    monkeypatch.setattr(catalog, "list_library_files_needing_sync", needing)
+
+    with pytest.raises(RuntimeError, match="API down"):
+        sync.library_sync(run_id="y-1")
+
+    assert [i for m in catalog.marked for i in m.drive_file_ids] == [fx]
+    assert f"{backfill.ROOT_FOLDER_VAR}: the run over this root failed" in _text(posted)
+
+
+def _fx_root() -> backfill.LibraryRoot:
+    settings, _ = backfill.BackfillSettings.from_env()
+    assert settings is not None
+    return settings.roots[1]

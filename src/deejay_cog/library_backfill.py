@@ -37,6 +37,20 @@ root), move ``library-backfill-manifest.json`` to the Drive trash: the next
 run lists the library again and, the generation having changed, starts from
 the first file.
 
+**Roots** (ADR-0009). Each library root has a manifest and cursor of its own
+and is run on its own, the main library first: the main library's are the
+names above (its own folder and, when set, New Music, under the main root's
+id), and FX Music's (``FX_LIBRARY_ROOT_FOLDER_ID``) are
+``library-backfill-fx-manifest.json`` and ``library-backfill-fx-cursor.json``.
+An FX Music file links only to an fx entry, found by its own tags
+(``POST /v1/catalog/library/entries`` with library ``fx`` and ``preview``,
+so the backfill never makes one: identify does), and, as for every file,
+only the link is written, never a catalog value (ADR-0010: the file wins).
+A root whose run fails, or whose state is refused, does not stop or change
+the other; the failure is raised once the other has run. An audio mismatch
+stops the run, whatever the root. With more than one root, every line of
+the report names its root.
+
 **Per file:** not an MP3 (by its listed type or name) → skipped, named. No
 longer in the folder the manifest has it in, or in the trash → skipped,
 named. No usable title or artist → skipped and named as needing
@@ -75,6 +89,7 @@ import json
 import os
 import tempfile
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from time import monotonic
@@ -83,10 +98,17 @@ from typing import Any, Protocol
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.api.contract import (
     CatalogLookupRequest,
+    CatalogMatch,
+    LibraryEntryCreate,
+    LibraryEntryCreated,
     LibraryFile,
     LibraryFileRegister,
 )
-from mini_app_polis.deadline import remaining_seconds, without_run_deadline
+from mini_app_polis.deadline import (
+    RunDeadlineReached,
+    remaining_seconds,
+    without_run_deadline,
+)
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.lambda_worker import RunOutOfTime
@@ -163,6 +185,17 @@ DEFAULT_RESERVE_SECONDS = 120
 
 MANIFEST_NAME = f"{FLOW_NAME}-manifest.json"
 CURSOR_NAME = f"{FLOW_NAME}-cursor.json"
+
+
+def root_state_name(flow: str, name: str, root: LibraryRoot) -> str:
+    """A step's state file ``name`` (it starts with ``flow``) for ``root``:
+    the name itself for the main library, and the root's key after the
+    flow's name for any other ("library-backfill-manifest.json" ->
+    "library-backfill-fx-manifest.json")."""
+    if root.key == "main":
+        return name
+    return f"{flow}-{root.key}{name[len(flow) :]}"
+
 
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 SHORTCUT_MIME_TYPE = "application/vnd.google-apps.shortcut"
@@ -335,6 +368,104 @@ def chunk_size_setting() -> int | str:
 
 
 # ---------------------------------------------------------------------------
+# More than one root
+# ---------------------------------------------------------------------------
+
+
+def each_root(
+    roots: tuple[LibraryRoot, ...],
+    run: Callable[[LibraryRoot], bool],
+    on_error: Callable[[LibraryRoot, Exception], None],
+) -> None:
+    """Run ``run`` for every root, in order, until one returns False (an
+    audio mismatch: the run stops). With more than one root, a root that
+    raises is handed to ``on_error`` and the next root still runs; the
+    first such failure is raised once every root has run, so the run still
+    fails. The run's deadline is raised at once. With one root, nothing is
+    caught."""
+    first: Exception | None = None
+    for root in roots:
+        try:
+            if not run(root):
+                break
+        except (RunOutOfTime, RunDeadlineReached):
+            raise
+        except Exception as exc:
+            if len(roots) == 1:
+                raise
+            log.exception("%s failed; the other library roots carry on", root.label)
+            on_error(root, exc)
+            first = first or exc
+    if first is not None:
+        raise first
+
+
+class NamedReport:
+    """A run report for one of several library roots: every line it is
+    given names the root (``named``, "<the root's settings>: "), and its
+    counts are added up across the roots in ``totals``, to be set on the
+    report once every root is recorded (:func:`set_totals`)."""
+
+    def __init__(self, report: Any, named: str, totals: dict[str, Any]) -> None:
+        self.report = report
+        self.named = named
+        self.totals = totals
+        self.duration_sec: float = 0.0
+
+    def _item(self, item: str | None) -> str | None:
+        return item if item is None else f"{self.named}{item}"
+
+    def count(self, key: str, value: Any) -> None:
+        """Add ``value`` to the run's count of ``key``."""
+        self.totals[key] = self.totals.get(key, 0) + value
+
+    def ok(self, n: int = 1) -> None:
+        """Items handled cleanly, for the whole run."""
+        self.report.ok(n)
+
+    def notice(self, reason: str, item: str | None = None) -> None:
+        """A notice naming the root."""
+        self.report.notice(reason, self._item(item))
+
+    def issue(self, reason: str, item: str | None = None, **kwargs: Any) -> None:
+        """An issue naming the root."""
+        self.report.issue(reason, self._item(item), **kwargs)
+
+    def created(self, kind: str, item: str | None = None, **kwargs: Any) -> None:
+        """Something created, naming the root."""
+        self.report.created(kind, self._item(item), **kwargs)
+
+    def updated(self, kind: str, item: str | None = None, **kwargs: Any) -> None:
+        """Something updated, naming the root."""
+        self.report.updated(kind, self._item(item), **kwargs)
+
+    def removed(self, kind: str, item: str | None = None, **kwargs: Any) -> None:
+        """Something removed, naming the root."""
+        self.report.removed(kind, self._item(item), **kwargs)
+
+
+def set_totals(report: Any, totals: dict[str, Any]) -> None:
+    """Set the counts added up across the roots on the run's report."""
+    for key, value in totals.items():
+        report.count(key, round(value, 1) if isinstance(value, float) else value)
+
+
+def record_roots(
+    report: Any,
+    roots: list[tuple[LibraryRoot, Any]],
+    record: Callable[[Any, Any, float], None],
+    duration_sec: float,
+) -> None:
+    """Record each root's summary with ``record`` (a step's own report
+    writer), every line naming its root and the counts added up."""
+    report.duration_sec = duration_sec
+    totals: dict[str, Any] = {}
+    for root, part in roots:
+        record(NamedReport(report, f"{root.label}: ", totals), part, duration_sec)
+    set_totals(report, totals)
+
+
+# ---------------------------------------------------------------------------
 # State files in the state folder
 # ---------------------------------------------------------------------------
 
@@ -344,6 +475,14 @@ class LibraryRegistry(Protocol):
 
     def register_library_file(self, payload: LibraryFileRegister) -> LibraryFile:
         """Register a library file, or bring its row up to date."""
+        ...
+
+
+class LibraryEntryCreator(Protocol):
+    """The part of the API client that finds (or makes) a library entry."""
+
+    def create_library_entry(self, payload: LibraryEntryCreate) -> LibraryEntryCreated:
+        """The song's entry in the library sent; with preview, nothing is made."""
         ...
 
 
@@ -421,6 +560,18 @@ def new_manifest(root: str) -> dict[str, Any]:
         "shortcuts_skipped": 0,
         "files": [],
     }
+
+
+def new_root_manifest(root: LibraryRoot) -> dict[str, Any]:
+    """A manifest of ``root`` about to be listed: each of its folders
+    queued at the path its files are registered under."""
+    manifest = new_manifest(root.root_id)
+    for folder in root.folders[1:]:
+        manifest["pending_folders"].append(
+            {"id": folder.folder_id, "path": folder.path}
+        )
+        manifest["folders"][folder.folder_id] = folder.path
+    return manifest
 
 
 def _sort_key(item: Any) -> tuple[str, str]:
@@ -542,6 +693,13 @@ class BackfillSummary:
     registry_failed: list[str] = field(default_factory=list)
     #: File ids whose registration failed this run, to try again.
     registry_retry: set[str] = field(default_factory=set)
+    #: The manifest this summary is of (each root has its own).
+    manifest_name: str = MANIFEST_NAME
+    #: With more than one root, each root's own summary, in order; this
+    #: summary then holds only the run's setting problems.
+    roots: list[tuple[LibraryRoot, BackfillSummary]] = field(default_factory=list)
+    #: A root's run that failed (with more than one root), and why.
+    error: str = ""
 
     def add(self, outcome: str, item: str) -> None:
         """Count ``item`` under ``outcome``."""
@@ -579,6 +737,7 @@ class Backfill:
         record: RunRecord,
         summary: BackfillSummary,
         manifest: dict[str, Any],
+        root: LibraryRoot | None = None,
     ) -> None:
         self.drive = drive
         self.api = api
@@ -588,6 +747,8 @@ class Backfill:
         self.record = record
         self.summary = summary
         self.manifest = manifest
+        #: The library root this run is over.
+        self.root = root or settings.roots[0]
 
     @property
     def mode(self) -> FlowMode:
@@ -647,7 +808,7 @@ class Backfill:
             link = None
         payload = LibraryFileRegister(
             drive_file_id=file_id,
-            library_root_id=self.settings.root,
+            library_root_id=self.root.root_id,
             path=self.label(item, name),
             size_bytes=len(data),
             md5=str(meta.get("md5Checksum") or "") or None,
@@ -716,7 +877,13 @@ class Backfill:
             )
             self.register(item, name, meta, data, None)
             return "needs_fingerprinting"
-        match = self.api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+        if self.root.key == "fx":
+            match = self._fx_entry(row)
+        else:
+            match = self.api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
+            # A main-library file never links to an fx entry (ADR-0009).
+            if match is not None and match.library != "main":
+                match = None
         if match is not None and not owner_edit_fits(row["title"], match):
             # An owner edit is never linked to the published song's entry:
             # identify takes it in as an owner-edit entry of its own.
@@ -785,6 +952,31 @@ class Backfill:
             data = tagged
         self.register(item, name, meta, data, str(match.id))
         return outcome
+
+    def _fx_entry(self, row: dict[str, str]) -> CatalogMatch | None:
+        """The fx entry the catalog has for an FX Music file's own title,
+        artist and year, or None. Asked as a preview, so nothing is made:
+        a song the catalog lacks is left to identify, which makes its fx
+        entry (ADR-0009, decision 3). An answer from another library is
+        never linked."""
+        year = str(row.get("year") or "").strip()[:4]
+        made = self.creator.create_library_entry(
+            LibraryEntryCreate(
+                title=row["title"].strip(),
+                artist=row["artist"].strip(),
+                release_year=int(year) if len(year) == 4 and year.isdigit() else None,
+                preview=True,
+                library="fx",
+            )
+        )
+        if made.previewed or made.entry.library != "fx":
+            return None
+        return made.entry
+
+    @property
+    def creator(self) -> LibraryEntryCreator:
+        """The same API client: it finds library entries too."""
+        return self.api  # type: ignore[return-value]
 
     def _check_unfinished_write(
         self, entries_before: int, file_id: str, name: str, original: bytes
@@ -936,24 +1128,60 @@ def run_backfill(
                 return summary
             if drive is None:
                 drive = GoogleAPI.from_env().drive
-            _run(drive, api, settings, run_id, summary)
-            if summary.aborted:
-                _report_abort(run_id, summary)
+            if len(settings.roots) == 1:
+                _run(drive, api, settings, settings.roots[0], run_id, summary)
+                if summary.aborted:
+                    _report_abort(run_id, summary)
+            else:
+                _run_roots(drive, api, settings, run_id, summary)
         finally:
-            _record(report, summary, monotonic() - started_at)
+            if summary.roots:
+                record_roots(report, summary.roots, _record, monotonic() - started_at)
+            else:
+                _record(report, summary, monotonic() - started_at)
     return summary
 
 
-def _run(
+def _run_roots(
     drive: Any,
     api: CatalogLookup | None,
     settings: BackfillSettings,
     run_id: str,
     summary: BackfillSummary,
 ) -> None:
+    """Each root on its own, the main library first (ADR-0009)."""
+    if api is None:
+        api = api_client(base_url=api_base_url().strip() or None)
+
+    def run(root: LibraryRoot) -> bool:
+        part = BackfillSummary(summary.mode)
+        summary.roots.append((root, part))
+        _run(drive, api, settings, root, run_id, part)
+        if part.aborted:
+            _report_abort(run_id, part)
+            return False
+        return True
+
+    def failed(root: LibraryRoot, exc: Exception) -> None:
+        summary.roots[-1][1].error = f"{type(exc).__name__}: {exc}"
+
+    each_root(settings.roots, run, failed)
+
+
+def _run(
+    drive: Any,
+    api: CatalogLookup | None,
+    settings: BackfillSettings,
+    root: LibraryRoot,
+    run_id: str,
+    summary: BackfillSummary,
+) -> None:
     mode = summary.mode
-    manifest_store = StateFile(drive, settings.state, MANIFEST_NAME)
-    cursor_store = StateFile(drive, settings.state, CURSOR_NAME)
+    summary.manifest_name = root_state_name(FLOW_NAME, MANIFEST_NAME, root)
+    manifest_store = StateFile(drive, settings.state, summary.manifest_name)
+    cursor_store = StateFile(
+        drive, settings.state, root_state_name(FLOW_NAME, CURSOR_NAME, root)
+    )
     try:
         manifest = manifest_store.load()
         cursor = cursor_store.load()
@@ -961,18 +1189,26 @@ def _run(
         summary.problems.append(str(exc))
         return
 
-    if manifest is not None and manifest.get("root_folder_id") != settings.root:
+    if manifest is not None and manifest.get("root_folder_id") != root.root_id:
         summary.problems.append(
-            f"{MANIFEST_NAME} lists root {manifest.get('root_folder_id')}, not "
-            f"{ROOT_FOLDER_VAR}={settings.root}; trash it to list the new root"
+            f"{summary.manifest_name} lists root {manifest.get('root_folder_id')}, "
+            f"not {root.folders[0].setting}={root.root_id}; trash it to list the "
+            "new root"
         )
         return
     if manifest is None:
-        manifest = new_manifest(settings.root)
+        manifest = new_root_manifest(root)
     if not manifest.get("complete"):
         before = len(manifest["files"])
+        # The state folder and the other roots' folders are not this root's.
+        exclude = {settings.state} | {
+            folder_id
+            for other in settings.roots
+            if other.key != root.key
+            for folder_id in other.folder_ids
+        }
         try:
-            build_manifest(drive, manifest_store, manifest, exclude={settings.state})
+            build_manifest(drive, manifest_store, manifest, exclude=exclude)
         finally:
             summary.listed = len(manifest["files"]) - before
             summary.listing_pending_folders = len(manifest["pending_folders"])
@@ -1010,7 +1246,7 @@ def _run(
         run_id,
         mode,
         stage=f"files {start + 1}-{end} of {len(files)} (manifest {generation})",
-        folders={"root": settings.root, "state": settings.state},
+        folders={"root": root.root_id, "state": settings.state},
     ).attach(drive, settings.state)
     try:
         _resume_record(drive, settings.state, record)
@@ -1020,7 +1256,7 @@ def _run(
     summary.record_name = record.file_name
     if api is None:
         api = api_client(base_url=api_base_url().strip() or None)
-    work = Backfill(drive, api, settings, record, summary, manifest)
+    work = Backfill(drive, api, settings, record, summary, manifest, root)
     status = "failed"
     try:
         retry = [str(i) for i in cursor.get("registry_retry") or []]
@@ -1104,12 +1340,12 @@ def _record(report: Any, summary: BackfillSummary, duration_sec: float) -> None:
     if summary.listing_finished:
         report.notice(
             "manifest_built",
-            f"{MANIFEST_NAME}: {summary.total} files listed",
+            f"{summary.manifest_name}: {summary.total} files listed",
         )
     elif summary.listing_pending_folders:
         report.notice(
             "manifest_in_progress",
-            f"{MANIFEST_NAME}: {summary.listed} files listed this run, "
+            f"{summary.manifest_name}: {summary.listed} files listed this run, "
             f"{summary.listing_pending_folders} folders still to list",
         )
     if summary.paused:
@@ -1124,7 +1360,7 @@ def _record(report: Any, summary: BackfillSummary, duration_sec: float) -> None:
         report.notice(
             "library_done",
             f"all {summary.total} files in the manifest are processed; trash "
-            f"{MANIFEST_NAME} in the state folder to start over",
+            f"{summary.manifest_name} in the state folder to start over",
         )
     report.ok(len(summary.outcomes["written"]))
     report.count("listed", summary.listed)
@@ -1154,6 +1390,8 @@ def _record(report: Any, summary: BackfillSummary, duration_sec: float) -> None:
         report.notice("registry_failed", name)
     if summary.aborted:
         report.issue("audio_changed_run_stopped", summary.aborted)
+    if summary.error:
+        report.issue("failed", f"the run over this root failed ({summary.error})")
 
 
 if __name__ == "__main__":

@@ -22,15 +22,17 @@ from deejay_cog import library_backfill as backfill
 from deejay_cog import library_trash as trash
 from deejay_cog.music_safety import FlowMode
 
-ROOT, STATE = "root", "state"
+ROOT, STATE, FX = "root", "state", "fx"
 _NOW = dt.datetime(2026, 11, 7, tzinfo=dt.UTC)
 
 
-def _row(drive_id: str, *, requested: bool, present: bool = True) -> LibraryFile:
+def _row(
+    drive_id: str, *, requested: bool, present: bool = True, root: str = ROOT
+) -> LibraryFile:
     return LibraryFile(
         id=uuid.uuid4(),
         drive_file_id=drive_id,
-        library_root_id=ROOT,
+        library_root_id=root,
         path=f"House/{drive_id}.mp3",
         identification_status="identified",
         present=present,
@@ -53,6 +55,7 @@ class FakeCatalog:
             for r in self.rows
             if r.trash_requested == kwargs["trash_requested"]
             and r.present == kwargs["present"]
+            and r.library_root_id == kwargs["library_root_id"]
         ]
         return rows[kwargs["offset"] : kwargs["offset"] + kwargs["limit"]]
 
@@ -188,3 +191,52 @@ def test_missing_settings_are_reported(
     )
 
     assert any(backfill.ROOT_FOLDER_VAR in p for p in summary.problems)
+
+
+def test_each_root_is_trashed_on_its_own_and_named(
+    drive: FakeDrive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(backfill.FX_ROOT_FOLDER_VAR, FX)
+    posted = []
+    monkeypatch.setattr(
+        "mini_app_polis.pipeline_status.post_run_finding",
+        lambda *_, **kw: posted.append(kw.get("text", "")),
+    )
+    catalog = FakeCatalog()
+    _, copy = _library(drive, catalog)
+    fx_copy = drive.add("bow.mp3", FX, b"bow")
+    catalog.rows.append(_row(fx_copy, requested=True, root=FX))
+
+    summary = trash.run_trash(
+        run_id="t-7", mode=FlowMode.WRITE, drive=drive, api=catalog
+    )
+
+    (_, main), (_, fx) = summary.roots
+    assert main.trashed == [f"House/{copy}.mp3"]
+    assert fx.trashed == [f"House/{fx_copy}.mp3"]
+    assert catalog.absent == [copy, fx_copy]
+    assert [a["library_root_id"] for a in catalog.asked] == [ROOT, FX]
+    text = posted[-1]
+    assert f"{backfill.ROOT_FOLDER_VAR}: House/{copy}.mp3" in text
+    assert f"{backfill.FX_ROOT_FOLDER_VAR}: House/{fx_copy}.mp3" in text
+
+
+def test_a_root_that_fails_does_not_stop_the_other(
+    drive: FakeDrive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(backfill.FX_ROOT_FOLDER_VAR, FX)
+    fx_copy = drive.add("bow.mp3", FX, b"bow")
+
+    class MainDown(FakeCatalog):
+        def list_library_files(self, **kwargs: Any) -> list[LibraryFile]:
+            if kwargs["library_root_id"] == ROOT:
+                raise RuntimeError("API down")
+            return super().list_library_files(**kwargs)
+
+    catalog = MainDown(rows=[_row(fx_copy, requested=True, root=FX)])
+
+    with pytest.raises(RuntimeError, match="API down"):
+        trash.run_trash(run_id="t-8", mode=FlowMode.WRITE, drive=drive, api=catalog)
+
+    assert drive.items[fx_copy].trashed is True
+    assert catalog.absent == [fx_copy]

@@ -348,7 +348,8 @@ What to expect from the queue:
   to. After three receives the message goes to the dead-letter queue and
   its alarm fires. A run that cannot finish holds the queue for every run
   behind it until then; to start over, purge the queue
-  (`deejay-jobs.fifo`) and, once nothing is running, queue one fresh run.
+  (`deejay-library-jobs.fifo` for a library run, `deejay-jobs.fifo` for any
+  other mode) and, once nothing is running, queue one fresh run.
 - **The code a run uses is the code deployed when it starts**, not when
   it was queued. The worker deploys on a release from `main`.
 
@@ -366,7 +367,10 @@ its path. It does nothing unless the `flags.deejay_cog.library_backfill` flag is
 survives redeploys:
 
 - `library-backfill-manifest.json` — the library listed once, recursively
-  from `LIBRARY_ROOT_FOLDER_ID`, metadata only (nothing is downloaded):
+  from `LIBRARY_ROOT_FOLDER_ID` (and, in a manifest started since New Music
+  joined the main library, from `NEW_MUSIC_DESTINATION_FOLDER_ID`, its
+  files under `/New Music` as the scan registers them), metadata only
+  (nothing is downloaded):
   each file's id, name and folder, breadth first, by name within a folder.
   Shortcuts are not followed, and the state folder is left out if it sits
   inside the library. The listing is resumable: the folders still to list
@@ -389,6 +393,28 @@ run lists the library again and starts from its first file; files whose
 tags already match are read but not written. A manifest of another root
 than `LIBRARY_ROOT_FOLDER_ID`, or two files of one of these names, stops
 the run with a WARN until resolved.
+
+**Each root on its own**
+([ADR-0009](decisions/ADR-0009-library-folders.md)). With
+`FX_LIBRARY_ROOT_FOLDER_ID` set, FX Music is run after the main library with
+a manifest and cursor of its own, `library-backfill-fx-manifest.json` and
+`library-backfill-fx-cursor.json` (trash those to start FX Music over), and
+its own chunk. An FX file links only to an fx entry: the one the catalog has
+for its own title, artist and year, asked for with
+`POST /v1/catalog/library/entries`, library `fx` and `preview` set, so the
+backfill never makes one (a song the catalog lacks is `not_in_catalog`, left
+to identify, which makes its fx entry). A main-library file never links to an
+fx entry. As for every file, only `TXXX:CATALOG_ID` is written: no catalog
+value is ever written over an FX file, whose tags win
+([ADR-0010](decisions/ADR-0010-tagging-rule-profiles.md)). FX files are
+registered under FX Music's root. A root whose state is refused (the WARNs
+above) or whose run fails does not stop or change the other: its lines say
+why, and a failure is raised once the other root has run, so the run still
+fails. An audio mismatch stops the run, whatever the root. The run keeps one
+run record. With more than one root, every line of the report starts with
+the root, named by the settings naming its folders, and the counts are over
+every root. With only `LIBRARY_ROOT_FOLDER_ID` set, the backfill runs and
+reports as it always did.
 
 **Per file:**
 
@@ -491,8 +517,8 @@ and registered on its own:
   with. A file moved between the main folder and New Music, either way, is
   **moved**: it keeps its row, link and plays.
 - **FX Music** — `FX_LIBRARY_ROOT_FOLDER_ID`, when set: a library root of
-  its own, its id the FX Music folder's. The backfill does not list it, so
-  none of its files are left to the backfill.
+  its own, its id the FX Music folder's. Its files are never left to the
+  backfill: the scan registers them, and identify links them.
 
 With only `LIBRARY_ROOT_FOLDER_ID` set, the scan is the one-folder scan it
 always was. Only MP3s are compared, in either library.
@@ -848,6 +874,31 @@ the catalog refused (one a write run tried) is counted as
 `fill_up_kept_by_file` and not listed: the file keeps that value on
 purpose.
 
+**FX Music: the file wins**
+([ADR-0009](decisions/ADR-0009-library-folders.md),
+[ADR-0010](decisions/ADR-0010-tagging-rule-profiles.md)). With
+`FX_LIBRARY_ROOT_FOLDER_ID` set, FX Music's linked files are reconciled after
+the main library's, on their own: those that changed since
+`library-reconcile-fx-seen.json` last saw them (Drive's changes from
+`library-scan-fx-listing.json`), up to `LIBRARY_RECONCILE_CHUNK_SIZE`. Every
+difference with a value in the file goes up to its fx entry
+(`POST /v1/catalog/library/files/edited` with `keep_file`), with **no
+approval**, and no catalog value is ever written over an FX file. FX
+differences never go to the review page or into
+`library-reconcile-open.json`. The report names each value sent up, by file
+and field (`fx_sent_up`, `path: field 'entry' -> 'file'`), and each value the
+API held, with why (`fx_held`: a title or artist that does not split into
+parts cleanly, a genre off the vocabulary, a one-character label). A field
+the file leaves empty is not sent up and the entry keeps its value
+(`fx_not_sent`). A `TXXX:CATALOG_ID` naming another entry is corrected as
+for the main library, that frame only. The flag applies to FX Music too: a
+dry run asks the API what it would take (`preview`), sends nothing up, says
+what would go (`would_send_up`, counted as `fx_would_send_up`), and marks no
+FX file compared, so the next run compares the same files. A failure in one
+library does not stop the other (approvals the API can't return stop only the
+main library); a failure is raised once the other has run. With more than one
+root, every line of the report names its root and the counts are over both.
+
 **Long-open differences:** `library-reconcile-open.json` in the state folder
 keeps when each open difference was first seen; a difference whose values
 change starts again. Every run counts those open more than 7 days
@@ -1014,6 +1065,22 @@ mismatch stops the run with an ERROR finding; that file is not marked
 synced and comes up first next time. A dry run writes no music and marks
 nothing synced.
 
+**Each root on its own**
+([ADR-0009](decisions/ADR-0009-library-folders.md)). With
+`FX_LIBRARY_ROOT_FOLDER_ID` set, FX Music is synced after the main library,
+from its own scan listing (`library-scan-fx-listing.json`) and its own
+registry rows. **The FX file wins**
+([ADR-0010](decisions/ADR-0010-tagging-rule-profiles.md)): an edit made in an
+FX file goes up to its fx entry as above (a title retitled with `< >` too: an
+FX file's title is its own), but the catalog's values are never written over
+an FX file. One whose entry moved keeps what it holds, is recorded as synced
+with the values it already had recorded, and is named (`fx_file_wins`); the
+reconcile then sends its values up to the entry. A root that fails does not
+stop the other; its failure is raised once the other has run. An audio
+mismatch or the run's deadline stops the run, whatever the root. With more
+than one root, every line of the report names its root and the counts are
+over both.
+
 **Report:** counts for `waiting`, `written`, `would_write`,
 `already_in_step`, `nothing_moved`, `values_recorded`,
 `changed_in_drive_read`, `changed_in_drive_left`, `run_records_read`,
@@ -1037,6 +1104,12 @@ and marks it not present (`POST /v1/catalog/library/files/absent`). A file
 already in the trash or gone from Drive is only marked not present. No file
 the registry does not mark is touched. A dry run lists what it would trash
 and changes nothing.
+
+Each library root ([ADR-0009](decisions/ADR-0009-library-folders.md)) is
+run on its own, the main library first, under the same flag. A root that
+fails does not stop the other; its failure is raised once the other has run.
+With more than one root, every line of the report names its root and the
+counts are over both.
 
 **Report:** counts for `trash_requested`, `trashed`, `would_trash`,
 `already_gone`, `marked_not_present` and `failed`, every file by its path.

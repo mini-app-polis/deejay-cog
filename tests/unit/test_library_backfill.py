@@ -15,6 +15,8 @@ from mini_app_polis import pipeline_status
 from mini_app_polis.api.contract import (
     CatalogLookupRequest,
     CatalogMatch,
+    LibraryEntryCreate,
+    LibraryEntryCreated,
     LibraryFileRegister,
 )
 from mini_app_polis.lambda_worker import RunOutOfTime
@@ -28,7 +30,7 @@ from deejay_cog.music_safety import tag_snapshot
 from deejay_cog.music_tags import linked_catalog_id
 from flag_fakes import FLAGS
 
-ROOT, STATE = "root", "state"
+ROOT, STATE, FX, NEW = "root", "state", "fx", "new"
 FOLDER = flow.FOLDER_MIME_TYPE
 _CATALOG_ID = uuid.UUID("11111111-2222-3333-4444-555555555555")
 
@@ -62,6 +64,19 @@ class FakeApi:
     registrations: list[LibraryFileRegister] = field(default_factory=list)
     #: Raised by every registration while set.
     registry_down: Exception | None = None
+    #: The fx entries the catalog has, by lowercase title.
+    fx: dict[str, CatalogMatch] = field(default_factory=dict)
+    entry_requests: list[LibraryEntryCreate] = field(default_factory=list)
+
+    def create_library_entry(self, payload: LibraryEntryCreate):
+        self.entry_requests.append(payload)
+        found = self.fx.get(payload.title.lower())
+        if found is not None:
+            return LibraryEntryCreated(entry=found, created=False)
+        would_be = CatalogMatch(
+            id=uuid.uuid4(), title=payload.title, artist=payload.artist, library="fx"
+        )
+        return LibraryEntryCreated(entry=would_be, created=False, previewed=True)
 
     def lookup_catalog(self, payload: CatalogLookupRequest):
         self.requests.append(payload)
@@ -1060,3 +1075,134 @@ def rb_comment(data: bytes, text: str) -> bytes:
     buffer = io.BytesIO(data)
     tags.save(buffer, v2_version=4)
     return buffer.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# More than one library root (ADR-0009, ADR-0010)
+# ---------------------------------------------------------------------------
+
+_FX_ID = uuid.UUID("99999999-8888-7777-6666-555555555555")
+
+
+@pytest.fixture
+def two_roots(settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(flow.FX_ROOT_FOLDER_VAR, FX)
+
+
+def test_each_root_has_its_own_manifest_cursor_and_lines(
+    two_roots, wired, posted, drive, api: FakeApi
+) -> None:
+    _library(drive, 2)
+    # The main catalog knows "song 0", but an FX file links only to an fx entry.
+    walk_on = drive.add("walk on.mp3", FX, _song("song 0", "artist"))
+    api.fx["song 0"] = CatalogMatch(
+        id=_FX_ID, title="Song Zero", artist="Someone", library="fx"
+    )
+    fresh = drive.add("fresh.mp3", FX, _song("fresh cut", "dj"))
+
+    summary = flow.library_backfill(run_id="m-1")
+
+    (main_root, main), (fx_root, fx) = summary.roots
+    assert (main_root.key, fx_root.key) == ("main", "fx")
+    assert main.outcomes["written"] == ["00 song.mp3", "01 song.mp3"]
+    assert fx.outcomes["written"] == ["walk on.mp3"]
+    assert fx.outcomes["not_in_catalog"] == [
+        "fresh.mp3 (looked up 'fresh cut' by 'dj')"
+    ]
+    # Only the link is written to an FX file, never the catalog's values.
+    assert linked_catalog_id(drive.items[walk_on].data) == str(_FX_ID)
+    assert tag_snapshot(drive.items[walk_on].data)["title"] == "song 0"
+    assert drive.items[fresh].data == _song("fresh cut", "dj")
+    assert api.registry[walk_on].library_root_id == FX
+    assert api.registry[walk_on].catalog_id == _FX_ID
+    assert api.registry[fresh].identification_status == "unidentified"
+    # FX files are asked for as fx entries, as a preview: nothing is made.
+    assert [(r.title, r.library, r.preview) for r in api.entry_requests] == [
+        ("fresh cut", "fx", True),
+        ("song 0", "fx", True),
+    ]
+    assert [t.title for r in api.requests for t in r.tracks] == ["song 0", "song 1"]
+    fx_manifest = _state(drive, "library-backfill-fx-manifest.json")
+    assert fx_manifest is not None and fx_manifest["root_folder_id"] == FX
+    assert {f["id"] for f in fx_manifest["files"]} == {walk_on, fresh}
+    assert _manifest(drive)["root_folder_id"] == ROOT
+    assert _state(drive, "library-backfill-fx-cursor.json")["position"] == 2
+    assert _cursor(drive)["position"] == 2
+    # One run, one record: every write of both roots.
+    assert len(_record(drive, "m-1")["entries"]) == 4
+    text = _text(posted)
+    assert f"{flow.FX_ROOT_FOLDER_VAR}: walk on.mp3" in text
+    assert f"{flow.ROOT_FOLDER_VAR}: 00 song.mp3" in text
+
+
+def test_a_main_file_never_links_to_an_fx_entry(
+    settings, wired, drive, api: FakeApi
+) -> None:
+    file_id = drive.add("a.mp3", ROOT, _song("song 0", "artist"))
+    api.answers["song 0"] = CatalogMatch(
+        id=_FX_ID, title="Song 0", artist="Artist", library="fx"
+    )
+
+    summary = flow.library_backfill(run_id="m-1")
+
+    assert summary.outcomes["not_in_catalog"] == [
+        "a.mp3 (looked up 'song 0' by 'artist')"
+    ]
+    assert linked_catalog_id(drive.items[file_id].data) == ""
+
+
+def test_a_root_whose_state_is_refused_does_not_stop_the_other(
+    two_roots, wired, posted, drive, api: FakeApi
+) -> None:
+    _library(drive, 1)
+    walk_on = drive.add("walk on.mp3", FX, _song("song 0", "artist"))
+    api.fx["song 0"] = CatalogMatch(id=_FX_ID, title="Song 0", artist="A", library="fx")
+    drive.add(flow.MANIFEST_NAME, STATE, b"{}", mime_type="application/json")
+    drive.add(flow.MANIFEST_NAME, STATE, b"{}", mime_type="application/json")
+
+    summary = flow.library_backfill(run_id="m-1")
+
+    (_, main), (_, fx) = summary.roots
+    assert main.problems and main.scanned == 0
+    assert fx.outcomes["written"] == ["walk on.mp3"]
+    assert linked_catalog_id(drive.items[walk_on].data) == str(_FX_ID)
+    assert f"{flow.ROOT_FOLDER_VAR}: " in _text(posted)
+    assert "trash all but one" in _text(posted)
+
+
+def test_a_root_that_fails_does_not_stop_the_other_and_the_run_still_fails(
+    two_roots, wired, posted, drive, api: FakeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _library(drive, 1)
+    walk_on = drive.add("walk on.mp3", FX, _song("song 0", "artist"))
+    api.fx["song 0"] = CatalogMatch(id=_FX_ID, title="Song 0", artist="A", library="fx")
+    real = flow._run
+
+    def run(drive, api, settings, root, run_id, summary):
+        if root.key == "main":
+            raise RuntimeError("Drive is down")
+        return real(drive, api, settings, root, run_id, summary)
+
+    monkeypatch.setattr(flow, "_run", run)
+
+    with pytest.raises(RuntimeError, match="Drive is down"):
+        flow.library_backfill(run_id="m-1")
+
+    assert linked_catalog_id(drive.items[walk_on].data) == str(_FX_ID)
+    text = _text(posted)
+    assert f"{flow.ROOT_FOLDER_VAR}: the run over this root failed" in text
+
+
+def test_a_new_manifest_lists_new_music_under_the_main_root(
+    settings, wired, drive, api: FakeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(flow.NEW_MUSIC_FOLDER_VAR, NEW)
+    _library(drive, 1)
+    new = drive.add("song 1.mp3", NEW, _song("song 1", "artist"))
+
+    summary = flow.library_backfill(run_id="m-1")
+
+    assert summary.roots == []  # one root: run as it always was
+    assert summary.outcomes["written"] == ["00 song.mp3", "/New Music/song 1.mp3"]
+    assert api.registry[new].library_root_id == ROOT
+    assert api.registry[new].path == "/New Music/song 1.mp3"

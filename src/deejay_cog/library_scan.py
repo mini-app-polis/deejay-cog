@@ -27,8 +27,8 @@ New Music (``NEW_MUSIC_DESTINATION_FOLDER_ID``), both under the main root's
 id: New Music's files are registered under a path prefixed with
 ``/New Music``, so a file moved between the two folders is moved, not removed
 and added. FX Music (``FX_LIBRARY_ROOT_FOLDER_ID``), when set, is a root of
-its own; the backfill does not list it, so none of its files are left to
-the backfill.
+its own. Only the main library's files are left to the backfill; FX Music's
+are registered here, and identify links them.
 
 **Position.** The listing is the backfill's resumable listing, kept in
 ``library-scan-listing.json`` in ``MUSIC_TAGGING_STATE_FOLDER_ID`` for the
@@ -423,7 +423,7 @@ def _scan_root(
 
     pending: set[str] | None = set()
     if root.key == "main":
-        # Only the main library's own folder is the backfill's to register.
+        # Only the main library's files are left to the backfill to register.
         try:
             pending = _pending_backfill(drive, settings.state)
         except StateProblem as exc:

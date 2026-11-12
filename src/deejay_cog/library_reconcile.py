@@ -137,8 +137,27 @@ run writes nothing. Genre is written; subgenre is not (no frame for it is
 decided). An audio mismatch stops the run with an ERROR finding; that file
 is not marked compared, so the next run takes it again.
 
+**FX Music** (ADR-0009, ADR-0010). With ``FX_LIBRARY_ROOT_FOLDER_ID`` set,
+its files are reconciled after the main library's, on their own: the
+files that changed since ``library-reconcile-fx-seen.json`` last saw them
+(from the scan's ``library-scan-fx-listing.json``), up to
+``LIBRARY_RECONCILE_CHUNK_SIZE``. An FX file's tags win: every difference
+with a value in the file goes up to its fx entry (``POST
+/v1/catalog/library/files/edited`` with ``keep_file``), with no approval,
+and no catalog value is ever written over the file. FX differences are not
+sent to the review page or kept as open differences; the report names each
+value sent up, by file and field (``fx_sent_up``), and each the API held,
+with why. A field the file leaves empty is not sent up (the entry keeps its
+value), and a ``TXXX:CATALOG_ID`` naming another entry is corrected, as for
+the main library. A dry run asks the API what it would take
+(``preview``), sends nothing up and marks nothing compared, so the next run
+compares the same files. A root that fails does not stop the other (its
+failure is raised once the other has run); with more than one root, every
+line of the report names its root.
+
 **Safety:** ``flags.deejay_cog.library_reconcile`` is ``off`` unless ``dry-run`` or
-``write``. The comment frame and VirtualDJ's frames are never written.
+``write``, for every root. The comment frame and VirtualDJ's frames are never
+written.
 """
 
 from __future__ import annotations
@@ -184,10 +203,15 @@ from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
 from deejay_cog.library_backfill import (
     BackfillSettings,
+    LibraryRoot,
     StateFile,
     StateProblem,
+    each_root,
+    record_roots,
+    root_state_name,
 )
 from deejay_cog.library_scan import LISTING_NAME as SCAN_LISTING_NAME
+from deejay_cog.library_scan import listing_name
 from deejay_cog.music_safety import (
     AudioChanged,
     FlowMode,
@@ -709,6 +733,15 @@ class ReconcileSummary:
     #: Files the owner retitled as an owner edit, moved to an owner-edit
     #: entry (or, in a dry run, that would be): "path: old -> new (title)".
     owner_edits: list[str] = field(default_factory=list)
+    #: Whether this summary is of FX Music, whose files win (ADR-0010).
+    fx: bool = False
+    #: FX Music: each value sent up to its fx entry (or, in a dry run, that
+    #: would be): "path: field 'entry' -> 'file'".
+    fx_sent_up: list[str] = field(default_factory=list)
+    #: FX Music: each field the file leaves empty, not sent up.
+    fx_not_sent: list[str] = field(default_factory=list)
+    #: With more than one root, each root's own summary, in order.
+    roots: list[tuple[LibraryRoot, ReconcileSummary]] = field(default_factory=list)
 
     @property
     def files_with_differences(self) -> int:
@@ -1277,6 +1310,260 @@ def _reconcile(
         _report_abort(run_id, summary)
 
 
+def _reconcile_fx(
+    drive: Any,
+    api: Catalog,
+    settings: BackfillSettings,
+    root: LibraryRoot,
+    chunk_size: int,
+    run_id: str,
+    summary: ReconcileSummary,
+) -> None:
+    """Reconcile FX Music's changed files: the file wins (ADR-0010), so
+    every difference with a value in the file goes up to its fx entry, with
+    no approval, and nothing goes to the review page."""
+    seen_store = StateFile(
+        drive, settings.state, root_state_name(FLOW_NAME, SEEN_NAME, root)
+    )
+    try:
+        held = seen_store.load() or {}
+        listing = StateFile(drive, settings.state, listing_name(root)).load() or {}
+    except StateProblem as exc:
+        summary.problems.append(str(exc))
+        return
+    modified = {
+        str(item["id"]): str(item.get("modified") or "")
+        for item in listing.get("files") or []
+    }
+    if held.get("root_folder_id") not in (None, root.root_id):
+        held = {}
+    seen: dict[str, dict[str, str]] = dict(held.get("files") or {})
+    every = _all_rows(api, root.root_id)
+    shown = _displays(api, every) if every else {}
+    changed = [
+        row
+        for row in every
+        if seen.get(row.drive_file_id)
+        != _stamp(modified, row, shown.get(row.catalog_id) if row.catalog_id else None)
+    ]
+    rows = changed[:chunk_size]
+    summary.changed_left = len(changed) - len(rows)
+    writes = summary.mode.writes
+    record: RunRecord | None = None
+    if writes:
+        record = RunRecord(
+            FLOW_NAME,
+            run_id,
+            summary.mode,
+            stage=f"{len(rows)} changed FX Music files",
+            folders={"root": root.root_id, "state": settings.state},
+        ).attach(drive, settings.state)
+    status = "complete"
+    try:
+        for row in rows:
+            if shared_deadline_passed():
+                summary.stopped = f"run deadline reached before {row.path}"
+                status = "stopped"
+                break
+            try:
+                display = shown.get(row.catalog_id) if row.catalog_id else None
+                compared = _compare_one(drive, row, display, summary, owner_edits=False)
+                if not isinstance(compared, tuple):
+                    continue
+                _settle_fx(drive, api, record, row, compared, summary)
+                if writes:
+                    seen[row.drive_file_id] = _stamp(modified, row, display)
+            except AudioChanged as exc:
+                summary.aborted = f"{row.path}: {exc}"
+                status = "aborted"
+                break
+            except Exception as exc:  # noqa: BLE001 — one file must not end the run
+                if shared_deadline_passed():
+                    summary.stopped = f"run deadline reached reading {row.path}"
+                    status = "stopped"
+                    break
+                log.exception("library-reconcile: failed on %s", row.path)
+                summary.failed.append(f"{row.path} ({type(exc).__name__}: {exc})")
+    finally:
+        # Saved even past the deadline; a dry run marks nothing compared.
+        with without_run_deadline():
+            if record is not None and record.entries:
+                record.finish(status)
+            if writes:
+                present = {row.drive_file_id for row in every}
+                seen_store.save(
+                    {
+                        "flow": FLOW_NAME,
+                        "version": 1,
+                        "root_folder_id": root.root_id,
+                        "files": {k: v for k, v in seen.items() if k in present},
+                        "updated_at": _now(),
+                    }
+                )
+    if summary.aborted:
+        _report_abort(run_id, summary)
+
+
+def _settle_fx(
+    drive: Any,
+    api: Catalog,
+    record: RunRecord | None,
+    row: LibraryFile,
+    compared: tuple[str, TagBytes, list[Difference], dict[str, str]],
+    summary: ReconcileSummary,
+) -> None:
+    """Settle one FX file's differences: each value the file holds goes up
+    to its fx entry (in a dry run, ``record`` None, the API is only asked
+    what it would take); a field the file leaves empty is named and not
+    sent; a link naming another entry is corrected, that frame only. No
+    catalog value is ever written over the file. Raises
+    :class:`AudioChanged`."""
+    name, read, diffs, wanted = compared
+    up = [d for d in diffs if d.field in FIELDS and d.file_value]
+    for diff in diffs:
+        if diff.field in FIELDS and not diff.file_value:
+            summary.fx_not_sent.append(
+                f"{row.path}: {diff.field} (the file has none; its entry keeps "
+                f"{diff.catalog_value!r})"
+            )
+    if up:
+        _send_up_fx(api, row, read.data, up, summary, preview=record is None)
+    if not any(d.field == "catalog_id" for d in diffs):
+        return
+    label = f"{row.path} (catalog_id)"
+    if record is None:
+        summary.would_write.append(label)
+        return
+    data = whole_bytes(drive, row.drive_file_id, read)
+    tagged = write_owned_fields(data, {"catalog_id": wanted["catalog_id"]})
+    if tagged is None:
+        return
+    entry = write_in_place(
+        drive,
+        record,
+        file_id=row.drive_file_id,
+        name=name,
+        original=data,
+        tagged=tagged,
+        identified_by="reconcile (FX Music link corrected)",
+    )
+    if entry.state == "done":
+        summary.written.append(label)
+
+
+def _send_up_fx(
+    api: Catalog,
+    row: LibraryFile,
+    data: bytes,
+    up: list[Difference],
+    summary: ReconcileSummary,
+    *,
+    preview: bool,
+) -> None:
+    """Send an FX file's values up to its fx entry (``keep_file``: the file
+    wins), naming each value the entry took, by file and field, and each
+    the API held, with why. With ``preview``, nothing is sent up."""
+    tags = {name: value or None for name, value in read_tag_row(data).items()}
+    result = api.report_library_file_edited(
+        LibraryFileEdited(
+            drive_file_id=row.drive_file_id,
+            tags=LibraryFileTags(**tags),
+            keep_file=sorted({d.field for d in up}),  # type: ignore[misc]
+            preview=preview,
+        )
+    )
+    outcomes: dict[str, LibraryFieldEdit] = {f.field: f for f in result.fields}
+    for diff in up:
+        line = f"{row.path}: {diff.field} {diff.catalog_value!r} -> {diff.file_value!r}"
+        edit = outcomes.get(diff.field)
+        if edit is None:
+            # The entry already shows the file's value, as the API compares it.
+            continue
+        if edit.outcome == "sent_up":
+            summary.fx_sent_up.append(line)
+        else:
+            summary.kept_held.append(
+                f"{line} ({edit.outcome}{': ' + edit.why if edit.why else ''})"
+            )
+
+
+def _record_fx(report: Any, summary: ReconcileSummary, duration_sec: float) -> None:
+    """The report's lines for FX Music: what went up to the fx entries."""
+    report.duration_sec = duration_sec
+    for problem in summary.problems:
+        report.issue("setting", problem)
+    if summary.problems:
+        return
+    writes = summary.mode.writes
+    if not writes:
+        report.notice(
+            "dry_run",
+            "reads only: nothing was sent up to an fx entry and no file was "
+            "marked compared",
+        )
+    if summary.stopped:
+        report.notice("stopped", summary.stopped)
+    report.count("compared", summary.compared)
+    report.count("changed_left", summary.changed_left)
+    report.count("matching", summary.matching)
+    report.count(
+        "fx_sent_up" if writes else "fx_would_send_up", len(summary.fx_sent_up)
+    )
+    report.count("fx_held", len(summary.kept_held))
+    report.count("fx_not_sent", len(summary.fx_not_sent))
+    report.count("failed", len(summary.failed))
+    for line in summary.fx_sent_up:
+        if writes:
+            report.updated("fx entry took the file's value", line)
+        else:
+            report.notice("would_send_up", line)
+    for line in summary.kept_held:
+        report.notice("fx_held", line)
+    for line in summary.fx_not_sent:
+        report.notice("fx_not_sent", line)
+    for line in summary.written:
+        report.updated("link corrected", line)
+    for line in summary.would_write:
+        report.notice("would_write", line)
+    if summary.aborted:
+        report.issue("audio_changed_run_stopped", summary.aborted)
+    for failure in summary.failed:
+        report.issue("failed", failure)
+    report.ok(summary.compared)
+
+
+def _record_root(report: Any, summary: ReconcileSummary, duration_sec: float) -> None:
+    (_record_fx if summary.fx else _record)(report, summary, duration_sec)
+
+
+def _reconcile_roots(
+    drive: Any,
+    api: Catalog,
+    settings: BackfillSettings,
+    chunk_size: int,
+    run_id: str,
+    summary: ReconcileSummary,
+) -> None:
+    """Each root on its own, the main library first (ADR-0009). An audio
+    mismatch or the run's deadline stops the run, whatever the root."""
+
+    def run(root: LibraryRoot) -> bool:
+        part = ReconcileSummary(summary.mode, fx=root.key == "fx")
+        summary.roots.append((root, part))
+        if part.fx:
+            _reconcile_fx(drive, api, settings, root, chunk_size, run_id, part)
+        else:
+            _reconcile(drive, api, settings, chunk_size, run_id, part)
+        return not (part.aborted or part.stopped)
+
+    def failed(_root: LibraryRoot, exc: Exception) -> None:
+        summary.roots[-1][1].failed.append(
+            f"the run over this root failed ({type(exc).__name__}: {exc})"
+        )
+
+    each_root(settings.roots, run, failed)
+
+
 def _report_abort(run_id: str, summary: ReconcileSummary) -> None:
     try:
         post_run_finding(
@@ -1419,9 +1706,17 @@ def run_reconcile(
             client = api or cast(
                 Catalog, api_client(base_url=api_base_url().strip() or None)
             )
-            _reconcile(drive, client, settings, chunk_size, run_id, summary)
+            if len(settings.roots) == 1:
+                _reconcile(drive, client, settings, chunk_size, run_id, summary)
+            else:
+                _reconcile_roots(drive, client, settings, chunk_size, run_id, summary)
         finally:
-            _record(report, summary, monotonic() - started_at)
+            if summary.roots:
+                record_roots(
+                    report, summary.roots, _record_root, monotonic() - started_at
+                )
+            else:
+                _record(report, summary, monotonic() - started_at)
     return summary
 
 

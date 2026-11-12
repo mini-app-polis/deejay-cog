@@ -2,10 +2,10 @@
   "repo": "deejay-cog",
   "facts": {
     "test_functions": {
-      "value": 743,
+      "value": 758,
       "description": "Test functions in the test suites (def test_*, each parametrized function once)",
       "source": "matches: tests/**/test_*.py /(?m)^\\s*(?:async\\s+)?def test_\\w+/",
-      "as_of": "2026-11-11"
+      "as_of": "2026-11-12"
     }
   }
 }
