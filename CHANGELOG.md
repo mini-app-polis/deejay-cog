@@ -1,3 +1,16 @@
+# [2.57.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.56.0...v2.57.0) (2026-11-12)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 9.9.0 ([8a8a791](https://github.com/mini-app-polis/deejay-cog/commit/8a8a7911e920f438ca4a626792ab88d940ff78aa))
+
+
+### Features
+
+* **library:** map each library root to its tagging rule profile ([a9e977c](https://github.com/mini-app-polis/deejay-cog/commit/a9e977c1edb4f9f1ca0657f26124f2e1c48fefff))
+* **reconcile-admin:** full and baseline cover FX Music's seen record, or the library named ([851d8b7](https://github.com/mini-app-polis/deejay-cog/commit/851d8b74fccc198756ef61d54c8154d0914e8878))
+
 # [2.56.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.55.0...v2.56.0) (2026-11-12)
 
 
