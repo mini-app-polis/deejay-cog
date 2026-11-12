@@ -1,3 +1,15 @@
+# [2.55.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.54.0...v2.55.0) (2026-11-12)
+
+
+### Bug Fixes
+
+* **library-duplicates:** show registered paths from the library's root ([51ac578](https://github.com/mini-app-polis/deejay-cog/commit/51ac578a4fc83dc1b4a8404f89115973dffae2c4))
+
+
+### Features
+
+* **library:** run backfill, trash, sync and reconcile once per library root, FX Music's files winning ([09f8aed](https://github.com/mini-app-polis/deejay-cog/commit/09f8aedfd4cf6d3710877c6b90211f1908976b8e))
+
 # [2.54.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.53.0...v2.54.0) (2026-11-11)
 
 
