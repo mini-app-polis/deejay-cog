@@ -161,6 +161,15 @@ library; see [PIPELINE.md](PIPELINE.md#the-library-jobs). Any two of
 `FX_LIBRARY_ROOT_FOLDER_ID` and `MUSIC_TAGGING_STATE_FOLDER_ID` that name the
 same folder are a problem, for the backfill as well as the scan.
 
+Each library follows a tagging **rule profile**
+([ADR-0010](decisions/ADR-0010-tagging-rule-profiles.md)), mapped by
+`ROOT_PROFILES` in `library_backfill.py`: the main library (its folder and
+New Music) follows `main`, where the catalog wins and its values are written
+to the files; FX Music follows `fx`, where the file wins and its values go up
+to its fx entries. The profiles themselves are in common-python-utils
+(`mini_app_polis.mp3.tag`). With only `LIBRARY_ROOT_FOLDER_ID` set, there is
+one library, on the `main` profile, and nothing changes.
+
 A problem with a setting is a WARN in the scan's report; the backfill runs
 regardless. See [PIPELINE.md](PIPELINE.md#library-scan).
 

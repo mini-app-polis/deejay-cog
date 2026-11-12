@@ -1206,3 +1206,35 @@ def test_a_new_manifest_lists_new_music_under_the_main_root(
     assert summary.outcomes["written"] == ["00 song.mp3", "/New Music/song 1.mp3"]
     assert api.registry[new].library_root_id == ROOT
     assert api.registry[new].path == "/New Music/song 1.mp3"
+
+
+# ---------------------------------------------------------------------------
+# Each root's tagging rule profile (ADR-0010 decision 1)
+# ---------------------------------------------------------------------------
+
+
+def test_each_root_follows_its_rule_profile(settings, monkeypatch) -> None:
+    monkeypatch.setenv(flow.FX_ROOT_FOLDER_VAR, "fx-root")
+    monkeypatch.setenv(flow.NEW_MUSIC_FOLDER_VAR, "new-music")
+    s, problems = flow.BackfillSettings.from_env()
+    assert s is not None and not problems
+
+    main, fx = s.roots
+
+    assert (main.key, main.profile.name, main.file_wins) == ("main", "main", False)
+    assert (fx.key, fx.profile.name, fx.file_wins) == ("fx", "fx", True)
+    # New Music is part of the main library, and so of its profile.
+    assert len(main.folders) == 2
+
+
+def test_with_only_the_main_root_set_it_is_the_main_profile(
+    settings, monkeypatch
+) -> None:
+    monkeypatch.delenv(flow.FX_ROOT_FOLDER_VAR, raising=False)
+    s, _ = flow.BackfillSettings.from_env()
+    assert s is not None
+
+    (main,) = s.roots
+
+    assert main.profile.name == "main" and not main.file_wins
+    assert flow.ROOT_PROFILES == {"main": "main", "fx": "fx"}

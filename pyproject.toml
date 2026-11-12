@@ -6,7 +6,7 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.14"
 dependencies = [
-    "miniapppolis-common-utils[google,mp3,spotify]>=9.7.0,<10",
+    "miniapppolis-common-utils[google,mp3,spotify]>=9.9.0,<10",
     # Request models are pydantic; ValidationError is caught where a set the
     # API would refuse is counted as a failure rather than sent.
     "pydantic>=2.6,<3.0",
