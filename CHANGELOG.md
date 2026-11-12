@@ -1,3 +1,10 @@
+# [2.60.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.59.0...v2.60.0) (2026-11-12)
+
+
+### Features
+
+* **owner-edits:** propose and write the library's owner-edit retitles from an approved list ([c2fbbe1](https://github.com/mini-app-polis/deejay-cog/commit/c2fbbe15447d0c2d105c3ed303b5a0c25658a66c))
+
 # [2.59.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.58.3...v2.59.0) (2026-11-12)
 
 
