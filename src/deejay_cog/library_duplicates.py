@@ -23,6 +23,13 @@ files is split into its edits; every edit with two or more files is a
 group, and the files of the song's other edits are shown in it marked kept
 on purpose, with why, so they can never be sent to the trash through it.
 
+**Every song with two or more files** (ADR-0007, amended 2026-11-11: one
+entry may keep several files). In the main library a song whose files are
+all different edits, one file each, is still a group, so the owner sees
+every file the song has: its first edit's file is offered, the others shown
+beside it kept on purpose. A group the owner kept together is not reopened
+by the API while its files stay the same; the cog keeps no memory of it.
+
 **Owner edits** (ADR-0008, decided 2026-11-11): a file linked to an
 owner-edit entry (a cut the owner made himself, ``Song <Intro Cut>``) is
 an edit of its own, never a copy of the published song's files, even with
@@ -291,19 +298,28 @@ def _songs(
 
 
 def find_groups(
-    files: list[LibraryFile], shown: dict[uuid.UUID, CatalogDisplay]
+    files: list[LibraryFile],
+    shown: dict[uuid.UUID, CatalogDisplay],
+    *,
+    every_song: bool = True,
 ) -> list[DuplicateGroupReport]:
     """The duplicate groups among ``files``, sorted by key; the same files
-    always give the same groups."""
+    always give the same groups. With ``every_song`` (the main library), a
+    song whose files are all different edits is a group too; FX Music
+    leaves it out."""
     songs, links = _songs(files, shown)
     owner_edits = frozenset(i for i, d in shown.items() if d.owner_edit)
     groups: list[DuplicateGroupReport] = []
     for song in songs:
         if len(song) < 2:
             continue
-        for edit in _edits(song, owner_edits):
-            if len(edit) < 2:
-                continue
+        edits = _edits(song, owner_edits)
+        offered = [edit for edit in edits if len(edit) > 1]
+        if not offered and every_song:
+            # One file of each edit: still one group, the first edit's file
+            # offered and the others kept on purpose beside it.
+            offered = edits[:1]
+        for edit in offered:
             ids = {f.drive_file_id for f in edit}
             reasons = {r for a, b, r in links.edges if a in ids and b in ids}
             if not reasons:
@@ -352,7 +368,7 @@ def find_fx_groups(
         by_folder[_folder(f.path)].append(f)
     groups: list[DuplicateGroupReport] = []
     for folder in sorted(by_folder):
-        groups.extend(find_groups(by_folder[folder], shown))
+        groups.extend(find_groups(by_folder[folder], shown, every_song=False))
     # An owner edit is never a copy of the published song, across folders
     # either: each owner-edit entry's files are a set of their own.
     owner_edits = frozenset(i for i, d in shown.items() if d.owner_edit)

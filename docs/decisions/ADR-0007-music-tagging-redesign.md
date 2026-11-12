@@ -419,3 +419,35 @@ song, documented case by case
 - Every incoming file is fingerprinted when its tags alone would have
   linked it, so the fingerprint function and AcoustID see more files.
 - An entry left with no file and no plays is kept rather than archived.
+
+## Amended 2026-11-11 (owner): the duplicates page decides each file
+
+### Context
+
+library-duplicates left out a song's files when they looked like different
+edits (another release label, a length more than 3 seconds apart, an owner
+edit), so songs with several files never reached the duplicates page.
+Some of those files belong together on one entry (a Clean and an Explicit
+copy), some are versions that need entries of their own, and some are
+copies to trash. Only the owner can tell which.
+
+### Decision
+
+- **One entry may keep several files.** Every main-library song with two or
+  more present files goes to the duplicates page as a group. Files judged
+  to be different edits are marked as such, not left out.
+- **The owner decides each file, case by case:** keep it on the entry,
+  give it a version entry of its own (version text as typed), or send it to
+  Drive's trash. No choice leaves an entry with no file in the library.
+- **Different edits are protected.** A marked different edit defaults to its
+  own version, and trashing one takes a separate, deliberate confirmation.
+- **A group kept together stays closed** until its files change.
+- FX Music's folder rules are unchanged; duplicates are never grouped
+  across the two libraries.
+
+### Consequences
+
+- The API stores each file's outcome and whether a group was kept together,
+  and the reported groups' memory is the API's: the cog keeps none.
+- The duplicates step stays read-only; the trash step moves the files the
+  owner sent to the trash.
