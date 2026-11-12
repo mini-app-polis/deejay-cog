@@ -30,6 +30,13 @@ and added. FX Music (``FX_LIBRARY_ROOT_FOLDER_ID``), when set, is a root of
 its own. Only the main library's files are left to the backfill; FX Music's
 are registered here, and identify links them.
 
+**Formats** (ADR-0010, decision 2). The main library lists MP3s only. FX
+Music lists audio in every format the shared tagger supports (MP3, FLAC, Ogg
+Vorbis, Ogg Opus, M4A, WAV, AIFF), by its listed type or name. Partial
+downloads (``.part``, ``.crdownload``, ``.partial``) and files that are not
+audio are ignored; audio in a format the tagger cannot tag is named in the
+report (``untaggable``) and not registered.
+
 **Position.** The listing is the backfill's resumable listing, kept in
 ``library-scan-listing.json`` in ``MUSIC_TAGGING_STATE_FOLDER_ID`` for the
 main library and ``library-scan-fx-listing.json`` for FX Music. A run
@@ -78,7 +85,6 @@ from deejay_cog.library_backfill import (
     LibraryRoot,
     StateFile,
     StateProblem,
-    is_mp3_listing,
     list_one_folder,
     new_manifest,
 )
@@ -174,6 +180,8 @@ class ScanSummary:
     left_for_backfill: int = 0
     unchanged: int = 0
     failed: list[str] = field(default_factory=list)
+    #: Audio a root lists that the shared tagger cannot tag; not registered.
+    untaggable: list[str] = field(default_factory=list)
 
 
 def _path(listing: dict[str, Any], item: dict[str, Any]) -> str:
@@ -241,15 +249,21 @@ def compare(
     pending: set[str] | None,
     root: str,
     summary: ScanSummary,
+    library: LibraryRoot | None = None,
 ) -> tuple[list[LibraryFileRegister], list[str]]:
     """What the registry needs: registrations, and Drive ids gone.
 
-    Names each file under its outcome in ``summary``.
+    Names each file under its outcome in ``summary``. ``library`` says which
+    files are its own (the main library's MP3s when not given).
     """
+    library = library or LibraryRoot("main", root, ())
     registrations: list[LibraryFileRegister] = []
     listed: set[str] = set()
     for item in listing["files"]:
-        if not is_mp3_listing(item):
+        if library.untaggable(item):
+            summary.untaggable.append(_path(listing, item))
+            continue
+        if not library.lists(item):
             continue
         file_id = str(item["id"])
         listed.add(file_id)
@@ -307,11 +321,12 @@ def _refusal(
     gone: list[str],
 ) -> str:
     """Why the comparison of ``root`` must not be applied, or "" when it may."""
-    mp3s = sum(1 for item in listing["files"] if is_mp3_listing(item))
+    mp3s = sum(1 for item in listing["files"] if root.lists(item))
     present = sum(1 for row in rows.values() if row.present)
     if mp3s == 0 and present:
+        found = "audio files" if root.every_format else "MP3s"
         return (
-            f"the listing of {root.label} found no MP3s but the registry has "
+            f"the listing of {root.label} found no {found} but the registry has "
             f"{present} present; nothing was changed"
         )
     if present and len(gone) * 2 > present:
@@ -386,6 +401,7 @@ def _merge(summary: ScanSummary, part: ScanSummary) -> None:
     summary.left_for_backfill += part.left_for_backfill
     summary.unchanged += part.unchanged
     summary.failed.extend(part.failed)
+    summary.untaggable.extend(part.untaggable)
 
 
 def _scan_root(
@@ -432,7 +448,7 @@ def _scan_root(
     client = api or cast(Registry, api_client(base_url=api_base_url().strip() or None))
     rows = _registry_rows(client, root.root_id)
     part = ScanSummary(summary.mode)
-    registrations, gone = compare(listing, rows, pending, root.root_id, part)
+    registrations, gone = compare(listing, rows, pending, root.root_id, part, root)
     refused = _refusal(root, listing, rows, gone)
     if refused:
         summary.refused = (
@@ -536,6 +552,7 @@ def _record(report: Any, summary: ScanSummary, duration_sec: float) -> None:
     report.count("left_for_backfill", summary.left_for_backfill)
     report.count("unchanged", summary.unchanged)
     report.count("failed", len(summary.failed))
+    report.count("untaggable", len(summary.untaggable))
     if not summary.compared:
         return
     writes = summary.mode.writes
@@ -561,4 +578,6 @@ def _record(report: Any, summary: ScanSummary, duration_sec: float) -> None:
             report.notice("would_remove", path)
     for failure in summary.failed:
         report.issue("failed", failure)
+    for path in summary.untaggable:
+        report.notice("untaggable", f"{path} (audio the shared tagger cannot tag)")
     report.ok(len(summary.added) + len(summary.back) + len(summary.moved))

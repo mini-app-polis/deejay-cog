@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from audio_fixtures import NAMES, OTHER_FORMATS, tagged
 from mini_app_polis import pipeline_status
 from mini_app_polis.api.contract import (
     CatalogDisplay,
@@ -1292,6 +1293,44 @@ def test_an_edit_made_in_an_fx_file_goes_up_from_its_own_listing(
     [edited] = catalog.edited
     assert edited.drive_file_id == fx and edited.tags.title == retitled
     assert summary.roots[1][1].owner_edits == []
+
+
+@pytest.mark.parametrize("fmt", OTHER_FORMATS, ids=lambda f: f.value)
+def test_an_fx_file_in_any_supported_format_is_never_written_and_its_edits_go_up(
+    two_roots, wired, drive, catalog, fmt
+) -> None:
+    fx_entry = uuid.uuid4()
+    catalog.displays[fx_entry] = _display(fx_entry)
+    # Edited in the file: a genre of its own, and a title the catalog lacks.
+    data = tagged(
+        fmt,
+        catalog_id=str(fx_entry),
+        title="Honesty (Bow Cut)",
+        artist="Pink Sweat$",
+        genre="Neo Soul",
+    )
+    # Its entry moved since its last sync: the catalog would write, but the
+    # FX file wins.
+    fx = _linked(
+        drive,
+        catalog,
+        NAMES[fmt],
+        data,
+        fx_entry,
+        synced=_synced(artist="Pink Sweat$"),
+        root=FX,
+    )
+    _listed(drive, {fx: "2026-11-08T09:30:00.000Z"}, scan.listing_name(_fx_root()))
+
+    summary = sync.library_sync(run_id="y-1")
+
+    [edited] = catalog.edited
+    assert edited.drive_file_id == fx
+    assert (edited.tags.title, edited.tags.genre) == ("Honesty (Bow Cut)", "Neo Soul")
+    fx_part = summary.roots[1][1]
+    assert fx_part.written == [] and fx_part.fx_kept == [f"RnB/{NAMES[fmt]} (artist)"]
+    assert drive.items[fx].data == data
+    assert drive.writes(except_folder=STATE) == []
 
 
 def test_a_root_that_fails_does_not_stop_the_other(

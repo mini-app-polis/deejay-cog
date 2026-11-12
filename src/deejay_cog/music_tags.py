@@ -16,6 +16,11 @@ change and VirtualDJ keeps finding it by its path.
 
 A file whose tags already say what the catalog says is not written again, so
 a run that writes a file does not make the next run write it once more.
+
+FX Music's files in other formats (FLAC, Ogg Vorbis, Ogg Opus, M4A, WAV,
+AIFF) are read through the shared tagger, and only their link is ever
+written, in each format's own field (:mod:`deejay_cog.audio_formats`); any
+other write to one raises :class:`~deejay_cog.audio_formats.NotTaggable`.
 """
 
 from __future__ import annotations
@@ -48,6 +53,8 @@ from mutagen.id3 import (
 )
 from mutagen.mp3 import MP3
 
+from deejay_cog import audio_formats
+from deejay_cog.audio_formats import NotTaggable, other_format
 from deejay_cog.ingest_to_api import build_ingest_tracks
 from deejay_cog.music_safety import check_audio_unchanged
 
@@ -144,7 +151,13 @@ def read_tag_row(data: bytes) -> dict[str, str]:
     The remix is not read from a frame of its own: a file carries it in the
     title's parentheses, as VirtualDJ does, and the catalog lookup resolves
     the version from the title the same way it does for a play.
+
+    A file in another format is read through the shared tagger; one it
+    cannot read has every field empty.
     """
+    fmt = other_format(data)
+    if fmt is not None:
+        return _other_row(data, fmt)
     tags = _load(data)
     year = _text(tags, "TDRC")
     return {
@@ -153,6 +166,34 @@ def read_tag_row(data: bytes) -> dict[str, str]:
         "label": _text(tags, "TPUB"),
         "genre": _text(tags, "TCON"),
         "bpm": _text(tags, "TBPM"),
+        "year": year[:4] if year[:4].isdigit() else "",
+    }
+
+
+def _other_read(
+    data: bytes, fmt: audio_formats.AudioFormat | audio_formats.UnsupportedFile
+) -> tuple[dict[str, str], str]:
+    """A non-MP3 file's tags and link, both empty when it cannot be read."""
+    if isinstance(fmt, audio_formats.UnsupportedFile):
+        return {}, ""
+    try:
+        return audio_formats.read(data, fmt)
+    except NotTaggable:
+        return {}, ""
+
+
+def _other_row(
+    data: bytes, fmt: audio_formats.AudioFormat | audio_formats.UnsupportedFile
+) -> dict[str, str]:
+    """:func:`read_tag_row` for a file in a format other than MP3."""
+    tags, _ = _other_read(data, fmt)
+    year = tags.get("year", "").strip()
+    return {
+        "title": tags.get("tracktitle", "").strip(),
+        "artist": tags.get("artist", "").strip(),
+        "label": tags.get("label", "").strip(),
+        "genre": tags.get("genre", "").strip(),
+        "bpm": tags.get("bpm", "").strip(),
         "year": year[:4] if year[:4].isdigit() else "",
     }
 
@@ -302,6 +343,9 @@ def edit_label(title: str) -> str | None:
 
 def comment_text(data: bytes) -> str:
     """The file's comment frame, as text: empty when it has none."""
+    fmt = other_format(data)
+    if fmt is not None:
+        return _other_read(data, fmt)[0].get("comment", "").strip()
     tags = _load(data)
     frames = tags.getall("COMM")
     for frame in frames:
@@ -312,12 +356,18 @@ def comment_text(data: bytes) -> str:
 
 
 def linked_catalog_id(data: bytes) -> str:
-    """The catalog entry the file is linked to (``TXXX:CATALOG_ID``), or ""."""
+    """The catalog entry the file is linked to (``TXXX:CATALOG_ID``, or the
+    format's own field: :mod:`deejay_cog.audio_formats`), or ""."""
+    fmt = other_format(data)
+    if fmt is not None:
+        return _other_read(data, fmt)[1]
     return _text(_load(data), f"TXXX:{CATALOG_ID_DESC}")
 
 
 def duration_secs(data: bytes) -> float | None:
     """The audio's length in seconds, or None when it cannot be read."""
+    if other_format(data) is not None:
+        return audio_formats.duration(data)
     try:
         info = MP3(io.BytesIO(data)).info
     except Exception:  # noqa: BLE001 — a length is a nice-to-have
@@ -364,7 +414,13 @@ def write_catalog_tags(
     With ``id_only``, only ``TXXX:CATALOG_ID`` is written: no other frame
     changes, even an empty one. ``label`` is the file's own release label,
     kept in parentheses after the catalog's title (ADR-0008, decision 6).
+    A file in another format takes the link only (``id_only``).
     """
+    fmt = other_format(data)
+    if fmt is not None:
+        if not id_only:
+            raise NotTaggable("only the catalog link is written to a non-MP3 file")
+        return _other_link(data, fmt, str(match.id))
     tags = _load(data)
     title = catalog_title(match)
     wanted: list[tuple[str, Any]] = [
@@ -443,7 +499,14 @@ def write_owned_fields(data: bytes, values: dict[str, str]) -> bytes | None:
     """The file's bytes with only the owned fields in ``values`` written
     (``catalog_id`` writes ``TXXX:CATALOG_ID``), or None when they already
     hold those values. Every other frame, the comment included, is left as
-    it is."""
+    it is. A file in another format takes ``catalog_id`` only."""
+    fmt = other_format(data)
+    if fmt is not None:
+        if any(value for name, value in values.items() if name != "catalog_id"):
+            raise NotTaggable("only the catalog link is written to a non-MP3 file")
+        if "catalog_id" not in values:
+            return None
+        return _other_link(data, fmt, values["catalog_id"])
     tags = _load(data)
     wanted: list[tuple[str, Any]] = []
     for name, value in values.items():
@@ -460,6 +523,17 @@ def write_owned_fields(data: bytes, values: dict[str, str]) -> bytes | None:
     if not wanted:
         return None
     return _write_frames(data, tags, wanted)
+
+
+def _other_link(
+    data: bytes,
+    fmt: audio_formats.AudioFormat | audio_formats.UnsupportedFile,
+    catalog_id: str,
+) -> bytes | None:
+    """A non-MP3 file's bytes with its link set, or None when it holds it."""
+    if isinstance(fmt, audio_formats.UnsupportedFile):
+        raise NotTaggable(f"{fmt.reason.value} ({fmt.detail})")
+    return audio_formats.write_link(data, fmt, catalog_id)
 
 
 def write_recording_tags(
@@ -486,7 +560,10 @@ def _write_frames(
     data: bytes, tags: ID3, wanted: list[tuple[str, Any]]
 ) -> bytes | None:
     """``data`` with ``wanted`` written over ``tags``, or None when every
-    frame already holds what would be written."""
+    frame already holds what would be written. Never writes an ID3 tag
+    into a file in another format."""
+    if other_format(data) is not None:
+        raise NotTaggable("ID3 frames are written to MP3 files only")
     if all(_same(tags.get(key), frame) for key, frame in wanted):
         return None
     for key, frame in wanted:

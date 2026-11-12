@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from audio_fixtures import NAMES, OTHER_FORMATS, tagged
 from mini_app_polis import pipeline_status
 from mini_app_polis.api import OtherLibraryError
 from mini_app_polis.api.contract import (
@@ -35,8 +36,10 @@ from mutagen.id3 import COMM, ID3, TBPM, TCON, TDRC, TIT2, TPE1
 from deejay_cog import fingerprint as fp
 from deejay_cog import library_backfill as backfill
 from deejay_cog import library_identify as ident
+from deejay_cog.audio_formats import other_format
 from deejay_cog.fingerprint_jobs import FingerprintJobMessage, FingerprintJobs
 from deejay_cog.music_safety import FlowMode, RunRecord
+from deejay_cog.music_tags import linked_catalog_id, read_tag_row
 from deejay_cog.second_opinion import Heard, Recording
 from flag_fakes import FLAGS
 
@@ -1538,6 +1541,47 @@ def test_an_fx_file_the_fingerprint_would_match_is_never_fingerprinted(
     [reg] = api.registrations
     assert reg.identification_status == "unidentified" and "FX Music" in (
         reg.identify_note or ""
+    )
+    assert summary.skipped
+
+
+@pytest.mark.parametrize("fmt", OTHER_FORMATS, ids=lambda f: f.value)
+def test_an_fx_file_in_any_supported_format_is_read_and_linked(
+    settings, fx_api, drive, jobs, fmt
+) -> None:
+    api = fx_api
+    data = tagged(fmt, title="temple", artist="thomas gold", year="2016")
+    drive_id = _unidentified(drive, api, NAMES[fmt], data, root=FX)
+
+    ident.library_identify(run_id="i-1")
+
+    [made] = api.created
+    assert (made.library, made.title, made.release_year) == ("fx", "temple", 2016)
+    written = drive.items[drive_id].data
+    assert linked_catalog_id(written) == str(_FX_ENTRY)
+    # Only the link: the file keeps its format and its own tags.
+    assert other_format(written) is fmt
+    assert read_tag_row(written) == read_tag_row(data)
+    [reg] = api.registrations
+    assert reg.catalog_id == _FX_ENTRY and reg.duration_secs
+    assert jobs.sent == []
+
+
+def test_an_fx_file_the_shared_tagger_cannot_tag_is_left_for_the_owner(
+    settings, fx_api, drive, jobs
+) -> None:
+    api = fx_api
+    broken = b"fLaC" + b"\x00" * 40
+    drive_id = _unidentified(drive, api, "bow.flac", broken, root=FX)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert drive.items[drive_id].data == broken
+    assert api.created == [] and jobs.sent == []
+    [reg] = api.registrations
+    assert "cannot tag" in (reg.identify_note or "")
+    assert _state(drive, ident.TRIED_NAME)["files"][drive_id]["outcome"] == (
+        "fx_untaggable"
     )
     assert summary.skipped
 

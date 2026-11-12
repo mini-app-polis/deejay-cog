@@ -51,7 +51,10 @@ the other; the failure is raised once the other has run. An audio mismatch
 stops the run, whatever the root. With more than one root, every line of
 the report names its root.
 
-**Per file:** not an MP3 (by its listed type or name) → skipped, named. No
+**Per file:** not an MP3 (by its listed type or name) → skipped, named; in
+FX Music, not audio in a format the shared tagger supports (ADR-0010
+decision 2: FLAC, Ogg Vorbis, Ogg Opus, M4A, WAV and AIFF as well), or a
+partial download. No
 longer in the folder the manifest has it in, or in the trash → skipped,
 named. No usable title or artist → skipped and named as needing
 fingerprinting (library files are **not** sent to the fingerprint function:
@@ -114,6 +117,7 @@ from mini_app_polis.google import GoogleAPI
 from mini_app_polis.lambda_worker import RunOutOfTime
 from mini_app_polis.mp3.tag import MAIN as MAIN_PROFILE
 from mini_app_polis.mp3.tag import RuleProfile, Winner, get_profile
+from mini_app_polis.mp3.tag.audio_tagger import PARTIAL_DOWNLOAD_SUFFIXES
 
 from deejay_cog._pipeline_eval import REPO, post_run_finding, run_report
 from deejay_cog._shared_deadline import shared_deadline_passed
@@ -268,6 +272,32 @@ class LibraryRoot:
         profile): its values go up, and the catalog's are never written over
         it."""
         return self.profile.winner is Winner.FILE
+
+    @property
+    def every_format(self) -> bool:
+        """Whether its files are tagged in every format the shared tagger
+        supports, not MP3 only: the main profile stays MP3-only (ADR-0010
+        decision 2)."""
+        return self.profile.name != MAIN_PROFILE.name
+
+    def lists(self, item: dict[str, Any]) -> bool:
+        """Whether a listed file is one of this root's files to tag: an MP3
+        for the main library, audio in any supported format for the others;
+        never a partial download."""
+        if self.every_format:
+            return is_audio_listing(item)
+        return is_mp3_listing(item)
+
+    def untaggable(self, item: dict[str, Any]) -> bool:
+        """Whether a listed file is audio this root cannot tag, to report: a
+        format the shared tagger does not support. The main library reports
+        none; partial downloads and files that are not audio are ignored."""
+        if not self.every_format or self.lists(item) or _is_partial(item):
+            return False
+        name = str(item.get("name", "")).lower()
+        return str(item.get("mime_type", "")).startswith("audio/") or name.endswith(
+            OTHER_AUDIO_SUFFIXES
+        )
 
     @property
     def folder_ids(self) -> list[str]:
@@ -749,6 +779,74 @@ def is_mp3_listing(item: dict[str, Any]) -> bool:
     ).lower().endswith(".mp3")
 
 
+#: The name endings of the formats the shared tagger supports.
+AUDIO_SUFFIXES = (
+    ".mp3",
+    ".flac",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".m4a",
+    ".wav",
+    ".aif",
+    ".aiff",
+    ".aifc",
+)
+#: The types Drive lists those formats under.
+AUDIO_MIME_TYPES = frozenset(
+    {
+        MP3_MIME_TYPE,
+        "audio/flac",
+        "audio/x-flac",
+        "audio/ogg",
+        "audio/opus",
+        "audio/mp4",
+        "audio/m4a",
+        "audio/x-m4a",
+        "audio/wav",
+        "audio/x-wav",
+        "audio/wave",
+        "audio/vnd.wave",
+        "audio/aiff",
+        "audio/x-aiff",
+    }
+)
+#: Name endings of audio the shared tagger does not tag, reported when a
+#: root lists one (Drive does not always give such a file an audio type).
+OTHER_AUDIO_SUFFIXES = (
+    ".wma",
+    ".aac",
+    ".ac3",
+    ".alac",
+    ".amr",
+    ".ape",
+    ".dsf",
+    ".m4b",
+    ".m4p",
+    ".mid",
+    ".midi",
+    ".mka",
+    ".mp2",
+    ".wv",
+)
+
+
+def _is_partial(item: dict[str, Any]) -> bool:
+    return str(item.get("name", "")).lower().endswith(PARTIAL_DOWNLOAD_SUFFIXES)
+
+
+def is_audio_listing(item: dict[str, Any]) -> bool:
+    """Whether a listed file is audio in a format the shared tagger
+    supports, by its type or name, and not a partial download. Its
+    contents decide in the end: one the tagger cannot read is reported when
+    it is read, and never written."""
+    if _is_partial(item):
+        return False
+    return item.get("mime_type") in AUDIO_MIME_TYPES or str(
+        item.get("name", "")
+    ).lower().endswith(AUDIO_SUFFIXES)
+
+
 class Backfill:
     """One run over one chunk of the manifest."""
 
@@ -878,8 +976,13 @@ class Backfill:
         if file_id in self.settings.skip_ids:
             self._skip(item, "skipped_by_setting", f"listed in {SKIP_IDS_VAR}")
             return "skipped_by_setting"
-        if not is_mp3_listing(item):
-            self._skip(item, "not_mp3", "not an MP3: only ID3 tags are written")
+        if not self.root.lists(item):
+            reason = (
+                "not audio the shared tagger supports"
+                if self.root.every_format
+                else "not an MP3: only ID3 tags are written"
+            )
+            self._skip(item, "not_mp3", reason)
             return "not_mp3"
         meta = file_meta(self.drive, file_id)
         name = str(meta.get("name") or item["name"])

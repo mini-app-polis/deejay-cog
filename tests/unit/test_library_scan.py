@@ -603,7 +603,6 @@ def test_fx_music_is_listed_and_registered_as_its_own_root(
     registry.add(a, "a.mp3")
     walk_on = drive.add("Walk-ons", FX, mime_type=FOLDER)
     clip = drive.add("a.mp3", walk_on)
-    drive.add("bow.wav", FX, mime_type="audio/wav")  # MP3s only
 
     summary = scan.library_scan(run_id="s-1")
 
@@ -619,6 +618,36 @@ def test_fx_music_is_listed_and_registered_as_its_own_root(
     assert all(item["id"] != clip for item in _listing(drive)["files"])
 
 
+def test_fx_music_lists_every_supported_format_and_reports_untaggable_audio(
+    settings, fx, wired, drive, registry, posted
+) -> None:
+    a = drive.add("a.mp3", ROOT)
+    _backfill_done(drive, [a], position=1)
+    registry.add(a, "a.mp3")
+    drive.add("main.flac", ROOT, mime_type="audio/flac")  # the main library: MP3s only
+    names = ["bow.wav", "walk.flac", "mc.m4a", "award.ogg", "clip.opus", "x.aiff"]
+    for name in names:
+        drive.add(name, FX, mime_type="application/octet-stream")
+    drive.add("intro.wav", FX, mime_type="audio/wav")
+    drive.add("half.m4a.part", FX, mime_type="audio/mp4")
+    drive.add("cut.mp3.crdownload", FX)
+    drive.add("still.flac.partial", FX)
+    drive.add("cues.xlsx", FX, mime_type="application/vnd.ms-excel")
+    drive.add("notes.pdf", FX, mime_type="application/pdf")
+    drive.add("old.wma", FX, mime_type="application/octet-stream")
+    drive.add("sting.aac", FX, mime_type="audio/aac")
+
+    summary = scan.library_scan(run_id="s-1")
+
+    assert sorted(summary.added) == sorted([*names, "intro.wav"])
+    assert {p.library_root_id for p in registry.registrations} == {FX}
+    assert sorted(summary.untaggable) == ["old.wma", "sting.aac"]
+    text = _text(posted)
+    assert "old.wma (audio the shared tagger cannot tag)" in text
+    assert "main.flac" not in text
+    assert ".part" not in text and "cues.xlsx" not in text
+
+
 def test_one_roots_refusal_does_not_stop_the_other(
     settings, fx, wired, drive, registry, posted
 ) -> None:
@@ -627,7 +656,7 @@ def test_one_roots_refusal_does_not_stop_the_other(
     registry.add(a, "a.mp3")
     new = drive.add("b.mp3", ROOT)
     for n in range(2):
-        registry.add(f"fx-{n}", f"fx-{n}.mp3", root=FX)  # FX lists no MP3s
+        registry.add(f"fx-{n}", f"fx-{n}.mp3", root=FX)  # FX lists no audio
 
     summary = scan.library_scan(run_id="s-1")
 
@@ -636,7 +665,7 @@ def test_one_roots_refusal_does_not_stop_the_other(
     assert [p.drive_file_id for p in registry.registrations] == [new]
     assert registry.absent_calls == []
     assert all(registry.rows[f"fx-{n}"].present for n in range(2))
-    assert "no MP3s" in _text(posted)
+    assert "no audio files" in _text(posted)
 
 
 def test_the_main_roots_files_are_not_made_absent_by_fx_music(

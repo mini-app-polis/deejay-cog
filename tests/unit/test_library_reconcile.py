@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from audio_fixtures import NAMES, OTHER_FORMATS, tagged
 from mini_app_polis import pipeline_status
 from mini_app_polis.api import KaianoApiError
 from mini_app_polis.api.contract import (
@@ -41,6 +42,7 @@ from deejay_cog import library_reconcile as rec
 from deejay_cog import library_scan as scan
 from deejay_cog.library_backfill import StateFile
 from deejay_cog.music_safety import FlowMode, check_audio_unchanged
+from deejay_cog.music_tags import linked_catalog_id, read_tag_row
 from flag_fakes import FLAGS
 
 ROOT, STATE, FX = "root", "state", "fx"
@@ -1522,6 +1524,53 @@ def test_every_fx_difference_goes_up_to_its_entry_without_approval(
         f"{backfill.FX_ROOT_FOLDER_VAR}: Bow/bow.mp3: genre 'Pop' -> 'Neo Soul'" in text
     )
     assert f"{backfill.ROOT_FOLDER_VAR}: " in text
+
+
+@pytest.mark.parametrize("fmt", OTHER_FORMATS, ids=lambda f: f.value)
+def test_an_fx_file_in_any_supported_format_sends_its_values_up(
+    two_roots, writing, drive, fmt
+) -> None:
+    entry = uuid.uuid4()
+    data = tagged(fmt, catalog_id=str(entry), **_tags(genre="Neo Soul", year="2016"))
+    fx_id = drive.add(NAMES[fmt], FX, data)
+    path = f"Bow/{NAMES[fmt]}"
+    writing.rows.append(_row(fx_id, entry, library_root_id=FX, path=path))
+    writing.displays[entry] = _display(entry)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    fx = summary.roots[1][1]
+    [kept] = writing.kept
+    assert kept.drive_file_id == fx_id and kept.keep_file == ["genre", "year"]
+    assert kept.tags.genre == "Neo Soul"
+    assert fx.fx_sent_up == [
+        f"{path}: year '2017' -> '2016'",
+        f"{path}: genre 'Pop' -> 'Neo Soul'",
+    ]
+    # Held for no one: nothing goes to the review page, and the file is
+    # never written.
+    assert all(r.differences == [] for r in writing.reviews)
+    assert drive.items[fx_id].data == data
+
+
+@pytest.mark.parametrize("fmt", OTHER_FORMATS, ids=lambda f: f.value)
+def test_an_fx_link_naming_another_entry_is_corrected_in_the_formats_own_field(
+    two_roots, writing, drive, fmt
+) -> None:
+    entry = uuid.uuid4()
+    data = tagged(fmt, catalog_id="stale", **_tags())
+    fx_id = drive.add(NAMES[fmt], FX, data)
+    writing.rows.append(_row(fx_id, entry, library_root_id=FX, path=NAMES[fmt]))
+    writing.displays[entry] = _display(entry)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    written = drive.items[fx_id].data
+    assert linked_catalog_id(written) == str(entry)
+    assert read_tag_row(written) == read_tag_row(data)
+    check_audio_unchanged(data, written)
+    assert summary.roots[1][1].written == [f"{NAMES[fmt]} (catalog_id)"]
+    assert writing.kept == []
 
 
 def test_a_dry_run_sends_nothing_up_from_fx_and_says_what_would_go(
