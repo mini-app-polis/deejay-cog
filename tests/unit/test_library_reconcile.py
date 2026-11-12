@@ -43,7 +43,7 @@ from deejay_cog.library_backfill import StateFile
 from deejay_cog.music_safety import FlowMode, check_audio_unchanged
 from flag_fakes import FLAGS
 
-ROOT, STATE = "root", "state"
+ROOT, STATE, FX = "root", "state", "fx"
 _NOW = dt.datetime(2026, 11, 6, tzinfo=dt.UTC)
 
 
@@ -236,7 +236,8 @@ class FakeCatalog:
         self.pages.append(kwargs)
         assert kwargs["identification_status"] == "identified"
         assert kwargs["present"] is True
-        listed = [r for r in self.rows if r.present]
+        root = kwargs["library_root_id"]
+        listed = [r for r in self.rows if r.present and r.library_root_id == root]
         if "after" in kwargs:
             ids = [r.id for r in self.rows]
             if kwargs["after"] not in ids:
@@ -244,7 +245,11 @@ class FakeCatalog:
             # The registry's own order: the rows after that one, wherever
             # it now stands.
             after = ids.index(kwargs["after"])
-            listed = [r for r in self.rows[after + 1 :] if r.present]
+            listed = [
+                r
+                for r in self.rows[after + 1 :]
+                if r.present and r.library_root_id == root
+            ]
             return listed[: kwargs["limit"]]
         start = kwargs["offset"]
         return listed[start : start + kwargs["limit"]]
@@ -296,7 +301,7 @@ class WritingCatalog(FakeCatalog):
                     why=held,
                 )
             )
-            if not held:
+            if not held and not payload.preview:
                 taken[name] = tags[name]
         updates: dict = {}
         for name, value in taken.items():
@@ -1462,3 +1467,132 @@ def test_an_unmarked_file_is_compared_as_before(settings, owner_edits, drive) ->
 
     assert owner_edits.lookups == [] and owner_edits.created == []
     assert [d.field for d in summary.differences["other"]] == ["title"]
+
+
+# ---------------------------------------------------------------------------
+# FX Music: the file wins (ADR-0009, ADR-0010)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def two_roots(settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(backfill.FX_ROOT_FOLDER_VAR, FX)
+
+
+def _fx_file(drive: FakeDrive, api: FakeCatalog, **kw: str) -> str:
+    entry = uuid.uuid4()
+    drive_id = drive.add("bow.mp3", FX, _song(entry, **kw))
+    api.rows.append(_row(drive_id, entry, library_root_id=FX, path="Bow/bow.mp3"))
+    api.displays[entry] = _display(entry)
+    return drive_id
+
+
+def test_every_fx_difference_goes_up_to_its_entry_without_approval(
+    two_roots, writing, drive, posted
+) -> None:
+    [main_id] = _library(drive, writing, [{"genre": "Neo Soul"}])
+    fx_id = _fx_file(drive, writing, genre="Neo Soul", year="2016", label="")
+    before = drive.items[fx_id].data
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    (_, main), (_, fx) = summary.roots
+    # The main library still waits for approvals; none are set.
+    assert main.approvals_missing and main.kept == []
+    # The FX file wins: its values go up, and it is never written.
+    [kept] = writing.kept
+    assert kept.drive_file_id == fx_id and kept.preview is False
+    assert kept.keep_file == ["genre", "year"]
+    assert drive.items[fx_id].data == before
+    assert fx.fx_sent_up == [
+        "Bow/bow.mp3: year '2017' -> '2016'",
+        "Bow/bow.mp3: genre 'Pop' -> 'Neo Soul'",
+    ]
+    # A field the file leaves empty is not sent up.
+    assert fx.fx_not_sent == [
+        "Bow/bow.mp3: label (the file has none; its entry keeps 'Atlantic')"
+    ]
+    # FX differences never reach the review page.
+    [review] = writing.reviews
+    assert review.compared == [main_id]
+    assert {d.drive_file_id for d in review.differences} == {main_id}
+    assert _state(drive, "library-reconcile-fx-seen.json")["files"].keys() == {fx_id}
+    text = _text(posted)
+    assert (
+        f"{backfill.FX_ROOT_FOLDER_VAR}: Bow/bow.mp3: genre 'Pop' -> 'Neo Soul'" in text
+    )
+    assert f"{backfill.ROOT_FOLDER_VAR}: " in text
+
+
+def test_a_dry_run_sends_nothing_up_from_fx_and_says_what_would_go(
+    two_roots, wired, drive, posted
+) -> None:
+    writing = WritingCatalog()
+    fx_id = _fx_file(drive, writing, genre="Neo Soul")
+
+    summary = rec.run_reconcile(run_id="r-1", mode=FlowMode.DRY_RUN, api=writing)
+
+    (_, fx) = summary.roots[1]
+    [asked] = writing.kept
+    assert asked.drive_file_id == fx_id and asked.preview is True
+    assert writing.displays[writing.rows[0].catalog_id].genre == "Pop"
+    assert fx.fx_sent_up == ["Bow/bow.mp3: genre 'Pop' -> 'Neo Soul'"]
+    assert "would_send_up" in _text(posted)
+    # Nothing marked compared: the next run compares the file again.
+    assert _state(drive, "library-reconcile-fx-seen.json") is None
+    again = rec.run_reconcile(run_id="r-2", mode=FlowMode.DRY_RUN, api=writing)
+    assert again.roots[1][1].compared == 1
+
+
+def test_an_fx_value_the_api_holds_is_named_with_why(two_roots, writing, drive) -> None:
+    _fx_file(drive, writing, artist="Charlie Puth & Kaskade")
+    writing.holds["artist"] = "not split into parts cleanly"
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    fx = summary.roots[1][1]
+    assert fx.fx_sent_up == []
+    assert fx.kept_held == [
+        "Bow/bow.mp3: artist 'Charlie Puth' -> 'Charlie Puth & Kaskade' "
+        "(held: not split into parts cleanly)"
+    ]
+
+
+def test_main_approvals_that_cannot_be_read_do_not_stop_fx(
+    two_roots, writing, drive, monkeypatch
+) -> None:
+    _library(drive, writing, [{"genre": "Neo Soul"}])
+    fx_id = _fx_file(drive, writing, genre="Neo Soul")
+
+    def unreadable() -> ReconcileApprovals:
+        raise RuntimeError("API down")
+
+    monkeypatch.setattr(writing, "read_reconcile_approvals", unreadable)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    (_, main), (_, fx) = summary.roots
+    assert main.problems and main.compared == 0
+    assert [k.drive_file_id for k in writing.kept] == [fx_id]
+    assert fx.fx_sent_up == ["Bow/bow.mp3: genre 'Pop' -> 'Neo Soul'"]
+
+
+def test_a_root_that_fails_does_not_stop_the_other(
+    two_roots, writing, drive, posted, monkeypatch
+) -> None:
+    _library(drive, writing, [{}])
+    fx_id = _fx_file(drive, writing, genre="Neo Soul")
+    real = writing.list_library_files
+
+    def listing(**kwargs):
+        if kwargs["library_root_id"] == ROOT:
+            raise RuntimeError("API down")
+        return real(**kwargs)
+
+    monkeypatch.setattr(writing, "list_library_files", listing)
+
+    with pytest.raises(RuntimeError, match="API down"):
+        rec.library_reconcile(run_id="r-1")
+
+    assert [k.drive_file_id for k in writing.kept] == [fx_id]
+    assert f"{backfill.ROOT_FOLDER_VAR}: the run over this root failed" in _text(posted)

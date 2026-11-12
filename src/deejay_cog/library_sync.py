@@ -77,6 +77,17 @@ is not, until a frame for it is decided.
 **The report** says how many files each entry's change reached, so an edit
 or a rule change can be followed to the files it touched.
 
+**Roots** (ADR-0009). Each library root is synced on its own, the main
+library first, from its own scan listing and its own registry rows; a root
+that fails does not stop the other (its failure is raised once the other has
+run). With more than one root, every line of the report names its root.
+**FX Music's files win** (ADR-0010): an edit made in an FX file goes up to
+its fx entry as above (an owner-edit retitle included: an FX file's title is
+its own), but the catalog's values are never written over an FX file. One
+whose entry moved keeps what it holds, is recorded as synced with the values
+it already had recorded, and is named in the report (``fx_file_wins``); the
+reconcile then sends its values up to the entry.
+
 **Safety:** ``flags.deejay_cog.library_sync`` is ``off`` unless ``dry-run`` or
 ``write``. It was kept off until the library was reconciled, so the
 reconcile, with the owner's approvals, decided the first writes. A dry run
@@ -116,8 +127,15 @@ from deejay_cog._pipeline_eval import REPO, post_run_finding, run_report
 from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
-from deejay_cog.library_backfill import BackfillSettings, StateFile, StateProblem
-from deejay_cog.library_scan import LISTING_NAME as SCAN_LISTING_NAME
+from deejay_cog.library_backfill import (
+    BackfillSettings,
+    LibraryRoot,
+    StateFile,
+    StateProblem,
+    each_root,
+    record_roots,
+)
+from deejay_cog.library_scan import listing_name
 from deejay_cog.music_safety import (
     AudioChanged,
     FlowMode,
@@ -292,6 +310,10 @@ class SyncSummary:
     reached: Counter[str] = field(default_factory=Counter)
     aborted: str = ""
     stopped: str = ""
+    #: FX Music files whose entry moved: the file wins, nothing is written.
+    fx_kept: list[str] = field(default_factory=list)
+    #: With more than one root, each root's own summary, in order.
+    roots: list[tuple[LibraryRoot, SyncSummary]] = field(default_factory=list)
 
 
 def _settings() -> tuple[BackfillSettings | None, int, int, list[str]]:
@@ -380,6 +402,26 @@ def _sync_one(
     return None
 
 
+def _fx_one(
+    row: LibraryFile, display: CatalogDisplay, summary: SyncSummary
+) -> LibraryFileTags:
+    """An FX Music file: its tags win (ADR-0010), so the catalog's values
+    are never written over it. The values to record: the entry's for a file
+    with none recorded yet, as for any file, and otherwise those it already
+    had recorded, since it still holds them; the reconcile sends its values
+    up to the entry."""
+    now = display_fields(display, label=row.edit_label)
+    if row.synced is None:
+        summary.recorded.append(row.path)
+        return LibraryFileTags(**now)
+    moved = _moved(now, row.synced)
+    if moved:
+        summary.fx_kept.append(f"{row.path} ({', '.join(sorted(moved))})")
+    else:
+        summary.unmoved.append(row.path)
+    return row.synced
+
+
 def _mark(api: Catalog, done: dict[str, LibraryFileTags]) -> None:
     when = datetime.now(UTC)
     ids = list(done)
@@ -411,9 +453,12 @@ def _edits_share_spent(cutoff: float | None) -> bool:
     return remaining is not None and remaining <= cutoff
 
 
-def _changed_since_sync(drive: Any, settings: BackfillSettings) -> dict[str, datetime]:
-    """When Drive last saw each listed file change, from the scan's listing."""
-    listing = StateFile(drive, settings.state, SCAN_LISTING_NAME).load() or {}
+def _changed_since_sync(
+    drive: Any, settings: BackfillSettings, root: LibraryRoot
+) -> dict[str, datetime]:
+    """When Drive last saw each listed file change, from the scan's listing
+    of ``root``."""
+    listing = StateFile(drive, settings.state, listing_name(root)).load() or {}
     changed: dict[str, datetime] = {}
     for item in listing.get("files") or []:
         when = item.get("modified")
@@ -422,12 +467,12 @@ def _changed_since_sync(drive: Any, settings: BackfillSettings) -> dict[str, dat
     return changed
 
 
-def _present_files(api: Catalog) -> list[LibraryFile]:
-    """Every present registry row."""
+def _present_files(api: Catalog, root: str) -> list[LibraryFile]:
+    """Every present registry row under ``root``."""
     rows: list[LibraryFile] = []
     while True:
         page = api.list_library_files(
-            present=True, limit=REGISTRY_PAGE, offset=len(rows)
+            library_root_id=root, present=True, limit=REGISTRY_PAGE, offset=len(rows)
         )
         rows.extend(page)
         if len(page) < REGISTRY_PAGE:
@@ -648,6 +693,7 @@ def _edits(
     drive: Any,
     api: Catalog,
     settings: BackfillSettings,
+    root: LibraryRoot,
     flood: int,
     run_id: str,
     summary: SyncSummary,
@@ -659,14 +705,14 @@ def _edits(
     change is an edit and goes up, however many files changed. Past the
     ``flood`` backstop, the whole change is held instead."""
     try:
-        changed = _changed_since_sync(drive, settings)
+        changed = _changed_since_sync(drive, settings, root)
     except StateProblem as exc:
         summary.failed.append(f"edits made in files not read: {exc}")
         return
     if not changed:
         return
     rows: list[LibraryFile] = []
-    for row in _present_files(api):
+    for row in _present_files(api, root.root_id):
         when = changed.get(row.drive_file_id)
         if (
             when is None
@@ -702,10 +748,19 @@ def _edits(
         run_id,
         summary.mode,
         stage="stale write-backs put back",
-        folders={"root": settings.root, "state": settings.state},
+        folders={"root": root.root_id, "state": settings.state},
     ).attach(drive, settings.state)
     try:
-        _read_edits(drive, api, record, rows, replaced, summary, cutoff)
+        _read_edits(
+            drive,
+            api,
+            record,
+            rows,
+            replaced,
+            summary,
+            cutoff,
+            owner_edits=root.key != "fx",
+        )
     finally:
         with without_run_deadline():
             if record.entries:
@@ -728,7 +783,12 @@ def _read_edits(
     replaced: dict[str, dict[str, set[str]]],
     summary: SyncSummary,
     cutoff: float | None,
+    *,
+    owner_edits: bool = True,
 ) -> None:
+    """Read each changed file and send its edits up. With ``owner_edits``
+    off (FX Music, whose files win), a retitle as an owner edit goes up
+    like any other edit."""
     for index, row in enumerate(rows):
         if shared_deadline_passed():
             summary.stopped = f"run deadline reached before reading {row.path}"
@@ -746,7 +806,9 @@ def _read_edits(
                 # A stale field that could not be put back must not go up.
                 continue
             tags = {k: v or None for k, v in read_tag_row(data).items()}
-            if _retitled_as_owner_edit(api, row, tags.get("title") or ""):
+            if owner_edits and _retitled_as_owner_edit(
+                api, row, tags.get("title") or ""
+            ):
                 summary.owner_edits.append(
                     f"{row.path}: title {tags.get('title')!r} (an owner edit: "
                     "the reconcile links it to its own entry)"
@@ -791,18 +853,19 @@ def _sync(
     drive: Any,
     api: Catalog,
     settings: BackfillSettings,
+    root: LibraryRoot,
     chunk_size: int,
     flood: int,
     run_id: str,
     summary: SyncSummary,
 ) -> None:
-    _edits(drive, api, settings, flood, run_id, summary, _edits_cutoff())
+    _edits(drive, api, settings, root, flood, run_id, summary, _edits_cutoff())
     if summary.stopped or summary.aborted:
         if summary.aborted:
             _report_abort(run_id, summary)
         return
     rows = api.list_library_files_needing_sync(
-        library_root_id=settings.root, limit=chunk_size, offset=0
+        library_root_id=root.root_id, limit=chunk_size, offset=0
     )
     left = set(summary.edits_left) | summary.owner_edit_ids
     rows = [row for row in rows if row.drive_file_id not in left]
@@ -815,7 +878,7 @@ def _sync(
         run_id,
         summary.mode,
         stage=f"{len(rows)} files needing a sync",
-        folders={"root": settings.root, "state": settings.state},
+        folders={"root": root.root_id, "state": settings.state},
     ).attach(drive, settings.state)
     summary.record_name = record.file_name
     done: dict[str, LibraryFileTags] = {}
@@ -833,7 +896,11 @@ def _sync(
                 )
                 continue
             try:
-                values = _sync_one(drive, record, row, display, summary)
+                values = (
+                    _fx_one(row, display, summary)
+                    if root.key == "fx"
+                    else _sync_one(drive, record, row, display, summary)
+                )
                 if values is not None:
                     done[row.drive_file_id] = values
             except AudioChanged as exc:
@@ -905,10 +972,43 @@ def run_sync(
             client = api or cast(
                 Catalog, api_client(base_url=api_base_url().strip() or None)
             )
-            _sync(drive, client, settings, chunk_size, flood, run_id, summary)
+            if len(settings.roots) == 1:
+                root = settings.roots[0]
+                _sync(drive, client, settings, root, chunk_size, flood, run_id, summary)
+            else:
+                _sync_roots(drive, client, settings, chunk_size, flood, run_id, summary)
         finally:
-            _record(report, summary, monotonic() - started_at)
+            if summary.roots:
+                record_roots(report, summary.roots, _record, monotonic() - started_at)
+            else:
+                _record(report, summary, monotonic() - started_at)
     return summary
+
+
+def _sync_roots(
+    drive: Any,
+    api: Catalog,
+    settings: BackfillSettings,
+    chunk_size: int,
+    flood: int,
+    run_id: str,
+    summary: SyncSummary,
+) -> None:
+    """Each root on its own, the main library first (ADR-0009). An audio
+    mismatch or the run's deadline stops the run, whatever the root."""
+
+    def run(root: LibraryRoot) -> bool:
+        part = SyncSummary(summary.mode)
+        summary.roots.append((root, part))
+        _sync(drive, api, settings, root, chunk_size, flood, run_id, part)
+        return not (part.aborted or part.stopped)
+
+    def failed(_root: LibraryRoot, exc: Exception) -> None:
+        summary.roots[-1][1].failed.append(
+            f"the run over this root failed ({type(exc).__name__}: {exc})"
+        )
+
+    each_root(settings.roots, run, failed)
 
 
 def library_sync(*, run_id: str | None = None) -> SyncSummary:
@@ -986,6 +1086,13 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
     report.count("owner_edits_left", len(summary.owner_edits))
     for line in summary.owner_edits:
         report.notice("owner_edit_left_for_reconcile", line)
+    if summary.fx_kept:
+        report.count("fx_file_wins", len(summary.fx_kept))
+    for line in summary.fx_kept:
+        report.notice(
+            "fx_file_wins",
+            f"{line}: its entry moved; the FX file keeps its own values",
+        )
     report.count("marked_synced", len(summary.synced))
     report.count("failed", len(summary.failed))
     for shown, files in sorted(summary.reached.items()):

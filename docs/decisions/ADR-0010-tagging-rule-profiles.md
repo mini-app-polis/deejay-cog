@@ -97,3 +97,39 @@ stay simple.
   uploads, without a second implementation.
 - The role and event tags need a decision before the `fx` profile writes
   them.
+
+## Amended 2026-11-11 (owner): the reconcile over FX Music
+
+### Context
+
+Decision 3 makes an FX file's tags the source of truth, and the
+consequences say the reconcile treats an FX difference as the file's value
+going up to its fx entry. The reconcile's approvals are by kind and cover
+every file, and the review page exists to choose which side wins. Running
+the reconcile once per library root (ADR-0009) needed a rule for FX files
+so that an approval for the catalog never writes catalog values over one.
+
+### Decision
+
+1. **Every FX difference goes up to the file's fx entry, with no
+   approval.** The file wins, so there is nothing to choose: FX differences
+   are not filed for review and never appear on the review page, and the
+   approvals apply to the main library only.
+2. **Nothing changes silently.** The run report lists each value sent up,
+   by file and field.
+3. **The reconcile's flag applies to FX too.** In a dry run nothing is
+   sent up and the report says what would be, so the first FX pass is read
+   before it writes.
+4. **FX files are real recordings, kept apart only for duplicates.** Each
+   has its own fx entry; the two libraries are separate so that duplicates
+   are never matched, grouped or resolved across them. An fx entry does not
+   link to the main library's entry for the same recording.
+
+### Consequences
+
+- The reconcile, backfill and sync run once per root; for FX the backfill
+  and sync never write catalog values over a file, and the reconcile only
+  sends values up.
+- A wrong tag on an FX file reaches its fx entry. Plays never land on an fx
+  entry and the main library never links to one, so the mistake stays with
+  that file, and is fixed in the file's tags.

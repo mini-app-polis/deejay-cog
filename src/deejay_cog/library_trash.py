@@ -18,8 +18,14 @@ A file already in the trash, or gone from Drive, is only marked not
 present. No other file is touched: the step trashes nothing the registry
 does not mark, and the registry is marked only through the owner's choice.
 
+**Roots** (ADR-0009). Each library root's trash-requested files are
+listed and trashed on their own, the main library first; a root that fails
+does not stop the other (its failure is raised once the other has run).
+With more than one root, every line of the report names its root.
+
 **Safety:** ``flags.deejay_cog.library_trash`` is ``off`` unless ``dry-run`` or
-``write``. A dry run lists the files it would trash and changes nothing.
+``write``, for every root. A dry run lists the files it would trash and
+changes nothing.
 """
 
 from __future__ import annotations
@@ -43,7 +49,12 @@ from deejay_cog._pipeline_eval import REPO, run_report
 from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
-from deejay_cog.library_backfill import BackfillSettings
+from deejay_cog.library_backfill import (
+    BackfillSettings,
+    LibraryRoot,
+    each_root,
+    record_roots,
+)
 from deejay_cog.music_safety import FlowMode, file_meta, flow_mode, local_run_id
 
 log = logger_mod.get_logger()
@@ -85,6 +96,8 @@ class TrashSummary:
     marked_absent: int = 0
     failed: list[str] = field(default_factory=list)
     stopped: str = ""
+    #: With more than one root, each root's own summary, in order.
+    roots: list[tuple[LibraryRoot, TrashSummary]] = field(default_factory=list)
 
 
 def _requested(api: Catalog, root: str) -> list[LibraryFile]:
@@ -184,10 +197,35 @@ def run_trash(
             client = api or cast(
                 Catalog, api_client(base_url=api_base_url().strip() or None)
             )
-            _trash(drive, client, settings.root, summary)
+            if len(settings.roots) == 1:
+                _trash(drive, client, settings.root, summary)
+            else:
+                _trash_roots(drive, client, settings, summary)
         finally:
-            _record(report, summary, monotonic() - started_at)
+            if summary.roots:
+                record_roots(report, summary.roots, _record, monotonic() - started_at)
+            else:
+                _record(report, summary, monotonic() - started_at)
     return summary
+
+
+def _trash_roots(
+    drive: Any, api: Catalog, settings: BackfillSettings, summary: TrashSummary
+) -> None:
+    """Each root on its own, the main library first (ADR-0009)."""
+
+    def run(root: LibraryRoot) -> bool:
+        part = TrashSummary(summary.mode)
+        summary.roots.append((root, part))
+        _trash(drive, api, root.root_id, part)
+        return not part.stopped
+
+    def failed(_root: LibraryRoot, exc: Exception) -> None:
+        summary.roots[-1][1].failed.append(
+            f"the run over this root failed ({type(exc).__name__}: {exc})"
+        )
+
+    each_root(settings.roots, run, failed)
 
 
 def library_trash(*, run_id: str | None = None) -> TrashSummary:

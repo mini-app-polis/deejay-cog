@@ -155,6 +155,13 @@ def _normal(text: str) -> str:
     return " ".join(_NOT_WORD.sub(" ", text.casefold()).split())
 
 
+def shown_path(path: str) -> str:
+    """A registered path as the report shows it: from its library's root,
+    with a leading slash (a file at the top of the main library is
+    registered by its bare name). The registry is not changed."""
+    return path if path.startswith("/") else f"/{path}"
+
+
 def name_key(path: str) -> str:
     """The folder and file name with the extension and a copy suffix
     dropped: ``House/9to5 (1).mp3`` -> ``house/9to5``."""
@@ -503,7 +510,12 @@ def _record(report: Any, summary: DuplicatesSummary, duration_sec: float) -> Non
             # groups that are the same as last run wait on the page, unrepeated.
             parts = []
             for m in group.files:
-                path = summary.paths.get(m.drive_file_id, m.drive_file_id)
+                registered = summary.paths.get(m.drive_file_id)
+                path = (
+                    shown_path(registered)
+                    if registered is not None
+                    else m.drive_file_id
+                )
                 parts.append(
                     f"{path} (kept: {m.why_kept})" if m.kept_on_purpose else path
                 )

@@ -155,7 +155,9 @@ There are two libraries
 ([ADR-0009](decisions/ADR-0009-library-folders.md)): **the main library**,
 `LIBRARY_ROOT_FOLDER_ID` and New Music under one root, and **FX Music**.
 With only `LIBRARY_ROOT_FOLDER_ID` set, the scan lists that one folder as
-before. Any two of `LIBRARY_ROOT_FOLDER_ID`, `NEW_MUSIC_DESTINATION_FOLDER_ID`,
+before. Every library step runs once per library, with its state kept per
+library; see [PIPELINE.md](PIPELINE.md#the-library-jobs). Any two of
+`LIBRARY_ROOT_FOLDER_ID`, `NEW_MUSIC_DESTINATION_FOLDER_ID`,
 `FX_LIBRARY_ROOT_FOLDER_ID` and `MUSIC_TAGGING_STATE_FOLDER_ID` that name the
 same folder are a problem, for the backfill as well as the scan.
 
