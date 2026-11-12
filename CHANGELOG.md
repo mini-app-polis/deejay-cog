@@ -1,3 +1,10 @@
+## [2.58.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.58.2...v2.58.3) (2026-11-12)
+
+
+### Bug Fixes
+
+* **music-tags:** read a repeated genre value once from non-MP3 tags ([cf902d5](https://github.com/mini-app-polis/deejay-cog/commit/cf902d5cd1699b5ab3f4b8b139a7be9dd69cd726))
+
 ## [2.58.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.58.1...v2.58.2) (2026-11-12)
 
 
