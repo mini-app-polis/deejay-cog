@@ -645,8 +645,8 @@ def test_with_two_roots_each_group_names_its_root(roots) -> None:
     groups = [c.args[1] for c in report.notice.call_args_list if c.args[0] == "group"]
     main_label = f"{backfill.ROOT_FOLDER_VAR} and {backfill.NEW_MUSIC_FOLDER_VAR}"
     assert groups == [
-        f"{main_label}: same_md5: Pop/x.mp3; /New Music/x.mp3",
-        f"{FX_LABEL}: same_md5, same_name: Bows/y.mp3; Bows/y (1).mp3",
+        f"{main_label}: same_md5: /Pop/x.mp3; /New Music/x.mp3",
+        f"{FX_LABEL}: same_md5, same_name: /Bows/y.mp3; /Bows/y (1).mp3",
     ]
     assert catalog.reports == []  # a dry run sends nothing
 
@@ -666,3 +666,18 @@ def test_a_root_that_fails_does_not_stop_the_other(roots) -> None:
     assert "registry down" in summary.roots[0].failed
     issues = [c.args for c in report.issue.call_args_list]
     assert issues[0][0] == "failed" and backfill.ROOT_FOLDER_VAR in issues[0][1]
+
+
+@pytest.mark.parametrize(
+    ("registered", "shown"),
+    [
+        (
+            "ItRunsThroughMe_FeatDeLaSoul_TomMisch_97.mp3",
+            "/ItRunsThroughMe_FeatDeLaSoul_TomMisch_97.mp3",
+        ),
+        ("House/x.mp3", "/House/x.mp3"),
+        ("/New Music/x.mp3", "/New Music/x.mp3"),
+    ],
+)
+def test_a_registered_path_is_shown_from_its_root(registered: str, shown: str) -> None:
+    assert dup.shown_path(registered) == shown
