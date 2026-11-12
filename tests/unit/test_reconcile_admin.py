@@ -14,6 +14,7 @@ from music_fakes import DriveItem, FakeDrive
 
 from deejay_cog import library_reconcile as rec
 from deejay_cog import reconcile_admin as admin
+from deejay_cog.library_backfill import FX_ROOT_FOLDER_VAR, ROOT_FOLDER_VAR
 from deejay_cog.music_safety import STATE_FOLDER_VAR
 from flag_fakes import FLAGS
 
@@ -58,6 +59,8 @@ def drive(monkeypatch: pytest.MonkeyPatch) -> FakeDrive:
     google.from_env.return_value = SimpleNamespace(drive=drive)
     monkeypatch.setattr(admin, "GoogleAPI", google)
     monkeypatch.setenv(STATE_FOLDER_VAR, STATE)
+    monkeypatch.setenv(ROOT_FOLDER_VAR, "main-root")
+    monkeypatch.delenv(FX_ROOT_FOLDER_VAR, raising=False)
     return drive
 
 
@@ -252,6 +255,49 @@ def test_full_empties_the_seen_record_only_with_apply(drive, capsys) -> None:
     assert admin.main(["full", "--apply"]) == 0
     held = _get(drive, rec.SEEN_NAME)
     assert held["files"] == {} and held["flow"] == rec.FLOW_NAME
+
+
+FX_SEEN = f"{rec.FLOW_NAME}-fx-seen.json"
+
+
+def test_full_covers_each_library_or_the_one_named(drive, monkeypatch, capsys) -> None:
+    monkeypatch.setenv(FX_ROOT_FOLDER_VAR, "fx-root")
+    _put(drive, rec.SEEN_NAME, {"flow": rec.FLOW_NAME, "files": {"f1": {}}})
+    _put(drive, FX_SEEN, {"flow": rec.FLOW_NAME, "files": {"x1": {}, "x2": {}}})
+
+    assert admin.main(["full"]) == 0
+    out = capsys.readouterr().out
+    assert f"{rec.SEEN_NAME} holds 1 files" in out
+    assert f"{FX_SEEN} holds 2 files" in out
+
+    assert admin.main(["full", "--library", "fx", "--apply"]) == 0
+    assert _get(drive, FX_SEEN)["files"] == {}
+    assert _get(drive, rec.SEEN_NAME)["files"] == {"f1": {}}
+
+
+def test_a_library_not_set_up_is_refused(drive, capsys) -> None:
+    assert admin.main(["full", "--library", "fx"]) == 2
+    assert "fx library is not set up" in capsys.readouterr().err
+
+
+def test_baseline_records_each_librarys_files_in_its_own_record(
+    drive, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv(FX_ROOT_FOLDER_VAR, "fx-root")
+    calls = []
+    monkeypatch.setattr(
+        admin,
+        "baseline",
+        lambda _drive, _api, _settings, root: calls.append(root.key) or 3,
+    )
+    monkeypatch.setattr(admin, "_api", lambda: object())
+
+    assert admin.main(["baseline", "--apply"]) == 0
+
+    assert calls == ["main", "fx"]
+    out = capsys.readouterr().out
+    assert f"Recorded 3 files in {rec.SEEN_NAME}" in out
+    assert f"Recorded 3 files in {FX_SEEN}" in out
 
 
 def test_without_a_state_folder_nothing_is_done(monkeypatch, capsys) -> None:

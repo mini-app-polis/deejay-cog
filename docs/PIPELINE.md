@@ -934,6 +934,9 @@ The API's approvals hold the current choices.
   file as compared as it is now, reading none, so the next runs compare
   only what changes after. For a library just reconciled in full (the
   review page at zero).
+- `full` and `baseline` take `--library main|fx|all` (default `all`):
+  each library keeps its own seen record (`library-reconcile-seen.json`,
+  `library-reconcile-fx-seen.json`), and `all` covers every library set up.
 - `run [--mode dry-run|write] [--chunk <n>]` runs the reconcile once,
   locally, writing exactly as the scheduled run does. Without `--mode` it
   runs in the mode `flags.deejay_cog.library_reconcile` sets; `--mode`

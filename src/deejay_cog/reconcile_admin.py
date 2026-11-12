@@ -27,8 +27,9 @@ way a write run read it; without ``--apply`` it is only printed. Once the API
 holds approvals it sends nothing and says so (the API would refuse it too).
 
 **full** starts a full pass: the reconcile normally compares only the files
-that changed since it last compared them (``library-reconcile-seen.json``);
-``full --apply`` empties that record, so every file is new to it and the
+that changed since it last compared them (``library-reconcile-seen.json``,
+and ``library-reconcile-fx-seen.json`` for FX Music); ``full --apply``
+empties that record, so every file is new to it and the
 runs work through the whole library a chunk at a time. Use it after a change
 to the reconcile's own rules. Without ``--apply`` it only says how many files
 the record holds.
@@ -37,6 +38,9 @@ the record holds.
 compared as it is now, reading none, so the next runs compare only what
 changes after. For a library just reconciled in full (the review page at
 zero). Without ``--apply`` it only says what it would do.
+
+Both take ``--library main``, ``fx`` or ``all`` (the default): each library
+keeps its own seen record, and ``all`` covers every library that is set up.
 
 **run** runs the reconcile once, here, in the ``--mode`` given or, without
 one, the mode the ``flags.deejay_cog.library_reconcile`` flag sets, with the
@@ -66,7 +70,13 @@ from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 
 from deejay_cog.api_client import api_client
-from deejay_cog.library_backfill import BackfillSettings, StateFile, StateProblem
+from deejay_cog.library_backfill import (
+    BackfillSettings,
+    LibraryRoot,
+    StateFile,
+    StateProblem,
+    root_state_name,
+)
 from deejay_cog.library_reconcile import (
     APPROVALS_NAME,
     CHUNK_SIZE_VAR,
@@ -86,6 +96,10 @@ PROG = "python -m deejay_cog.reconcile_admin"
 
 #: The record names a reconcile run saves its differences under.
 RECORD_SUFFIXES = (".dry-run.json", ".differences.json")
+
+
+#: The libraries --library names; "all" is every one that is set up.
+LIBRARIES = ("main", "fx", "all")
 
 
 class AdminError(Exception):
@@ -252,6 +266,13 @@ def _parser() -> argparse.ArgumentParser:
     full.add_argument("--apply", action="store_true", help="empty the seen record")
     base = sub.add_parser("baseline", help="record every file as compared now")
     base.add_argument("--apply", action="store_true", help="save the record")
+    for each in (full, base):
+        each.add_argument(
+            "--library",
+            choices=LIBRARIES,
+            default="all",
+            help="which library's seen record (default: all)",
+        )
 
     run = sub.add_parser("run", help="run the reconcile once, here")
     run.add_argument("--mode", choices=["dry-run", "write"])
@@ -305,39 +326,56 @@ def _seed_cmd(args: argparse.Namespace, api: Any, drive: Any, state: str) -> int
     return 0
 
 
+def _roots(library: str) -> tuple[LibraryRoot, ...]:
+    """The library roots ``--library`` names, from the library settings."""
+    settings, problems = BackfillSettings.from_env()
+    if settings is None or problems:
+        raise AdminError("; ".join(problems) or "the library settings are not set")
+    roots = tuple(r for r in settings.roots if library in ("all", r.key))
+    if not roots:
+        raise AdminError(f"the {library} library is not set up")
+    return roots
+
+
 def _full_cmd(args: argparse.Namespace, drive: Any, state: str) -> int:
-    store = StateFile(drive, state, SEEN_NAME)
-    held = store.load() or {}
-    files = dict(held.get("files") or {})
-    if not args.apply:
-        print(
-            f"{SEEN_NAME} holds {len(files)} files. Run again with --apply to "
-            "compare every file again."
+    for root in _roots(args.library):
+        name = root_state_name(FLOW_NAME, SEEN_NAME, root)
+        store = StateFile(drive, state, name)
+        held = store.load() or {}
+        files = dict(held.get("files") or {})
+        if not args.apply:
+            print(
+                f"{name} holds {len(files)} files. Run again with --apply to "
+                "compare every file again."
+            )
+            continue
+        store.save(
+            {
+                **held,
+                "files": {},
+                "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            }
         )
-        return 0
-    store.save(
-        {
-            **held,
-            "files": {},
-            "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
-        }
-    )
-    print(f"Emptied {SEEN_NAME}: the next runs compare every file again.")
+        print(f"Emptied {name}: the next runs compare every file again.")
     return 0
 
 
 def _baseline_cmd(args: argparse.Namespace, api: Any, drive: Any) -> int:
+    roots = _roots(args.library)
     if not args.apply:
-        print(
-            f"Would record every present, identified file in {SEEN_NAME} as "
-            "compared as it is now. Run again with --apply."
-        )
+        for root in roots:
+            print(
+                f"Would record every present, identified file in "
+                f"{root_state_name(FLOW_NAME, SEEN_NAME, root)} as compared as it is "
+                "now. Run again with --apply."
+            )
         return 0
-    settings, problems = BackfillSettings.from_env()
-    if settings is None or problems:
-        raise AdminError("; ".join(problems) or "the library settings are not set")
-    count = baseline(drive, api, settings)
-    print(f"Recorded {count} files in {SEEN_NAME}: the next runs compare only changes.")
+    settings, _ = BackfillSettings.from_env()
+    assert settings is not None  # _roots checked them
+    for root in roots:
+        name = root_state_name(FLOW_NAME, SEEN_NAME, root)
+        count = baseline(drive, api, settings, root)
+        print(f"Recorded {count} files in {name}: the next runs compare only changes.")
     return 0
 
 
