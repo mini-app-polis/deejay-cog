@@ -112,6 +112,8 @@ from mini_app_polis.deadline import (
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.lambda_worker import RunOutOfTime
+from mini_app_polis.mp3.tag import MAIN as MAIN_PROFILE
+from mini_app_polis.mp3.tag import RuleProfile, Winner, get_profile
 
 from deejay_cog._pipeline_eval import REPO, post_run_finding, run_report
 from deejay_cog._shared_deadline import shared_deadline_passed
@@ -237,14 +239,35 @@ class LibraryFolder:
     path: str = ""
 
 
+#: Each library root's tagging rule profile, by the root's key (deejay-cog
+#: ADR-0010 decision 1): the main library (its folder and New Music) follows
+#: ``main``, the catalog winning; FX Music follows ``fx``, the file winning.
+#: The profiles themselves live in common-python-utils.
+ROOT_PROFILES: dict[str, str] = {"main": "main", "fx": "fx"}
+
+
+def root_profile(key: str) -> RuleProfile:
+    """The rule profile the root called ``key`` follows."""
+    return get_profile(ROOT_PROFILES[key])
+
+
 @dataclass(frozen=True)
 class LibraryRoot:
-    """One library: its ``library_root_id`` and the folders listed under it."""
+    """One library: its ``library_root_id``, the folders listed under it, and
+    the tagging rule profile its files follow (ADR-0010 decision 1)."""
 
     #: "main" or "fx".
     key: str
     root_id: str
     folders: tuple[LibraryFolder, ...]
+    profile: RuleProfile = MAIN_PROFILE
+
+    @property
+    def file_wins(self) -> bool:
+        """Whether the file's values stand over the catalog's (the fx
+        profile): its values go up, and the catalog's are never written over
+        it."""
+        return self.profile.winner is Winner.FILE
 
     @property
     def folder_ids(self) -> list[str]:
@@ -282,10 +305,10 @@ class BackfillSettings:
                     self.new_music, NEW_MUSIC_FOLDER_VAR, NEW_MUSIC_PATH_PREFIX
                 )
             )
-        roots = [LibraryRoot("main", self.root, tuple(main))]
+        roots = [LibraryRoot("main", self.root, tuple(main), root_profile("main"))]
         if self.fx_root:
             fx = LibraryFolder(self.fx_root, FX_ROOT_FOLDER_VAR)
-            roots.append(LibraryRoot("fx", self.fx_root, (fx,)))
+            roots.append(LibraryRoot("fx", self.fx_root, (fx,), root_profile("fx")))
         return tuple(roots)
 
     @classmethod

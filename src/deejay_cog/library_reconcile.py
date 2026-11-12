@@ -850,21 +850,33 @@ def _stamp(modified: dict[str, str], row: LibraryFile, display: Any) -> dict[str
     }
 
 
-def baseline(drive: Any, api: Catalog, settings: BackfillSettings) -> int:
-    """Record every present, identified file as compared as it is now,
-    without reading one, so the next runs compare only what changes after.
-    For a library just reconciled in full. Returns how many files it
-    recorded."""
-    every = _all_rows(api, settings.root)
+def baseline(
+    drive: Any,
+    api: Catalog,
+    settings: BackfillSettings,
+    root: LibraryRoot | None = None,
+) -> int:
+    """Record every present, identified file of ``root`` (the main library
+    when not given) as compared as it is now, without reading one, so the
+    next runs compare only what changes after. For a library just
+    reconciled in full. Returns how many files it recorded."""
+    root = root or settings.roots[0]
+    every = _all_rows(api, root.root_id)
     shown = _displays(api, every) if every else {}
-    modified = _drive_modified(drive, settings)
-    store = StateFile(drive, settings.state, SEEN_NAME)
+    listing = StateFile(drive, settings.state, listing_name(root)).load() or {}
+    modified = {
+        str(item["id"]): str(item.get("modified") or "")
+        for item in listing.get("files") or []
+    }
+    store = StateFile(
+        drive, settings.state, root_state_name(FLOW_NAME, SEEN_NAME, root)
+    )
     store.load()
     store.save(
         {
             "flow": FLOW_NAME,
             "version": 1,
-            "root_folder_id": settings.root,
+            "root_folder_id": root.root_id,
             "files": {
                 row.drive_file_id: _stamp(
                     modified, row, shown.get(row.catalog_id) if row.catalog_id else None
@@ -1548,7 +1560,7 @@ def _reconcile_roots(
     mismatch or the run's deadline stops the run, whatever the root."""
 
     def run(root: LibraryRoot) -> bool:
-        part = ReconcileSummary(summary.mode, fx=root.key == "fx")
+        part = ReconcileSummary(summary.mode, fx=root.file_wins)
         summary.roots.append((root, part))
         if part.fx:
             _reconcile_fx(drive, api, settings, root, chunk_size, run_id, part)

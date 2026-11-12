@@ -759,7 +759,7 @@ def _edits(
             replaced,
             summary,
             cutoff,
-            owner_edits=root.key != "fx",
+            owner_edits=not root.file_wins,
         )
     finally:
         with without_run_deadline():
@@ -898,7 +898,7 @@ def _sync(
             try:
                 values = (
                     _fx_one(row, display, summary)
-                    if root.key == "fx"
+                    if root.file_wins
                     else _sync_one(drive, record, row, display, summary)
                 )
                 if values is not None:
