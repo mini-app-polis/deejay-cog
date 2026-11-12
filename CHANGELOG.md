@@ -1,3 +1,10 @@
+## [2.58.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.58.1...v2.58.2) (2026-11-12)
+
+
+### Bug Fixes
+
+* **library:** hold a field the FX copies of one entry disagree on instead of sending each copy's value up ([5628719](https://github.com/mini-app-polis/deejay-cog/commit/56287195f7c874c87fde9fcabb93462d880a1b7a))
+
 ## [2.58.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.58.0...v2.58.1) (2026-11-12)
 
 
