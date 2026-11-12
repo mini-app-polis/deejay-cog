@@ -449,8 +449,12 @@ def write_catalog_tags(
 def display_title(display: CatalogDisplay, label: str | None) -> str:
     """The title a file carries: the entry's displayed title, followed by
     the file's own release label in parentheses when it has one
-    (ADR-0008, decision 6)."""
-    return f"{display.title} ({label})" if label else display.title
+    (ADR-0008, decision 6). A title that already carries that label (an fx
+    entry made from a file's own title keeps it, "Panda [Clean]") is not
+    given it twice."""
+    if not label or edit_label(display.title) == label:
+        return display.title
+    return f"{display.title} ({label})"
 
 
 def display_fields(
