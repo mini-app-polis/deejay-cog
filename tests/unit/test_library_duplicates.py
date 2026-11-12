@@ -20,6 +20,7 @@ from mini_app_polis.api.contract import (
     DuplicateReportResult,
     LibraryFile,
 )
+from music_fakes import DriveItem, FakeDrive
 
 from deejay_cog import library_backfill as backfill
 from deejay_cog import library_duplicates as dup
@@ -789,3 +790,126 @@ def test_a_root_that_fails_does_not_stop_the_other(roots) -> None:
 )
 def test_a_registered_path_is_shown_from_its_root(registered: str, shown: str) -> None:
     assert dup.shown_path(registered) == shown
+
+
+# ── Reported when the groups change ───────────────────────────────────────
+
+
+@dataclass
+class KeyedCatalog(FakeCatalog):
+    """The API's own count: a group is added when its key is new to the
+    root's open groups, dropped when it is no longer sent."""
+
+    open_keys: set[str] = field(default_factory=set)
+
+    def report_duplicate_groups(self, payload: DuplicateReport):
+        self.reports.append(payload)
+        keys = {g.key for g in payload.groups}
+        result = DuplicateReportResult(
+            open_groups=len(keys),
+            added=len(keys - self.open_keys),
+            dropped=len(self.open_keys - keys),
+        )
+        self.open_keys = keys
+        return result
+
+
+@pytest.fixture
+def posted(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    from mini_app_polis import pipeline_status
+
+    fake = MagicMock()
+    monkeypatch.setattr(pipeline_status, "post_run_finding", fake)
+    return fake
+
+
+@pytest.fixture
+def state_drive() -> FakeDrive:
+    drive = FakeDrive()
+    drive.items[STATE] = DriveItem(STATE, "state", ["elsewhere"], mime_type="folder")
+    return drive
+
+
+def _run(catalog, drive, n: int, mode: FlowMode = FlowMode.WRITE):
+    return dup.run_duplicates(run_id=f"d-{n}", mode=mode, api=catalog, drive=drive)
+
+
+def _posted_a_report(posted: MagicMock) -> bool:
+    """Whether the run's report goes to Discord: a SUCCESS goes only when
+    notable."""
+    call = posted.call_args
+    return call.args[1] != "SUCCESS" or bool(call.kwargs["notable"])
+
+
+def test_the_same_groups_as_the_last_run_post_no_report(posted, state_drive) -> None:
+    catalog = KeyedCatalog(rows=_catalog().rows)
+    _run(catalog, state_drive, 1)
+    assert _posted_a_report(posted)
+
+    again = _run(catalog, state_drive, 2)
+
+    assert again.unchanged and len(again.groups) == 1
+    assert not _posted_a_report(posted)
+    # The run is still recorded: its counts, and the groups sent to the API.
+    assert posted.call_args.kwargs["groups"] == 1 and len(catalog.reports) == 2
+    assert [i.name for i in state_drive.in_folder(STATE)] == [dup.SEEN_NAME]
+
+
+def test_a_dry_run_with_the_same_groups_posts_no_report(posted, state_drive) -> None:
+    catalog = KeyedCatalog(rows=_catalog().rows)
+    _run(catalog, state_drive, 1, FlowMode.DRY_RUN)
+
+    again = _run(catalog, state_drive, 2, FlowMode.DRY_RUN)
+
+    assert again.unchanged and not _posted_a_report(posted)
+    assert catalog.reports == []
+
+
+def test_a_group_added_is_reported(posted, state_drive) -> None:
+    catalog = KeyedCatalog(rows=_catalog().rows)
+    _run(catalog, state_drive, 1)
+    _run(catalog, state_drive, 2)
+    catalog.rows += [
+        _file("c", "Rock/x.mp3", md5="same"),
+        _file("d", "Rock/y.mp3", md5="same"),
+    ]
+
+    changed = _run(catalog, state_drive, 3)
+
+    assert not changed.unchanged and len(changed.groups) == 2
+    assert _posted_a_report(posted)
+    assert "Rock/x.mp3" in posted.call_args.kwargs["text"]
+
+
+def test_a_group_dropped_is_reported(posted, state_drive) -> None:
+    catalog = KeyedCatalog(rows=_catalog().rows)
+    catalog.rows += [
+        _file("c", "Rock/x.mp3", md5="same"),
+        _file("d", "Rock/y.mp3", md5="same"),
+    ]
+    _run(catalog, state_drive, 1)
+    _run(catalog, state_drive, 2)
+    catalog.rows = [r for r in catalog.rows if r.drive_file_id != "d"]
+
+    changed = _run(catalog, state_drive, 3)
+
+    assert not changed.unchanged and len(changed.groups) == 1
+    assert _posted_a_report(posted)
+
+
+def test_fx_sets_across_folders_unchanged_post_no_report(
+    roots, posted, state_drive
+) -> None:
+    entry = uuid.uuid4()
+    catalog = RootsCatalog(
+        rows=[
+            _fx("a", "Walk-ons/song.mp3", md5="m1", catalog_id=entry),
+            _fx("b", "Events/MADjam 2026/song.mp3", md5="m1", catalog_id=entry),
+        ]
+    )
+    _run(catalog, state_drive, 1)
+    assert _posted_a_report(posted)
+
+    again = _run(catalog, state_drive, 2)
+
+    assert again.unchanged and not _posted_a_report(posted)

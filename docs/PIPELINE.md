@@ -1260,6 +1260,17 @@ not named again. With more than one root, each root's group count
 root, named by the settings naming its folders; with FX Music set,
 `fx_across_folders` counts its sets of copies across folders.
 
+**No report when nothing changed.** `library-duplicates-seen.json` in the
+state folder keeps a digest of each root's groups (each group's key,
+reasons and files, FX Music's sets across folders, and how many groups were
+left out) as the last run found them. A run whose groups are the same for
+every root, and that the API found nothing added to or dropped from, posts
+no report, dry or write: it names no group, is logged with its counts
+(`files`, `groups`, `unchanged_since_last_run`) and still sends the groups
+to the API in write. A group added, dropped or changed, or a root that
+failed, reports as above. A state file that can't be read or saved is
+named (`last_run_not_compared`) and the run reports as usual.
+
 ### Run records
 
 Every run of a music-writing flow that touches a file leaves a JSON record in

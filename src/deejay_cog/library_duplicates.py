@@ -52,11 +52,20 @@ groups go to the API (``POST /v1/catalog/library/duplicates``), where the
 WCS duplicates page shows them; they replace the open groups for that root,
 each root reported on its own. A dry run lists the groups in the run report
 only.
+
+**Reported when they change.** ``library-duplicates-seen.json`` in
+``MUSIC_TAGGING_STATE_FOLDER_ID`` keeps a digest of each root's groups (and
+FX Music's sets across folders) as the last run found them. A run whose
+groups are the same as then, for every root, and that the API found nothing
+added to or dropped from, names no group and posts no report: the run is
+still logged with its counts, and the digest saved. A group added, dropped
+or changed reports as before; so does a root that failed.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import uuid
 from collections import defaultdict
@@ -77,11 +86,12 @@ from mini_app_polis.api.contract import (
     LibraryFile,
 )
 from mini_app_polis.environment import api_base_url
+from mini_app_polis.google import GoogleAPI
 
 from deejay_cog._pipeline_eval import REPO, run_report
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
-from deejay_cog.library_backfill import BackfillSettings, LibraryRoot
+from deejay_cog.library_backfill import BackfillSettings, LibraryRoot, StateFile
 from deejay_cog.music_safety import FlowMode, flow_mode, local_run_id
 
 log = logger_mod.get_logger()
@@ -99,6 +109,9 @@ EDIT_TOLERANCE_SECS = 3.0
 
 #: Registry rows read per page.
 PAGE_SIZE = 500
+
+#: The digest of each root's groups as the last run found them.
+SEEN_NAME = f"{FLOW_NAME}-seen.json"
 
 #: Why files were grouped, in the order a group's key names the first.
 REASONS = ("same_md5", "same_catalog_id", "same_title_artist", "same_name")
@@ -156,6 +169,10 @@ class DuplicatesSummary:
     left_out: int = 0
     result: DuplicateReportResult | None = None
     roots: list[RootDuplicates] = field(default_factory=list)
+    #: Every root's groups are the same as at the last run: nothing to name.
+    unchanged: bool = False
+    #: Why the last run's groups could not be read or saved, if so.
+    seen_problem: str = ""
 
 
 def _normal(text: str) -> str:
@@ -410,10 +427,69 @@ def _displays(api: Catalog, rows: list[LibraryFile]) -> dict[uuid.UUID, CatalogD
     return found
 
 
+def digest(found: RootDuplicates) -> str:
+    """What a root's groups are, as one value: each group's key, reasons
+    and files (kept on purpose or not), FX Music's sets across folders, and
+    how many groups were left out."""
+    shape = {
+        "groups": sorted(
+            [
+                g.key,
+                list(g.reasons),
+                sorted([m.drive_file_id, m.kept_on_purpose] for m in g.files),
+            ]
+            for g in found.groups
+        ),
+        "across_folders": sorted(sorted(paths) for paths in found.across_folders),
+        "left_out": found.left_out,
+    }
+    text = json.dumps(shape, sort_keys=True, default=str)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _compare_with_last(
+    drive: Any, settings: BackfillSettings, summary: DuplicatesSummary
+) -> None:
+    """Set ``summary.unchanged`` when every root's groups are the digest
+    the last run saved and the API added or dropped none, then save this
+    run's digests. A root that failed keeps its last digest. A state folder
+    that cannot be read or written is named, and the run reports as usual."""
+    store = StateFile(drive, settings.state, SEEN_NAME)
+    try:
+        held = store.load() or {}
+        last: dict[str, str] = dict(held.get("roots") or {})
+        now = dict(last)
+        for found in summary.roots:
+            if not found.failed:
+                now[found.root.key] = digest(found)
+        summary.unchanged = bool(summary.roots) and all(
+            not found.failed
+            and last.get(found.root.key) == now[found.root.key]
+            and (
+                found.result is None
+                or (not found.result.added and not found.result.dropped)
+            )
+            for found in summary.roots
+        )
+        if now != last:
+            store.save({"flow": FLOW_NAME, "version": 1, "roots": now})
+    except Exception as exc:  # noqa: BLE001 — the memory is not the report
+        log.exception("library-duplicates: last run's groups not read or saved")
+        summary.unchanged = False
+        summary.seen_problem = f"{type(exc).__name__}: {exc}"
+
+
 def run_duplicates(
-    *, run_id: str | None, mode: FlowMode, api: Catalog | None = None
+    *,
+    run_id: str | None,
+    mode: FlowMode,
+    api: Catalog | None = None,
+    drive: Any | None = None,
 ) -> DuplicatesSummary:
-    """One run: the mode, settings, the groups, the API and the report."""
+    """One run: the mode, settings, the groups, the API and the report.
+    ``drive`` reaches the state folder that keeps the last run's groups;
+    built from the environment when neither client is given, and without
+    it every run reports its groups."""
     started_at = monotonic()
     run_id = run_id or local_run_id()
     summary = DuplicatesSummary(mode)
@@ -432,12 +508,16 @@ def run_duplicates(
             if settings is None:
                 summary.problems.extend(problems)
                 return summary
+            if drive is None and api is None:
+                drive = GoogleAPI.from_env().drive
             client = api or cast(
                 Catalog, api_client(base_url=api_base_url().strip() or None)
             )
             for root in settings.roots:
                 summary.roots.append(_root_duplicates(client, root, summary))
             _totals(summary)
+            if drive is not None:
+                _compare_with_last(drive, settings, summary)
         finally:
             _record(report, summary, monotonic() - started_at)
     return summary
@@ -494,6 +574,20 @@ def _record(report: Any, summary: DuplicatesSummary, duration_sec: float) -> Non
     for problem in summary.problems:
         report.issue("setting", problem)
     if summary.problems:
+        return
+    if summary.seen_problem:
+        report.notice(
+            "last_run_not_compared",
+            f"the last run's groups were not read or saved ({summary.seen_problem})",
+        )
+    if summary.unchanged:
+        # The same groups as the last run: counted and logged, not posted.
+        report.count("files", summary.files)
+        report.count("groups", len(summary.groups))
+        report.count("unchanged_since_last_run", len(summary.groups))
+        if summary.result is not None:
+            report.count("open_groups", summary.result.open_groups)
+        report.ok(len(summary.groups))
         return
     if summary.mode is FlowMode.DRY_RUN:
         report.notice(
