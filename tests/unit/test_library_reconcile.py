@@ -1607,6 +1607,49 @@ def test_an_fx_value_the_api_holds_is_named_with_why(two_roots, writing, drive) 
     ]
 
 
+def test_fx_copies_that_disagree_send_that_field_up_from_neither(
+    two_roots, writing, drive
+) -> None:
+    entry = uuid.uuid4()
+    walk = drive.add("walk.mp3", FX, _song(entry, genre="Neo Soul", year="2016"))
+    bow = drive.add("bow.mp3", FX, _song(entry, genre="House", year="2016"))
+    writing.rows += [
+        _row(walk, entry, library_root_id=FX, path="WalkOn/walk.mp3"),
+        _row(bow, entry, library_root_id=FX, path="Bow/bow.mp3"),
+    ]
+    writing.displays[entry] = _display(entry)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    fx = summary.roots[1][1]
+    # The year both copies hold goes up; the genre they disagree on does not.
+    assert [k.keep_file for k in writing.kept] == [["year"], ["year"]]
+    assert fx.fx_copies_disagree == [
+        "genre: WalkOn/walk.mp3 'Neo Soul'; Bow/bow.mp3 'House'"
+    ]
+
+
+def test_an_unchanged_copy_is_read_with_the_changed_one(
+    two_roots, writing, drive, monkeypatch
+) -> None:
+    monkeypatch.setenv(rec.CHUNK_SIZE_VAR, "1")
+    entry = uuid.uuid4()
+    walk = drive.add("walk.mp3", FX, _song(entry, bpm="160"))
+    bow = drive.add("bow.mp3", FX, _song(entry, bpm="150.5"))
+    writing.rows += [
+        _row(walk, entry, library_root_id=FX, path="WalkOn/walk.mp3"),
+        _row(bow, entry, library_root_id=FX, path="Bow/bow.mp3"),
+    ]
+    writing.displays[entry] = _display(entry)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    fx = summary.roots[1][1]
+    assert fx.compared == 2 and fx.changed_left == 0
+    assert fx.fx_copies_disagree == ["bpm: WalkOn/walk.mp3 '160'; Bow/bow.mp3 '150.5'"]
+    assert all("bpm" not in k.keep_file for k in writing.kept)
+
+
 def test_main_approvals_that_cannot_be_read_do_not_stop_fx(
     two_roots, writing, drive, monkeypatch
 ) -> None:
