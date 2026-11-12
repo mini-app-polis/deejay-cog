@@ -322,6 +322,38 @@ never the published song's entry.
   purpose as an owner edit ([library-duplicates](#library-duplicates)).
   File names leave `<` and `>` out.
 
+### FX Music's formats
+
+Each library root follows a tagging rule profile
+([ADR-0010](decisions/ADR-0010-tagging-rule-profiles.md)): the main library
+(its folder and New Music) `main`, FX Music `fx`.
+
+- **The main library stays MP3-only.** Its steps list, read and write MP3s
+  and their ID3 tags exactly as described below; the catalog wins.
+- **FX Music takes every format the shared tagger supports:** MP3, FLAC, Ogg
+  Vorbis, Ogg Opus, M4A, WAV and AIFF, listed by their Drive type or name.
+  Partial downloads (`.part`, `.crdownload`, `.partial`) and files that are
+  not audio (documents, spreadsheets) are ignored. Audio in a format the
+  tagger cannot tag (WMA, AAC, MIDI and the like) is named in the scan's
+  report (`untaggable`) and left alone; a file whose contents the tagger
+  cannot read is left for the owner by identify.
+- **Read through the shared tagger.** A file's format is told from its
+  contents, not its name. A file other than an MP3 is downloaded whole into
+  a temporary local file and read with common-python-utils' `AudioTagger`
+  (title, artist, year, genre, BPM, label, comment, and its link).
+- **Only the link is written, in the format's own field:** the Vorbis
+  comment `CATALOG_ID` (FLAC, Ogg Vorbis, Ogg Opus), the freeform atom
+  `----:com.apple.iTunes:CATALOG_ID` (M4A), or `TXXX:CATALOG_ID` in the ID3
+  chunk (WAV, AIFF), as on an MP3. Any other write to such a file is refused:
+  the file wins, so its own tags are never written over.
+- **No conversion, no change to the audio.** A write rewrites the tag block
+  only, and follows ADR-0007 as for an MP3: the head revision kept, the
+  audio checked before the upload and after it (the bytes outside the tag
+  block, taken apart per format: FLAC's STREAMINFO and frames, the Ogg
+  packets but the comment header, the M4A `mdat` atoms, the WAV `fmt `/`data`
+  and AIFF `COMM`/`SSND` chunks; and mutagen's stream info), the file sent
+  back as its own format, and every write in the run record.
+
 ### Running a library job on demand
 
 `POST /v1/deejay/runs` with `{"mode": "library-backfill"}` or
@@ -404,8 +436,9 @@ for its own title, artist and year, asked for with
 `POST /v1/catalog/library/entries`, library `fx` and `preview` set, so the
 backfill never makes one (a song the catalog lacks is `not_in_catalog`, left
 to identify, which makes its fx entry). A main-library file never links to an
-fx entry. As for every file, only `TXXX:CATALOG_ID` is written: no catalog
-value is ever written over an FX file, whose tags win
+fx entry. As for every file, only the link is written (`TXXX:CATALOG_ID`, or
+a non-MP3 file's own field: [FX Music's formats](#fx-musics-formats)): no
+catalog value is ever written over an FX file, whose tags win
 ([ADR-0010](decisions/ADR-0010-tagging-rule-profiles.md)). FX files are
 registered under FX Music's root. A root whose state is refused (the WARNs
 above) or whose run fails does not stop or change the other: its lines say
@@ -420,8 +453,9 @@ reports as it always did.
 
 1. Its id is in `LIBRARY_BACKFILL_SKIP_FILE_IDS` → passed over, named
    (`skipped_by_setting`).
-2. Not an MP3 by its listed type or name → passed over, not downloaded,
-   named (`not_mp3`).
+2. Not an MP3 by its listed type or name (in FX Music: not audio in a
+   format the shared tagger supports, or a partial download) → passed over,
+   not downloaded, named (`not_mp3`).
 3. In the trash, or no longer in the folder the manifest lists it in →
    passed over, named (`moved_since`).
 4. No usable title or artist → left as it is, named
@@ -521,7 +555,10 @@ and registered on its own:
   backfill: the scan registers them, and identify links them.
 
 With only `LIBRARY_ROOT_FOLDER_ID` set, the scan is the one-folder scan it
-always was. Only MP3s are compared, in either library.
+always was. Only MP3s are compared in the main library; FX Music's
+comparison takes every format the shared tagger supports, ignores partial
+downloads and files that are not audio, and names audio it cannot tag
+(`untaggable`) without registering it ([FX Music's formats](#fx-musics-formats)).
 
 **The listing** is the backfill's kind of listing (breadth first, the state
 folder, shortcuts and the other library's folders left out), kept in the
@@ -536,7 +573,8 @@ library afresh.
 **The comparison**, for each library against every registry row under its
 root:
 
-- **added** — an MP3 the registry has never seen is registered
+- **added** — an MP3 (in FX Music, an audio file in a supported format)
+  the registry has never seen is registered
   `unidentified`, with its path. A file the backfill's manifest lists but
   has not reached yet is left to the backfill (`left_for_backfill`), which
   registers it with its link; while the backfill's manifest is still being
@@ -550,7 +588,8 @@ root:
   catalog entry left with no plays and no present file, and un-archives it
   when a file links to it again.
 
-**Safety:** a listing with no MP3s while the registry has present files, or
+**Safety:** a listing with no MP3s (for FX Music, no audio files in a
+supported format) while the registry has present files, or
 one that would mark more than half of the present files not present,
 changes nothing in that library and is a WARN (`refused`, naming the
 library's settings): a wrong root or a Drive problem is far likelier than
@@ -561,8 +600,8 @@ names each would-be change (`would_add`, `would_mark_back`, `would_move`,
 `would_remove`) and changes nothing.
 
 **Report:** counts for `listed`, `added`, `back`, `moved`, `removed`,
-`left_for_backfill`, `unchanged` and `failed` across both libraries, with
-every file by its path; a refused library's would-be changes are not
+`left_for_backfill`, `unchanged`, `failed` and `untaggable` across both
+libraries, with every file by its path; a refused library's would-be changes are not
 counted.
 
 ## library-identify
@@ -689,8 +728,11 @@ catalog is asked for the fx entry of its own title, artist and year
 makes, and the file is linked to it (registry note `an FX Music file,
 identified by its own tags`). Its tags win over the catalog
 ([ADR-0010](decisions/ADR-0010-tagging-rule-profiles.md)): it is never
-fingerprinted, and only the link is written. An FX file whose tags name no
-song is left for the owner with a note saying so. A dry run previews the
+fingerprinted, and only the link is written. It may be in any format the
+shared tagger supports, read through it, and its link goes in the format's
+own field ([FX Music's formats](#fx-musics-formats)). An FX file whose tags
+name no song, or that the tagger cannot read, is left for the owner with a
+note saying so. A dry run previews the
 entry and links nothing to a new one (`would_make_fx_entry`). A link the
 catalog refuses as one to the other library (409 `other_library`) is an
 issue (`not_linkable`), never a crash; the run carries on.
@@ -890,8 +932,10 @@ and field (`fx_sent_up`, `path: field 'entry' -> 'file'`), and each value the
 API held, with why (`fx_held`: a title or artist that does not split into
 parts cleanly, a genre off the vocabulary, a one-character label). A field
 the file leaves empty is not sent up and the entry keeps its value
-(`fx_not_sent`). A `TXXX:CATALOG_ID` naming another entry is corrected as
-for the main library, that frame only. The flag applies to FX Music too: a
+(`fx_not_sent`). FX files in every supported format are compared, read
+through the shared tagger ([FX Music's formats](#fx-musics-formats)). A link
+naming another entry is corrected as for the main library, that field only
+(`TXXX:CATALOG_ID`, or the format's own). The flag applies to FX Music too: a
 dry run asks the API what it would take (`preview`), sends nothing up, says
 what would go (`would_send_up`, counted as `fx_would_send_up`), and marks no
 FX file compared, so the next run compares the same files. A failure in one
@@ -1076,7 +1120,9 @@ registry rows. **The FX file wins**
 ([ADR-0010](decisions/ADR-0010-tagging-rule-profiles.md)): an edit made in an
 FX file goes up to its fx entry as above (a title retitled with `< >` too: an
 FX file's title is its own), but the catalog's values are never written over
-an FX file. One whose entry moved keeps what it holds, is recorded as synced
+an FX file, in any format. FX files other than MP3s are read through the
+shared tagger ([FX Music's formats](#fx-musics-formats)). One whose entry
+moved keeps what it holds, is recorded as synced
 with the values it already had recorded, and is named (`fx_file_wins`); the
 reconcile then sends its values up to the entry. A root that fails does not
 stop the other; its failure is raised once the other has run. An audio

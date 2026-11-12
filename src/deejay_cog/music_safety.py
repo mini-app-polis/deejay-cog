@@ -11,7 +11,9 @@ goes through these rules (ADR-0007, amended 2026-11-03):
 - **The audio is never altered.** Before new tag bytes are uploaded, the
   audio they carry is compared with the original's, byte for byte, with the
   tags at either end stripped (:func:`audio_payload`); after the upload the
-  file is downloaded again and compared once more. A mismatch raises
+  file is downloaded again and compared once more. A file in another format
+  (FX Music: :mod:`deejay_cog.audio_formats`) is compared by its audio
+  outside its tag block, taken apart per format, and by its stream info. A mismatch raises
   :class:`AudioChanged`, which a flow treats as the end of its run.
 - **No tag is emptied.** A field the file has a value for is never written
   empty (:func:`check_no_emptied_tags`).
@@ -28,6 +30,7 @@ which is recoverable.
 
 from __future__ import annotations
 
+import contextlib
 import enum
 import hashlib
 import io
@@ -44,6 +47,7 @@ from mini_app_polis.deadline import without_run_deadline
 from mini_app_polis.environment import api_base_url
 from mutagen.id3 import ID3, ID3NoHeaderError
 
+from deejay_cog import audio_formats
 from deejay_cog.api_client import api_client
 
 log = logger_mod.get_logger()
@@ -196,6 +200,10 @@ def audio_payload(data: bytes) -> bytes:
 def check_audio_unchanged(original: bytes, candidate: bytes) -> None:
     """Raise :class:`AudioChanged` unless ``candidate`` carries exactly the
     audio ``original`` does."""
+    fmt = audio_formats.other_format(original)
+    if fmt is not None:
+        _check_other_audio_unchanged(fmt, original, candidate)
+        return
     before = audio_payload(original)
     after = audio_payload(candidate)
     if not before:
@@ -203,6 +211,38 @@ def check_audio_unchanged(original: bytes, candidate: bytes) -> None:
     if before != after:
         raise AudioChanged(
             f"audio differs: {len(before)} bytes before, {len(after)} after"
+        )
+
+
+def _check_other_audio_unchanged(
+    fmt: audio_formats.AudioFormat | audio_formats.UnsupportedFile,
+    original: bytes,
+    candidate: bytes,
+) -> None:
+    """:func:`check_audio_unchanged` for a format other than MP3: the same
+    format, the same audio outside the tag block, the same stream info."""
+    if isinstance(fmt, audio_formats.UnsupportedFile):
+        raise AudioCheckError(f"no audio check for {fmt.detail or 'this file'}")
+    if audio_formats.other_format(candidate) is not fmt:
+        raise AudioChanged(f"the file is no longer {fmt.value}")
+    try:
+        before = audio_formats.audio_payload(fmt, original)
+        after = audio_formats.audio_payload(fmt, candidate)
+        info_before = audio_formats.stream_info(original)
+        info_after = audio_formats.stream_info(candidate)
+    except Exception as exc:  # noqa: BLE001 — a file not taken apart is not checked
+        raise AudioCheckError(
+            f"the {fmt.value} audio could not be read: {exc}"
+        ) from exc
+    if not before:
+        raise AudioCheckError(f"the original {fmt.value} has no audio")
+    if before != after:
+        raise AudioChanged(
+            f"{fmt.value} audio differs: {len(before)} bytes before, {len(after)} after"
+        )
+    if info_before != info_after:
+        raise AudioChanged(
+            f"{fmt.value} stream differs: {info_before} before, {info_after} after"
         )
 
 
@@ -220,6 +260,9 @@ _SNAPSHOT_FRAMES = {
 
 def tag_snapshot(data: bytes) -> dict[str, str]:
     """The file's tag fields a flow writes, as text (empty when absent)."""
+    fmt = audio_formats.other_format(data)
+    if fmt is not None:
+        return _other_snapshot(data, fmt)
     try:
         tags = ID3(io.BytesIO(data))
     except ID3NoHeaderError:
@@ -229,6 +272,32 @@ def tag_snapshot(data: bytes) -> dict[str, str]:
         frame = tags.get(key)
         texts = getattr(frame, "text", None) if frame is not None else None
         snapshot[name] = str(texts[0]).strip() if texts else ""
+    return snapshot
+
+
+#: The shared tagger's key for each field a run record shows.
+_SNAPSHOT_KEYS = {
+    "title": "tracktitle",
+    "artist": "artist",
+    "year": "year",
+    "genre": "genre",
+    "bpm": "bpm",
+    "label": "label",
+}
+
+
+def _other_snapshot(
+    data: bytes, fmt: audio_formats.AudioFormat | audio_formats.UnsupportedFile
+) -> dict[str, str]:
+    """:func:`tag_snapshot` for a format other than MP3; every field empty
+    when the shared tagger cannot read it."""
+    tags: dict[str, str] = {}
+    link = ""
+    if isinstance(fmt, audio_formats.AudioFormat):
+        with contextlib.suppress(audio_formats.NotTaggable):
+            tags, link = audio_formats.read(data, fmt)
+    snapshot = {name: tags.get(key, "").strip() for name, key in _SNAPSHOT_KEYS.items()}
+    snapshot["catalog_id"] = link
     return snapshot
 
 
@@ -316,10 +385,14 @@ def _ranged(drive: Any, file_id: str, span: str) -> bytes | None:
 def read_tag_bytes(drive: Any, file_id: str) -> TagBytes:
     """The bytes to read ``file_id``'s tags from, downloading only its start
     and end when its ID3v2 tag fits in :data:`TAG_HEAD_BYTES`; otherwise, or
-    when a range cannot be read, the whole file."""
+    when a range cannot be read, the whole file. A file in another format
+    than MP3 (:mod:`deejay_cog.audio_formats`) is read whole: its tags are
+    not all at its start and end."""
     head = _ranged(drive, file_id, f"0-{TAG_HEAD_BYTES - 1}")
     if head is not None and len(head) < TAG_HEAD_BYTES:
         return TagBytes(head, whole=True)
+    if head is not None and audio_formats.other_format(head) is not None:
+        return TagBytes(drive.download_file_bytes(file_id).data, whole=True)
     length = id3v2_length(head) if head is not None else None
     tail = (
         _ranged(drive, file_id, f"-{TAG_TAIL_BYTES}")
@@ -391,13 +464,20 @@ def revision_at(drive: Any, file_id: str, when: datetime) -> str | None:
 
 
 def update_contents(drive: Any, file_id: str, name: str, data: bytes) -> None:
-    """Write ``data`` over the file's contents; name, folder and id stay."""
+    """Write ``data`` over the file's contents; name, folder and id stay.
+    It is sent as its own format's type (an MP3 unless it is another)."""
+    fmt = audio_formats.other_format(data)
+    mime_type = (
+        audio_formats.MIME_TYPES[fmt]
+        if isinstance(fmt, audio_formats.AudioFormat)
+        else MP3_MIME_TYPE
+    )
     suffix = os.path.splitext(name)[1] or ".mp3"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
         handle.write(data)
         path = handle.name
     try:
-        drive.update_file(file_id, path, mime_type=MP3_MIME_TYPE)
+        drive.update_file(file_id, path, mime_type=mime_type)
     finally:
         os.unlink(path)
 

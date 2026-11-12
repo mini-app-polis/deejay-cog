@@ -51,8 +51,11 @@ decision 3). The catalog lookup searches main entries only, so an FX file
 is not looked up or fingerprinted: the catalog is asked for the fx entry of
 its own title and artist (``POST /v1/catalog/library/entries`` with library
 ``fx``), which it finds or makes. Its tags win over the catalog (ADR-0010),
-so, as for any file, only the link is written to it. An FX file whose tags
-name no song is left for the owner. A link the catalog refuses as one to
+so, as for any file, only the link is written to it. An FX file may be in
+any format the shared tagger supports; it is read through that tagger, and
+its link is written in its format's own field (:mod:`deejay_cog.audio_formats`).
+An FX file whose tags name no song, or that the tagger cannot tag, is left
+for the owner. A link the catalog refuses as one to
 the other library (``OtherLibraryError``) is reported as not linkable, and
 the run carries on.
 
@@ -119,6 +122,7 @@ from deejay_cog._pipeline_eval import REPO, post_run_finding, run_report
 from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
+from deejay_cog.audio_formats import untaggable
 from deejay_cog.fingerprint_jobs import FingerprintJobs, fingerprint_jobs_from_env
 from deejay_cog.library_backfill import (
     BackfillSettings,
@@ -738,8 +742,13 @@ class Identify:
         link is written to it."""
         summary = self.summary
         tags = read_tag_row(data)
-        if usable_track(tags, name) is None:
-            note = "an FX Music file whose tags do not name a song: set its title and artist"
+        why_not = untaggable(data)
+        if why_not is not None or usable_track(tags, name) is None:
+            note = (
+                f"an FX Music file the shared tagger cannot tag: {why_not}"
+                if why_not is not None
+                else "an FX Music file whose tags do not name a song: set its title and artist"
+            )
             summary.skipped.append(f"{row.path} ({note})")
             if self.mode_writes:
                 record_unidentified(
@@ -750,7 +759,7 @@ class Identify:
                     data=data,
                     note=note,
                 )
-                self._mark(row, "fx_unnamed")
+                self._mark(row, "fx_unnamed" if why_not is None else "fx_untaggable")
             return
         made = self.api.create_library_entry(
             LibraryEntryCreate(

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from audio_fixtures import NAMES, OTHER_FORMATS, tagged
 from mini_app_polis import pipeline_status
 from mini_app_polis.api.contract import (
     CatalogLookupRequest,
@@ -1149,6 +1150,39 @@ def test_a_main_file_never_links_to_an_fx_entry(
         "a.mp3 (looked up 'song 0' by 'artist')"
     ]
     assert linked_catalog_id(drive.items[file_id].data) == ""
+
+
+def test_fx_music_links_every_supported_format_and_skips_the_rest(
+    two_roots, wired, drive, api: FakeApi
+) -> None:
+    _library(drive, 1)
+    api.fx["bow"] = CatalogMatch(id=_FX_ID, title="Bow", artist="DJ", library="fx")
+    files = {
+        fmt: drive.add(
+            NAMES[fmt],
+            FX,
+            tagged(fmt, title="Bow", artist="DJ", genre="Neo Soul"),
+            mime_type="application/octet-stream",
+        )
+        for fmt in OTHER_FORMATS
+    }
+    before = {fmt: drive.items[f].data for fmt, f in files.items()}
+    drive.add("half.flac.part", FX, b"fLaC", mime_type="audio/flac")
+    drive.add("cues.pdf", FX, b"%PDF", mime_type="application/pdf")
+
+    summary = flow.library_backfill(run_id="m-1")
+
+    fx = summary.roots[1][1]
+    assert sorted(fx.outcomes["written"]) == sorted(NAMES.values())
+    assert sorted(fx.outcomes["not_mp3"]) == ["cues.pdf", "half.flac.part"]
+    for fmt, file_id in files.items():
+        data = drive.items[file_id].data
+        # The link only, in the file's own format; its own tags stand.
+        assert linked_catalog_id(data) == str(_FX_ID)
+        assert tag_snapshot(data)["genre"] == "Neo Soul"
+        assert data[:4] == before[fmt][:4]
+        assert api.registry[file_id].catalog_id == _FX_ID
+        assert api.registry[file_id].duration_secs
 
 
 def test_a_root_whose_state_is_refused_does_not_stop_the_other(
