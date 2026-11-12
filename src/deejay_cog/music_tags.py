@@ -182,6 +182,18 @@ def _other_read(
         return {}, ""
 
 
+def _collapse_repeated(genre: str) -> str:
+    """The genre once when it is one value repeated ("Pop, Pop"), else as is.
+
+    The shared tagger joins a multi-valued tag with ", ". Values are compared
+    after trimming, and case-sensitively: "Pop, pop" is left alone.
+    """
+    parts = [part.strip() for part in genre.split(", ")]
+    if len(parts) > 1 and parts[0] and all(part == parts[0] for part in parts):
+        return parts[0]
+    return genre
+
+
 def _other_row(
     data: bytes, fmt: audio_formats.AudioFormat | audio_formats.UnsupportedFile
 ) -> dict[str, str]:
@@ -192,7 +204,7 @@ def _other_row(
         "title": tags.get("tracktitle", "").strip(),
         "artist": tags.get("artist", "").strip(),
         "label": tags.get("label", "").strip(),
-        "genre": tags.get("genre", "").strip(),
+        "genre": _collapse_repeated(tags.get("genre", "").strip()),
         "bpm": tags.get("bpm", "").strip(),
         "year": year[:4] if year[:4].isdigit() else "",
     }
