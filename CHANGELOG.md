@@ -1,3 +1,15 @@
+# [2.58.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.57.0...v2.58.0) (2026-11-12)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 9.9.1 ([44c3985](https://github.com/mini-app-polis/deejay-cog/commit/44c39856ae87a604f103805501fc86c50bd3ae1d))
+
+
+### Features
+
+* **library:** tag FX Music by the fx profile in every format the shared tagger supports ([ad55f72](https://github.com/mini-app-polis/deejay-cog/commit/ad55f7246fe3dfa5f0cf2488384e5f2f0e635ca3))
+
 # [2.57.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.56.0...v2.57.0) (2026-11-12)
 
 
