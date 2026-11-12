@@ -174,7 +174,8 @@ unless all five of its folders are set and different (see
 [CONFIGURATION.md](CONFIGURATION.md#music-tagging-safety-and-new-music)).
 
 Lists the audio files in `NEW_MUSIC_INPUT_FOLDER_ID`, at most
-`NEW_MUSIC_MAX_FILES_PER_RUN` (25; 0 for no cap) a run. Intake does not look
+`NEW_MUSIC_MAX_FILES_PER_RUN` (25; 0 for no cap) a run (see **A batch past
+the cap**, below). Intake does not look
 a file up, make catalog entries or write tags: it puts the file into New
 Music as it came, and the library's steps take it from there (scan,
 identify with its fingerprint check, duplicates, reconcile and sync; see
@@ -240,6 +241,25 @@ original's id and checked, rather than uploaded twice. Nothing is ever
 deleted or overwritten; names are sanitized (no `/ \ : * ? " < > |` or
 control characters).
 
+**A batch past the cap** drains run after run. When files are left in the
+input folder past `NEW_MUSIC_MAX_FILES_PER_RUN` (`left_past_cap`), a
+writing run that moved at least one file asks for the next new-music run
+before it ends (`POST /v1/deejay/runs` with `{"mode": "new-music"}`; scope
+`deejay.runs.create`), and that run takes the next files, and so on until
+the folder is empty, with no gap between them. The request names no file,
+so the API claims none: the watcher's claims (`dispatch_claims`, scope
+`deejay:new-music`) are left as they are, and no file waits behind the cap
+long enough for its claim to be renewed or given up on. The API's queue
+collapses an identical request made within its window
+(`job_queue.DEDUP_WINDOW_SECONDS`, 60 s) into the first, and a run started
+by this cog's own follow-up would ask for the same thing again; such a run
+sends its follow-up no sooner than 65 s after the request that started it,
+waiting the rest when its deadline allows. The report names the follow-up
+(`follow_up_queued`); one the API refuses or still collapses is a WARN
+(`follow_up_not_queued`), and the files wait for the watcher's next sweep.
+A dry run, or a run that moved no file (every file failed), asks for
+nothing; a run stopped at its deadline is delivered again instead.
+
 **Audio check failure** stops the run at once: nothing is written for that
 file (after an upload, the bad copy goes to the Drive trash and the original
 stays in the input folder), the rest of the folder waits, and an ERROR
@@ -253,7 +273,7 @@ destinations.
 
 **Report:** counts for `scanned`, `identified` (taken in),
 `needs_review`, `collisions`, `failed`,
-`no_longer_in_input` (and `not_written_dry_run` in a dry run), with the files
+`no_longer_in_input`, `left_past_cap` (and `not_written_dry_run` in a dry run), with the files
 by name. Off, the report says only that the flow is off; a missing setting
 is a WARN naming it.
 

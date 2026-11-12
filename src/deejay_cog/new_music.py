@@ -7,7 +7,9 @@ MP3 with a usable title and artist is copied, tags and audio unchanged, into
 New Music under a name built from its own tags, and the library's steps
 take it from there (scan, identify with its fingerprint check, duplicates,
 reconcile and sync). Anything else goes, unchanged, to needs-review. At
-most ``NEW_MUSIC_MAX_FILES_PER_RUN`` files a run.
+most ``NEW_MUSIC_MAX_FILES_PER_RUN`` files a run; when more are waiting, a
+writing run that moved any file asks for a follow-up new-music run before it
+ends (:func:`queue_follow_up`), so a batch past the cap drains run after run.
 
 A file taken in is **copied**, never changed: its bytes are uploaded as a new file named ``{title}_{artist}.<ext>`` into
 ``NEW_MUSIC_DESTINATION_FOLDER_ID``, and the original is then moved,
@@ -39,21 +41,29 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Any, Protocol
 
 from mini_app_polis import logger as logger_mod
-from mini_app_polis.deadline import without_run_deadline
+from mini_app_polis.api.contract import DeejayRunAccepted, DeejayRunRequest
+from mini_app_polis.deadline import remaining_seconds, without_run_deadline
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.lambda_worker import RunOutOfTime
 
-from deejay_cog._pipeline_eval import REPO, post_run_finding, run_report
+from deejay_cog._pipeline_eval import (
+    REPO,
+    current_request,
+    post_run_finding,
+    run_report,
+)
 from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
-from deejay_cog.api_client import api_client
+from deejay_cog.api_client import MACHINE_NAME, api_client
 from deejay_cog.library_backfill import FX_ROOT_FOLDER_VAR
 from deejay_cog.music_safety import (
     MP3_MIME_TYPE,
@@ -85,6 +95,13 @@ MODE_FLAG = "flags.deejay_cog.new_music"
 #: Files per run when ``NEW_MUSIC_MAX_FILES_PER_RUN`` is unset; 0 is no cap.
 MAX_FILES_VAR = "NEW_MUSIC_MAX_FILES_PER_RUN"
 DEFAULT_MAX_FILES_PER_RUN = 25
+
+#: How long the API's queue collapses identical run requests into one: its
+#: deduplication window (``job_queue.DEDUP_WINDOW_SECONDS`` in
+#: api-kaianolevine-com). Two follow-ups this far apart are never collapsed.
+FOLLOW_UP_WINDOW_SECONDS = 60
+#: Added to the window, for the clocks of this run and the API not agreeing.
+FOLLOW_UP_MARGIN_SECONDS = 5
 
 #: Every folder the flow needs, by role. All must be set, and all differ.
 FOLDER_VARS = {
@@ -164,6 +181,12 @@ class IntakeSummary:
     no_longer_in_input: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     aborted: str = ""
+    #: Files in the input folder past this run's cap, left for a later run.
+    left_past_cap: int = 0
+    #: The queue message of the follow-up run this run asked for.
+    follow_up: str = ""
+    #: Why the follow-up run was not queued, when it was due and was not.
+    follow_up_problem: str = ""
 
 
 def safe_name_part(text: str) -> str:
@@ -636,9 +659,10 @@ def intake_files(
     fails: the run stops there. Any other failure is that file's alone.
     """
     summary = intake.summary
-    for f in files:
+    for index, f in enumerate(files):
         if max_files > 0 and summary.scanned >= max_files:
             log.info("new-music: reached %d files for this run", max_files)
+            summary.left_past_cap = len(files) - index
             break
         name = str(getattr(f, "name", "") or getattr(f, "id", ""))
         if shared_deadline_passed():
@@ -656,6 +680,62 @@ def intake_files(
                 raise RunOutOfTime(f"run deadline reached processing {name}") from exc
             log.exception("new-music: failed on %s", name)
             summary.failed.append(f"{name} ({type(exc).__name__}: {exc})")
+
+
+class RunRequests(Protocol):
+    """The part of the API client that asks for a deejay-cog run."""
+
+    def request_deejay_run(self, payload: DeejayRunRequest) -> DeejayRunAccepted:
+        """``POST /v1/deejay/runs``."""
+        ...
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def queue_follow_up(api: RunRequests, summary: IntakeSummary) -> None:
+    """Ask for the next new-music run (``POST /v1/deejay/runs``), so the
+    files past this run's cap are taken in by the run after it, with no
+    wait for the watcher's next look at the folder.
+
+    It names no file, so no file is claimed: the claims the watcher took
+    stay as they are. The API collapses an identical request made within
+    :data:`FOLLOW_UP_WINDOW_SECONDS` into the first, and this run's own
+    follow-up is the same request as the one that started it when that was
+    a follow-up too: so it is sent no sooner than the window after that one
+    (waiting the rest, when the run's deadline allows). A follow-up the API
+    still answers as collapsed, or that cannot be sent, is named in the
+    report; the watcher's next claim renewal then starts the next run."""
+    request = current_request()
+    if request is not None and request.caller == MACHINE_NAME:
+        asked = request.requested_at
+        if asked.tzinfo is None:
+            asked = asked.replace(tzinfo=UTC)
+        due = asked + timedelta(
+            seconds=FOLLOW_UP_WINDOW_SECONDS + FOLLOW_UP_MARGIN_SECONDS
+        )
+        wait = (due - _now()).total_seconds()
+        left = remaining_seconds()
+        if wait > 0 and (left is None or left - wait > FOLLOW_UP_MARGIN_SECONDS):
+            log.info("new-music: follow-up waits %.0fs for the API's window", wait)
+            _sleep(wait)
+    try:
+        accepted = api.request_deejay_run(DeejayRunRequest(mode="new-music"))
+    except Exception as exc:  # noqa: BLE001 — the run's own work is done
+        log.exception("new-music: the follow-up run could not be queued")
+        summary.follow_up_problem = f"{type(exc).__name__}: {exc}"
+        return
+    if accepted.deduplicated:
+        summary.follow_up_problem = (
+            f"collapsed by the queue into {accepted.message_id or 'an earlier run'}"
+        )
+        return
+    summary.follow_up = accepted.message_id or "queued"
 
 
 def run_intake(
@@ -739,6 +819,11 @@ def new_music(*, run_id: str | None = None) -> IntakeSummary:
     def work(intake: Intake) -> None:
         files = list_audio_files(intake.drive, intake.folders.input)
         intake_files(intake, files, max_files=max_files_per_run())
+        # Files past the cap: the next run takes them. Only after a run that
+        # moved a file, so files that fail every time cannot loop runs.
+        moved = any(entry.move for entry in intake.record.entries)
+        if intake.summary.left_past_cap and intake.mode.writes and moved:
+            queue_follow_up(api, intake.summary)
 
     return run_intake(stage="intake", run_id=run_id, mode=mode, work=work, library=api)
 
@@ -766,6 +851,7 @@ def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
     report.count("collisions", len(summary.collisions))
     report.count("failed", len(summary.failed))
     report.count("no_longer_in_input", len(summary.no_longer_in_input))
+    report.count("left_past_cap", summary.left_past_cap)
     if dry:
         planned = (
             len(summary.identified)
@@ -786,6 +872,18 @@ def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
         report.issue("failed", name)
     if summary.aborted:
         report.issue("audio_changed_run_stopped", summary.aborted)
+    if summary.follow_up:
+        report.notice(
+            "follow_up_queued",
+            f"{summary.left_past_cap} files past the cap: the next run is "
+            f"{summary.follow_up}",
+        )
+    if summary.follow_up_problem:
+        report.issue(
+            "follow_up_not_queued",
+            f"{summary.left_past_cap} files past the cap wait for the "
+            f"watcher's next sweep: {summary.follow_up_problem}",
+        )
 
 
 if __name__ == "__main__":
