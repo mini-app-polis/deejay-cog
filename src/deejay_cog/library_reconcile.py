@@ -166,6 +166,7 @@ import os
 import re
 import unicodedata
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic
@@ -740,6 +741,9 @@ class ReconcileSummary:
     fx_sent_up: list[str] = field(default_factory=list)
     #: FX Music: each field the file leaves empty, not sent up.
     fx_not_sent: list[str] = field(default_factory=list)
+    #: FX Music: each field the copies of one fx entry hold differently,
+    #: sent up from none of them: "field: path 'value'; path 'value'".
+    fx_copies_disagree: list[str] = field(default_factory=list)
     #: With more than one root, each root's own summary, in order.
     roots: list[tuple[LibraryRoot, ReconcileSummary]] = field(default_factory=list)
 
@@ -1358,8 +1362,9 @@ def _reconcile_fx(
         if seen.get(row.drive_file_id)
         != _stamp(modified, row, shown.get(row.catalog_id) if row.catalog_id else None)
     ]
-    rows = changed[:chunk_size]
-    summary.changed_left = len(changed) - len(rows)
+    rows = _with_copies(changed[:chunk_size], every)
+    taken = {row.drive_file_id for row in rows}
+    summary.changed_left = sum(1 for row in changed if row.drive_file_id not in taken)
     writes = summary.mode.writes
     record: RunRecord | None = None
     if writes:
@@ -1371,31 +1376,62 @@ def _reconcile_fx(
             folders={"root": root.root_id, "state": settings.state},
         ).attach(drive, settings.state)
     status = "complete"
-    try:
-        for row in rows:
+
+    def attempt(row: LibraryFile, step: Callable[[], None]) -> bool:
+        """Run one file's step; False when the run has to stop."""
+        nonlocal status
+        if shared_deadline_passed():
+            summary.stopped = f"run deadline reached before {row.path}"
+            status = "stopped"
+            return False
+        try:
+            step()
+        except AudioChanged as exc:
+            summary.aborted = f"{row.path}: {exc}"
+            status = "aborted"
+            return False
+        except Exception as exc:  # noqa: BLE001 — one file must not end the run
             if shared_deadline_passed():
-                summary.stopped = f"run deadline reached before {row.path}"
+                summary.stopped = f"run deadline reached reading {row.path}"
                 status = "stopped"
-                break
-            try:
-                display = shown.get(row.catalog_id) if row.catalog_id else None
+                return False
+            log.exception("library-reconcile: failed on %s", row.path)
+            summary.failed.append(f"{row.path} ({type(exc).__name__}: {exc})")
+        return True
+
+    read: list[tuple[LibraryFile, CatalogDisplay | None, Compared]] = []
+    try:
+        # Every copy of an entry is read before any is settled: copies that
+        # disagree on a field send it up from none of them.
+        for row in rows:
+            display = shown.get(row.catalog_id) if row.catalog_id else None
+
+            def compare(
+                row: LibraryFile = row, display: CatalogDisplay | None = display
+            ) -> None:
                 compared = _compare_one(drive, row, display, summary, owner_edits=False)
-                if not isinstance(compared, tuple):
-                    continue
-                _settle_fx(drive, api, record, row, compared, summary)
-                if writes:
-                    seen[row.drive_file_id] = _stamp(modified, row, display)
-            except AudioChanged as exc:
-                summary.aborted = f"{row.path}: {exc}"
-                status = "aborted"
+                if isinstance(compared, tuple):
+                    read.append((row, display, compared))
+
+            if not attempt(row, compare):
                 break
-            except Exception as exc:  # noqa: BLE001 — one file must not end the run
-                if shared_deadline_passed():
-                    summary.stopped = f"run deadline reached reading {row.path}"
-                    status = "stopped"
+        else:
+            split = _copies_disagree(read, summary)
+            for row, display, compared in read:
+                hold = split.get(str(row.catalog_id), frozenset())
+
+                def settle(
+                    row: LibraryFile = row,
+                    display: CatalogDisplay | None = display,
+                    compared: Compared = compared,
+                    hold: frozenset[str] = hold,
+                ) -> None:
+                    _settle_fx(drive, api, record, row, compared, summary, hold=hold)
+                    if writes:
+                        seen[row.drive_file_id] = _stamp(modified, row, display)
+
+                if not attempt(row, settle):
                     break
-                log.exception("library-reconcile: failed on %s", row.path)
-                summary.failed.append(f"{row.path} ({type(exc).__name__}: {exc})")
     finally:
         # Saved even past the deadline; a dry run marks nothing compared.
         with without_run_deadline():
@@ -1416,22 +1452,87 @@ def _reconcile_fx(
         _report_abort(run_id, summary)
 
 
+#: What :func:`_compare_one` returns for a file it compared: its name, the
+#: bytes its tags were read from, its differences and expected values.
+Compared = tuple[str, TagBytes, list[Difference], dict[str, str]]
+
+
+def _with_copies(
+    rows: list[LibraryFile], every: list[LibraryFile]
+) -> list[LibraryFile]:
+    """The chunk's FX files and every other FX file of the same entries, so
+    the copies of one entry are compared together."""
+    taken = {row.drive_file_id for row in rows}
+    entries = {row.catalog_id for row in rows if row.catalog_id}
+    return rows + [
+        row
+        for row in every
+        if row.catalog_id in entries and row.drive_file_id not in taken
+    ]
+
+
+def _agreeing(field_name: str, value: str) -> str:
+    """A field's value as copies are compared: a BPM as a number."""
+    if field_name == "bpm":
+        try:
+            return f"{float(value):g}"
+        except ValueError:
+            return value
+    return value
+
+
+def _copies_disagree(
+    read: list[tuple[LibraryFile, CatalogDisplay | None, Compared]],
+    summary: ReconcileSummary,
+) -> dict[str, frozenset[str]]:
+    """The fields the FX copies of one entry hold differently, by entry.
+    Each copy would send its own value up and the entry would move between
+    them every run, so none is sent and each disagreement is named. A copy
+    that leaves a field empty sends nothing and does not disagree."""
+    copies: dict[str, list[tuple[str, dict[str, str]]]] = {}
+    for row, _display, (_name, data, _diffs, _wanted) in read:
+        if row.catalog_id:
+            copies.setdefault(str(row.catalog_id), []).append(
+                (row.path, read_tag_row(data.data))
+            )
+    split: dict[str, frozenset[str]] = {}
+    for entry, files in copies.items():
+        if len(files) < 2:
+            continue
+        fields = set()
+        for name in FIELDS:
+            values = [(path, (tags.get(name) or "").strip()) for path, tags in files]
+            if len({_agreeing(name, v) for _path, v in values if v}) > 1:
+                fields.add(name)
+                summary.fx_copies_disagree.append(
+                    f"{name}: " + "; ".join(f"{path} {v!r}" for path, v in values)
+                )
+        if fields:
+            split[entry] = frozenset(fields)
+    return split
+
+
 def _settle_fx(
     drive: Any,
     api: Catalog,
     record: RunRecord | None,
     row: LibraryFile,
-    compared: tuple[str, TagBytes, list[Difference], dict[str, str]],
+    compared: Compared,
     summary: ReconcileSummary,
+    *,
+    hold: frozenset[str] = frozenset(),
 ) -> None:
     """Settle one FX file's differences: each value the file holds goes up
     to its fx entry (in a dry run, ``record`` None, the API is only asked
     what it would take); a field the file leaves empty is named and not
-    sent; a link naming another entry is corrected, that frame only. No
-    catalog value is ever written over the file. Raises
+    sent; a field in ``hold`` (the entry's copies disagree on it) is not
+    sent either; a link naming another entry is corrected, that frame only.
+    No catalog value is ever written over the file. Raises
     :class:`AudioChanged`."""
     name, read, diffs, wanted = compared
-    up = [d for d in diffs if d.field in FIELDS and d.file_value]
+    up = [
+        d for d in diffs if d.field in FIELDS and d.file_value and d.field not in hold
+    ]
     for diff in diffs:
         if diff.field in FIELDS and not diff.file_value:
             summary.fx_not_sent.append(
@@ -1523,6 +1624,7 @@ def _record_fx(report: Any, summary: ReconcileSummary, duration_sec: float) -> N
     )
     report.count("fx_held", len(summary.kept_held))
     report.count("fx_not_sent", len(summary.fx_not_sent))
+    report.count("fx_copies_disagree", len(summary.fx_copies_disagree))
     report.count("failed", len(summary.failed))
     for line in summary.fx_sent_up:
         if writes:
@@ -1533,6 +1635,8 @@ def _record_fx(report: Any, summary: ReconcileSummary, duration_sec: float) -> N
         report.notice("fx_held", line)
     for line in summary.fx_not_sent:
         report.notice("fx_not_sent", line)
+    for line in summary.fx_copies_disagree:
+        report.notice("fx_copies_disagree", line)
     for line in summary.written:
         report.updated("link corrected", line)
     for line in summary.would_write:
