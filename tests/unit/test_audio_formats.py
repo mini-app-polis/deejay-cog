@@ -121,6 +121,23 @@ def test_each_format_is_read_through_the_shared_tagger(fmt: AudioFormat) -> None
     assert snapshot["title"] == "Bow <Intro Cut>" and snapshot["catalog_id"] == LINK
 
 
+def test_an_m4a_iso_timestamp_year_reads_as_its_year(tmp_path) -> None:
+    """Some stores write an M4A's year as a timestamp; it reads as the year."""
+    from mutagen.mp4 import MP4
+
+    path = tmp_path / "bow.m4a"
+    path.write_bytes(sample(AudioFormat.M4A))
+    tags = MP4(path)
+    tags["\xa9day"] = ["2000-11-30T08:00:00Z"]
+    tags["\xa9nam"] = ["Bow"]
+    tags.save()
+
+    row = read_tag_row(path.read_bytes())
+
+    assert row["year"] == "2000"
+    assert row["title"] == "Bow"
+
+
 def test_an_untagged_file_reads_empty(fmt: AudioFormat) -> None:
     data = sample(fmt)
     assert set(read_tag_row(data).values()) == {""}
