@@ -334,9 +334,17 @@ never the published song's entry.
 
 - **How to mark one.** In the file's tags only, by writing its version in
   `< >` in the title (in VirtualDJ, say): `Baby What You Want Me To Do
-  <Intro Cut>`, `<Self Censored>`. There is no setting on the WCS site, and
-  no search for candidates: an existing owner edit is marked by retitling
-  it, and the next reconcile carries it to the catalog. The entry records that
+  <Intro Cut>`, `<Self Censored>`. There is no setting on the WCS site. An
+  existing owner edit is marked by retitling it, and the next reconcile
+  carries it to the catalog. `python -m deejay_cog.owner_edits` (run like
+  `fx_untagged`, under `doppler run --config prd`) helps: `propose` lists the
+  main library's files whose name or title suggests an owner edit (no intro,
+  an intro cut, censored, a routine or team cut; a bare "Edit" or "Edited",
+  also an official label, is left for the owner to decide) with the `< >`
+  title each would take; the owner checks the CSV; `apply --write` writes
+  the approved titles, recorded as an `owner-edits` run that
+  `music_rollback` can undo. Only the owner's approval makes a file an owner
+  edit, never the pattern alone. The entry records that
   its version is an owner edit, and its displayed title carries the version
   in `< >`. A file without `< >` behaves as before.
 - **How it differs from a release label.** A release label (Clean,

@@ -466,6 +466,12 @@ owner edit: not the published recording, and not a release label.
    carries it to the catalog. Routine cuts are identified another way and
    are not covered here.
 
+   *Amended 2026-11-12:* the owner wants no hand work in VirtualDJ, so
+   candidates are proposed from the files (`deejay_cog.owner_edits`: a name
+   or title that suggests an owner edit) and the titles written by a
+   reviewed command. A file is marked only once the owner approves it on
+   the list; the pattern alone never marks one.
+
 ## Consequences
 
 - The catalog becomes the one place a song's tags are corrected, and a
