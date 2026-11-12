@@ -74,7 +74,10 @@ the start read, or when an approved difference is written over it.
 (``.differences.json`` for a write run), with each kind's count and every
 difference under it (file, field, the file's value, the catalog's). The run
 report gives each kind's count and a few examples, and names every
-``other`` file.
+``other`` file. A difference not approved that an earlier report named with
+the same values (``reported`` in ``library-reconcile-open.json``) is left
+out of the report and counted as ``held_reported_before``; the record and
+the review still hold it.
 
 **Review.** Every run (dry or write) sends the API the files it compared
 and the differences still open on them (``POST
@@ -758,6 +761,11 @@ class ReconcileSummary:
     #: Approved BPM differences held because the entry's files hold BPMs
     #: further apart than ``BPM_ROUNDING``: "path: bpm 'a' (entry's files: ...)".
     bpm_split_held: list[str] = field(default_factory=list)
+    #: Open-difference keys already named in an earlier run's report with
+    #: the same values: left out of this one (still sent to the review).
+    reported_before: set[str] = field(default_factory=set)
+    #: Open-difference keys the owner approved, for either side.
+    approved_keys: set[str] = field(default_factory=set)
     #: With more than one root, each root's own summary, in order.
     roots: list[tuple[LibraryRoot, ReconcileSummary]] = field(default_factory=list)
 
@@ -1357,6 +1365,9 @@ def _reconcile(
                         bpm_split.get(str(row.catalog_id), ""),
                     )
                 if compared is not None and record is not None:
+                    summary.approved_keys |= {
+                        _open_key(d) for d in compared[2] if approvals.approves(d)
+                    }
                     summary.tried |= {
                         _open_key(d)
                         for d in compared[2]
@@ -1780,8 +1791,9 @@ def _open_key(diff: Difference) -> str:
 def _track_open(
     drive: Any, settings: BackfillSettings, summary: ReconcileSummary
 ) -> None:
-    """Keep when each open difference was first seen, and count those open
-    longer than ``LONG_OPEN_DAYS`` by kind.
+    """Keep when each open difference was first seen and first reported,
+    and count those open longer than ``LONG_OPEN_DAYS`` by kind. One already
+    reported with the same values goes in ``summary.reported_before``.
 
     For every file this run compared, its entries are replaced by what is
     open on it now; a difference whose values changed starts again. A run
@@ -1813,6 +1825,10 @@ def _track_open(
             tried = stamp if key in summary.tried else (was or {}).get("tried")
             if tried and (same or key in summary.tried):
                 kept[key]["tried"] = tried
+            reported = (was or {}).get("reported") if same else None
+            if reported:
+                summary.reported_before.add(key)
+            kept[key]["reported"] = reported or stamp
         cutoff = now.timestamp() - LONG_OPEN_DAYS * 86400
         long_open: dict[str, int] = {}
         for value in kept.values():
@@ -1982,10 +1998,25 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
         else set()
     )
     refused_count = len(refused)
+    # A held difference is named once: one an earlier report named with the
+    # same values, and not approved, is left out (the review still has it).
+    hidden = refused | (summary.reported_before - summary.approved_keys)
+    shown_kinds: dict[str, list[Difference]] = {
+        kind: [
+            d
+            for d in summary.differences[kind]
+            if not hidden or _open_key(d) not in hidden
+        ]
+        for kind in KINDS
+    }
     for kind in KINDS:
-        n = len(summary.differences[kind])
-        report.count(kind, n - refused_count if kind == "fill_up" else n)
+        report.count(kind, len(shown_kinds[kind]))
     report.count("fill_up_kept_by_file", refused_count)
+    report.count(
+        "held_reported_before",
+        sum(len(summary.differences[k]) - len(shown_kinds[k]) for k in KINDS)
+        - refused_count,
+    )
     report.count("failed", len(summary.failed))
     report.count("owner_edits", len(summary.owner_edits))
     for item in summary.owner_edits:
@@ -2011,9 +2042,7 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
     if summary.aborted:
         report.issue("audio_changed_run_stopped", summary.aborted)
     for kind in KINDS:
-        diffs = summary.differences[kind]
-        if refused:
-            diffs = [d for d in diffs if _open_key(d) not in refused]
+        diffs = shown_kinds[kind]
         shown = diffs if kind == "other" else diffs[:REPORT_EXAMPLES]
         for diff in shown:
             report.notice(kind, diff.example())

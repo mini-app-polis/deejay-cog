@@ -851,7 +851,12 @@ the catalog leaves empty) and `other`.
 every difference under its kind (path, field, the file's value, the
 catalog's); a write run's is `library-reconcile-<run id>.differences.json`.
 The report counts each kind, shows a few examples of each, and names every
-`other` file.
+`other` file. **A held difference is reported once:** one not approved that
+an earlier run's report already named with the same values (kept as
+`reported` in `library-reconcile-open.json`, below) is left out of the
+report's counts and examples, and counted as `held_reported_before`
+instead. It is still in the record and still sent to the review. A
+difference whose values changed, or a new one, is reported again.
 
 **Review:** every run, dry or write, sends the API the files it compared
 and the differences still open on them (`POST
