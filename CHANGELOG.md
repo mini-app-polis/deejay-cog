@@ -1,3 +1,23 @@
+# [2.59.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.58.3...v2.59.0) (2026-11-12)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 9.10.0 ([85dc5a4](https://github.com/mini-app-polis/deejay-cog/commit/85dc5a44800cca29f0c28e4acb5a571796bd6b65))
+* **deps:** require miniapppolis-common-utils 9.10.1 for ISO-timestamp year tags ([897c483](https://github.com/mini-app-polis/deejay-cog/commit/897c4830bbecf25ac4596b0f61a95c7c7eae95f4))
+* **library-duplicates:** post no report when the groups are the same as at the last run ([b1f6561](https://github.com/mini-app-polis/deejay-cog/commit/b1f6561475d245a63684d6df995042887750c2e2))
+* **library-identify:** back off and retry Drive's rate limit instead of failing the run ([b4f72c8](https://github.com/mini-app-polis/deejay-cog/commit/b4f72c8522e70e8c70bd9ecfacee9fc02ef2bd6c))
+* **library-reconcile:** hold the BPM of edits that share an entry at different tempos ([8026ab8](https://github.com/mini-app-polis/deejay-cog/commit/8026ab85756767e7aeb2238b2a2ea0b043419413))
+* **library-reconcile:** report a held difference once, not on every run ([c9c7966](https://github.com/mini-app-polis/deejay-cog/commit/c9c79666313c7009473433d86e48ed49bc3f5c13))
+
+
+### Features
+
+* **fx:** name or trash the FX Music files whose tags name no song, from an approved list ([5fc02cd](https://github.com/mini-app-polis/deejay-cog/commit/5fc02cd78a70c394a8bb1a2da0c94afc1dd9426e))
+* **new-music:** queue a follow-up run to drain a batch bigger than the per-run cap ([ca170de](https://github.com/mini-app-polis/deejay-cog/commit/ca170de3e2776e7f686518c619ba245c0b122276))
+* **new-music:** refuse a file that is a byte-identical copy of a library file ([79f5a6c](https://github.com/mini-app-polis/deejay-cog/commit/79f5a6ca066103a1159f1426cb0fc04cd4ad098c))
+* **new-music:** send a file whose title tag looks like an old file name to needs-review ([85eec41](https://github.com/mini-app-polis/deejay-cog/commit/85eec41af648d4f6aac6c2b10b3cacf0dbaae1bc))
+
 ## [2.58.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.58.2...v2.58.3) (2026-11-12)
 
 
