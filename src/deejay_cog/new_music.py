@@ -17,10 +17,14 @@ name is already taken, in the destination or by any file in the library
 (the API's library registry), the featured artists are added. Characters
 a file name can't hold are left out, ``<`` and ``>`` among them, so an
 owner edit's name carries its version without them. A file that is not
-an MP3 or has no usable title or artist, whose title tag looks like an old
+an MP3, is a byte-identical copy of a file in the main library (its md5
+matches a present registry file not marked for the trash, in the main
+folder or New Music; FX Music's files never match), has no usable title or
+artist, whose title tag looks like an old
 file name (:func:`file_name_title`), whose name is taken even so (or has
 no featured artists to add), or whose name cannot be checked because the
-registry cannot be read, is moved unchanged to ``NEW_MUSIC_REVIEW_FOLDER_ID``. Nothing
+registry cannot be read (so neither its copy nor its name can be checked),
+is moved unchanged to ``NEW_MUSIC_REVIEW_FOLDER_ID``. Nothing
 is deleted and nothing is overwritten. This is the only flow that names a
 file; files already in the library are never renamed.
 
@@ -50,6 +54,7 @@ from deejay_cog._pipeline_eval import REPO, post_run_finding, run_report
 from deejay_cog._shared_deadline import shared_deadline_passed
 from deejay_cog._version import __version__
 from deejay_cog.api_client import api_client
+from deejay_cog.library_backfill import FX_ROOT_FOLDER_VAR
 from deejay_cog.music_safety import (
     MP3_MIME_TYPE,
     SOURCE_PROPERTY,
@@ -280,37 +285,71 @@ class RegistryUnavailable(Exception):  # noqa: N818 — named for what happened
 
 
 class LibraryNames:
-    """The file names already in the library, from the API's library
-    registry: read once, on the first name checked, then kept for the run."""
+    """The file names and md5s already in the library, from the API's
+    library registry: read once, on the first check, then kept for the run."""
 
     PAGE = 500
 
     def __init__(self, api: LibraryFiles | None) -> None:
         self.api = api
         self._names: set[str] | None = None
+        #: By md5: (drive file id, path) of each present main-library file
+        #: not marked for the trash.
+        self._md5s: dict[str, list[tuple[str, str]]] = {}
+
+    def _load(self) -> set[str]:
+        if self._names is not None:
+            return self._names
+        assert self.api is not None
+        fx_root = os.getenv(FX_ROOT_FOLDER_VAR, "").strip()
+        names: set[str] = set()
+        md5s: dict[str, list[tuple[str, str]]] = {}
+        offset = 0
+        try:
+            while True:
+                page = self.api.list_library_files(
+                    present=True, limit=self.PAGE, offset=offset
+                )
+                for row in page:
+                    path = str(row.path)
+                    names.add(path.rsplit("/", 1)[-1].lower())
+                    checksum = str(getattr(row, "md5", None) or "").lower()
+                    root = str(getattr(row, "library_root_id", "") or "")
+                    if (
+                        checksum
+                        and not getattr(row, "trash_requested", False)
+                        and not (fx_root and root == fx_root)
+                    ):
+                        file_id = str(getattr(row, "drive_file_id", "") or "")
+                        md5s.setdefault(checksum, []).append((file_id, path))
+                if len(page) < self.PAGE:
+                    break
+                offset += self.PAGE
+        except Exception as exc:
+            raise RegistryUnavailable(f"{type(exc).__name__}: {exc}") from exc
+        self._names, self._md5s = names, md5s
+        return names
 
     def taken(self, name: str) -> bool:
         """Whether a present library file already has this name (any case)."""
         if self.api is None:
             return False
-        if self._names is None:
-            names: set[str] = set()
-            offset = 0
-            try:
-                while True:
-                    page = self.api.list_library_files(
-                        present=True, limit=self.PAGE, offset=offset
-                    )
-                    names.update(
-                        str(row.path).rsplit("/", 1)[-1].lower() for row in page
-                    )
-                    if len(page) < self.PAGE:
-                        break
-                    offset += self.PAGE
-            except Exception as exc:
-                raise RegistryUnavailable(f"{type(exc).__name__}: {exc}") from exc
-            self._names = names
-        return name.lower() in self._names
+        return name.lower() in self._load()
+
+    def copy_of(
+        self, checksum: str, *, besides: frozenset[str] = frozenset()
+    ) -> str | None:
+        """The path of a present main-library file (its main folder or New
+        Music, not FX Music) not marked for the trash whose md5 is
+        ``checksum``, leaving out the files in ``besides``; None when there
+        is none. A registry row with no md5 never matches."""
+        if self.api is None:
+            return None
+        self._load()
+        for file_id, path in self._md5s.get(checksum.lower(), []):
+            if file_id not in besides:
+                return path
+        return None
 
 
 def is_mp3(downloaded: Any, name: str) -> bool:
@@ -546,6 +585,27 @@ def intake_one(intake: Intake, file_id: str) -> None:
     data: bytes = downloaded.data
     if not is_mp3(downloaded, name):
         intake.review(file_id, name, None, "not an MP3: only ID3 tags are read")
+        return
+    # A copy an earlier run of this file made is the file itself, not a
+    # library file it duplicates.
+    earlier = frozenset(
+        intake.drive.find_files_by_app_property(
+            intake.folders.destination, key=SOURCE_PROPERTY, value=file_id
+        )
+    )
+    try:
+        copy = intake.library.copy_of(md5(data), besides=earlier)
+    except RegistryUnavailable as exc:
+        intake.review(
+            file_id,
+            name,
+            data,
+            "the library registry could not be read to check for an exact copy "
+            f"({exc})",
+        )
+        return
+    if copy is not None:
+        intake.review(file_id, name, data, f"exact copy of a library file ({copy})")
         return
     tags = read_tag_row(data)
     if ingest_track(tags) is None:

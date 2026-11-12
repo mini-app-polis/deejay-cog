@@ -14,10 +14,12 @@ from mini_app_polis.lambda_worker import RunOutOfTime
 from music_fakes import AUDIO, FakeDrive, mp3
 from mutagen.id3 import TALB, TIT2, TPE1
 
+from deejay_cog import library_backfill as backfill
 from deejay_cog import new_music as flow
 from deejay_cog.music_safety import (
     SOURCE_PROPERTY,
     audio_payload,
+    md5,
     tag_snapshot,
 )
 from flag_fakes import FLAGS
@@ -42,6 +44,8 @@ class FakeApi:
     library: list[str] = field(default_factory=list)
     registry_down: Exception | None = None
     listings: list[dict] = field(default_factory=list)
+    #: Registry rows with more than a path (md5, root, trash), after those.
+    rows: list[SimpleNamespace] = field(default_factory=list)
 
     def lookup_catalog(self, _payload):
         raise AssertionError("intake never looks a file up")
@@ -54,8 +58,8 @@ class FakeApi:
         if self.registry_down is not None:
             raise self.registry_down
         start = offset or 0
-        rows = self.library[start : start + (limit or 100)]
-        return [SimpleNamespace(path=p) for p in rows]
+        every = [SimpleNamespace(path=p) for p in self.library] + self.rows
+        return every[start : start + (limit or 100)]
 
 
 @pytest.fixture
@@ -724,3 +728,132 @@ def test_a_dry_run_moves_no_file_name_title(
     assert drive.writes(except_folder=STATE) == []
     [entry] = _record(drive)["entries"]
     assert entry["action"] == "review" and entry["state"] == "planned"
+
+
+# ---------------------------------------------------------------------------
+# A byte-identical copy of a library file
+# ---------------------------------------------------------------------------
+
+LIBRARY_ROOT, FX_ROOT = "library-root", "fx-root"
+
+
+def _row(path: str, data: bytes | None, **kw) -> SimpleNamespace:
+    values = {
+        "drive_file_id": f"lib-{path}",
+        "path": path,
+        "md5": md5(data) if data is not None else None,
+        "library_root_id": LIBRARY_ROOT,
+        "trash_requested": False,
+        **kw,
+    }
+    return SimpleNamespace(**values)
+
+
+@pytest.fixture
+def fx(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(backfill.FX_ROOT_FOLDER_VAR, FX_ROOT)
+
+
+def test_an_exact_copy_of_a_library_file_goes_to_review(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    data = _tagged()
+    api.rows = [_row("/New Music/Temple_Thomas Gold.mp3", data)]
+    file_id = drive.add("temple copy.mp3", IN, data)
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.needs_review == [
+        "temple copy.mp3 (exact copy of a library file "
+        "(/New Music/Temple_Thomas Gold.mp3))"
+    ]
+    item = drive.items[file_id]
+    assert item.parents == [REVIEW] and item.name == "temple copy.mp3"
+    assert item.data == data and not item.trashed
+    assert drive.in_folder(DEST) == []
+    [entry] = _record(drive)["entries"]
+    assert entry["action"] == "review" and entry["move"] == {"from": IN, "to": REVIEW}
+
+
+def test_a_file_no_library_file_matches_is_taken_in(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    api.rows = [
+        _row("other.mp3", _tagged("Other", "Someone")),
+        _row("no-md5.mp3", None),
+    ]
+    drive.add("track01.mp3", IN, _tagged())
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == [f"track01.mp3 -> {_NAME}"]
+    assert summary.needs_review == []
+
+
+def test_a_copy_of_a_file_marked_for_the_trash_is_taken_in(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    data = _tagged()
+    api.rows = [_row("old/Temple.mp3", data, trash_requested=True)]
+    drive.add("track01.mp3", IN, data)
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == [f"track01.mp3 -> {_NAME}"]
+
+
+def test_a_copy_of_an_fx_music_file_only_is_taken_in(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    data = _tagged()
+    api.rows = [_row("Walk-ons/Temple.mp3", data, library_root_id=FX_ROOT)]
+    drive.add("track01.mp3", IN, data)
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == [f"track01.mp3 -> {_NAME}"]
+
+
+def test_an_unreadable_registry_sends_the_file_to_review_before_copying(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    api.registry_down = RuntimeError("API down")
+    file_id = drive.add("track01.mp3", IN, _tagged())
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.needs_review == [
+        "track01.mp3 (the library registry could not be read to check for an "
+        "exact copy (RuntimeError: API down))"
+    ]
+    assert drive.items[file_id].parents == [REVIEW]
+    assert drive.in_folder(DEST) == []
+
+
+def test_the_copy_an_earlier_run_made_is_not_an_exact_copy(
+    settings, wired, drive, api: FakeApi, fx
+) -> None:
+    data = _tagged()
+    file_id = drive.add("track01.mp3", IN, data)
+    copy_id = drive.add(_NAME, DEST, data, app_properties={SOURCE_PROPERTY: file_id})
+    # The scan registered that copy before this run.
+    api.rows = [_row(f"/New Music/{_NAME}", data, drive_file_id=copy_id)]
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified == [f"track01.mp3 -> {_NAME}"]
+    assert drive.items[file_id].parents == [ORIG]
+
+
+def test_a_dry_run_moves_no_exact_copy(
+    settings, wired, drive, api: FakeApi, fx, monkeypatch
+) -> None:
+    data = _tagged()
+    api.rows = [_row("Temple.mp3", data)]
+    file_id = drive.add("track01.mp3", IN, data)
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.needs_review and drive.items[file_id].parents == [IN]
+    assert drive.writes(except_folder=STATE) == []

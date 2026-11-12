@@ -182,8 +182,18 @@ identify with its fingerprint check, duplicates, reconcile and sync; see
 
 1. **Not an MP3** → moved, unchanged, to needs-review (the main library
    takes MP3s only).
-2. **No usable title or artist** → moved, unchanged, to needs-review.
-3. **A title tag that looks like an old file name** → moved, unchanged and
+2. **A byte-identical copy of a library file** → moved, unchanged and
+   unrenamed, to needs-review, reported as `needs_review` with the reason
+   `exact copy of a library file` and the library file's path. Its md5 (as
+   Drive reports it) is checked against the library registry, read once a
+   run: a present file not marked for the trash, in the main library (its
+   main folder or New Music; FX Music's files never match) with the same
+   md5. A registry row with no md5 never matches, and the copy an earlier
+   run of this file made in New Music is not counted. If the registry cannot
+   be read, the file goes to needs-review with the reason, as the name check
+   does. Nothing is trashed or overwritten.
+3. **No usable title or artist** → moved, unchanged, to needs-review.
+4. **A title tag that looks like an old file name** → moved, unchanged and
    unrenamed, to needs-review, the reason naming the check that found it
    (`new_music.file_name_title`): underscores; a number from 70 to 180 at
    its end (a BPM, as in `… Kahlo 113`); words run together (three
@@ -194,7 +204,7 @@ identify with its fingerprint check, duplicates, reconcile and sync; see
    (Remix) (Ella)`). Named by such a tag, the file would carry the old name
    into the library; a false alarm costs only a review. A dry run moves
    nothing; the record lists the move it would make.
-4. **Otherwise** → taken in: copied, tags and audio unchanged, into New
+5. **Otherwise** → taken in: copied, tags and audio unchanged, into New
    Music, named from its own tags.
 
 A release label in the file's own title (Clean, Explicit, Radio Edit, an
