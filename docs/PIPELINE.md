@@ -943,6 +943,18 @@ library does not stop the other (approvals the API can't return stop only the
 main library); a failure is raised once the other has run. With more than one
 root, every line of the report names its root and the counts are over both.
 
+**Edits that share an entry at different tempos keep their BPMs.** When the
+files linked to one entry hold BPMs 1.5 or more apart (`BPM_ROUNDING`; two
+edits of a song cut at different tempos, such as a 3:09 and a 2:53 edit),
+a write run settles no BPM difference on any of them, whatever was
+approved: the file's BPM is not sent up and the catalog's is not written.
+Either would hand one file's tempo to the other through the entry, since
+library-sync writes the entry's BPM to every file on it, and the next run
+would hand it back. The differences stay open, filed as `bpm_differs`, for
+the owner's review; the report names each one an approval would have
+settled (`bpm_split_held`, with every file's BPM). library-sync writes
+neither BPM ([library-sync](#library-sync)).
+
 **Long-open differences:** `library-reconcile-open.json` in the state folder
 keeps when each open difference was first seen; a difference whose values
 change starts again. Every run counts those open more than 7 days
@@ -1025,6 +1037,14 @@ comment and VirtualDJ's frames are left as they are. Then the files are
 recorded as synced with their values
 (`POST /v1/catalog/library/files/synced`), including those that already
 carried them.
+
+**Edits that share an entry at different tempos keep their BPMs.** When a
+file's BPM moved and the files linked to its entry hold BPMs 1.5 or more
+apart (read from their tags, once per entry per run), the BPM is written to
+none of them: each keeps its own, any other moved field is written as
+usual, and the report names each (`bpm_split_kept`). The file is recorded
+as synced, so the same move is not tried again. The reconcile holds their
+BPM differences the same way ([library-reconcile](#library-reconcile)).
 
 **Edits made in a file go up first**
 ([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), 2026-11-09: an

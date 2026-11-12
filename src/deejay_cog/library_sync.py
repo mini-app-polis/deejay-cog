@@ -44,6 +44,14 @@ are read from the start and end of the file (a ranged Drive download); the
 whole file is downloaded only when its ID3v2 tag runs past the start read,
 or when a stale field is put back.
 
+**Edits that share an entry at different tempos keep their BPMs.** When
+the entry's BPM moved for a file and the files linked to that entry hold
+BPMs ``BPM_REMEASURE`` or more apart (two edits of a song cut at different
+tempos), the BPM is written to none of them: each keeps its own, and the
+other moved fields are written as usual (``bpm_split_kept``). The
+reconcile holds their BPM differences the same way, so one file's tempo is
+never handed to the other through the entry.
+
 **An owner edit is the reconcile's.** A file the owner retitled with a
 version in ``< >`` ("Song <Intro Cut>") while its entry is the published
 song's (or another owner edit) is not an edit to that entry: nothing of it
@@ -101,6 +109,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic
@@ -312,6 +321,9 @@ class SyncSummary:
     stopped: str = ""
     #: FX Music files whose entry moved: the file wins, nothing is written.
     fx_kept: list[str] = field(default_factory=list)
+    #: Files whose entry's BPM moved but whose entry's files hold BPMs too
+    #: far apart to share one: the BPM is not written to them.
+    bpm_split_kept: list[str] = field(default_factory=list)
     #: With more than one root, each root's own summary, in order.
     roots: list[tuple[LibraryRoot, SyncSummary]] = field(default_factory=list)
 
@@ -360,16 +372,27 @@ def _sync_one(
     row: LibraryFile,
     display: CatalogDisplay,
     summary: SyncSummary,
+    bpm_split: Callable[[LibraryFile], str] | None = None,
 ) -> LibraryFileTags | None:
     """Write one file's moved fields from its entry. The values to record
     when it now carries them (written, already so, or nothing moved), None
-    when not. Raises :class:`AudioChanged`."""
+    when not. ``bpm_split`` names the BPMs of the entry's files when they
+    are too far apart to share one: then the BPM is not written. Raises
+    :class:`AudioChanged`."""
     now = display_fields(display, label=row.edit_label)
     values = LibraryFileTags(**now)
     if row.synced is None:
         summary.recorded.append(row.path)
         return values
     moved = _moved(now, row.synced)
+    if "bpm" in moved and bpm_split is not None:
+        spread = bpm_split(row)
+        if spread:
+            del moved["bpm"]
+            summary.bpm_split_kept.append(
+                f"{row.path}: bpm {now['bpm']!r} not written (the entry's "
+                f"files: {spread})"
+            )
     if not moved:
         summary.unmoved.append(row.path)
         return values
@@ -400,6 +423,54 @@ def _sync_one(
         return values
     summary.would_write.append(label)
     return None
+
+
+class _BpmSpread:
+    """Whether the files linked to a row's entry hold BPMs too far apart
+    to share one, read once per entry and only when asked: the registry's
+    present rows of the root, then each linked file's tags."""
+
+    def __init__(self, drive: Any, api: Catalog, root: str) -> None:
+        self.drive = drive
+        self.api = api
+        self.root = root
+        self._files: dict[str, list[LibraryFile]] | None = None
+        self._spread: dict[str, str] = {}
+
+    def __call__(self, row: LibraryFile) -> str:
+        """The entry's files' BPMs, as the report names them, when they are
+        ``BPM_REMEASURE`` or more apart; empty when they are not."""
+        entry = str(row.catalog_id or "")
+        if not entry:
+            return ""
+        if entry in self._spread:
+            return self._spread[entry]
+        if self._files is None:
+            self._files = {}
+            for other in _present_files(self.api, self.root):
+                if other.catalog_id and other.identification_status == "identified":
+                    self._files.setdefault(str(other.catalog_id), []).append(other)
+        linked = self._files.get(entry) or []
+        found: list[tuple[str, str]] = []
+        if len(linked) > 1:
+            for other in linked:
+                read = read_tag_bytes(self.drive, other.drive_file_id)
+                value = read_tag_row(read.data)["bpm"]
+                if value:
+                    found.append((other.path, value))
+        numbers = [n for _path, v in found if (n := _number(v)) is not None]
+        apart = bool(numbers) and max(numbers) - min(numbers) >= BPM_REMEASURE
+        self._spread[entry] = (
+            "; ".join(f"{path} {v!r}" for path, v in found) if apart else ""
+        )
+        return self._spread[entry]
+
+
+def _number(value: str) -> float | None:
+    try:
+        return float(value)
+    except ValueError:
+        return None
 
 
 def _fx_one(
@@ -881,6 +952,7 @@ def _sync(
         folders={"root": root.root_id, "state": settings.state},
     ).attach(drive, settings.state)
     summary.record_name = record.file_name
+    spread = _BpmSpread(drive, api, root.root_id)
     done: dict[str, LibraryFileTags] = {}
     status = "complete"
     try:
@@ -899,7 +971,7 @@ def _sync(
                 values = (
                     _fx_one(row, display, summary)
                     if root.file_wins
-                    else _sync_one(drive, record, row, display, summary)
+                    else _sync_one(drive, record, row, display, summary, spread)
                 )
                 if values is not None:
                     done[row.drive_file_id] = values
@@ -1093,6 +1165,8 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
             "fx_file_wins",
             f"{line}: its entry moved; the FX file keeps its own values",
         )
+    for line in summary.bpm_split_kept:
+        report.notice("bpm_split_kept", line)
     report.count("marked_synced", len(summary.synced))
     report.count("failed", len(summary.failed))
     for shown, files in sorted(summary.reached.items()):
