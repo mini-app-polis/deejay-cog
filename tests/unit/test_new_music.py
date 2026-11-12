@@ -626,3 +626,101 @@ def test_an_owner_edit_is_copied_unchanged_and_named_without_brackets(
 def test_names_never_carry_the_owner_edit_brackets() -> None:
     tags = {"title": f"{_BABY} <Intro Cut>", "artist": "Etta James"}
     assert flow.delivery_name(tags, "x.mp3") == f"{_BABY} Intro Cut_Etta James.mp3"
+
+
+# ---------------------------------------------------------------------------
+# A title tag that is an old file name
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("title", "artist", "check"),
+    [
+        # The title tags behind three names seen on 2026-11-11.
+        (
+            # BoxingUnderwater featCailinRusso Golding featCailinRusso 95_Golding.mp3
+            "BoxingUnderwater featCailinRusso Golding featCailinRusso 95",
+            "Golding",
+            "a trailing BPM number",
+        ),
+        (
+            # Burning (Bridges) (Sistek) (Remix) (Ella)_Vos.mp3
+            "Burning (Bridges) (Sistek) (Remix) (Ella)",
+            "Vos",
+            "words in brackets one by one",
+        ),
+        (
+            # CandyCleanKahlo113 Kahlo 113_Kah-lo.mp3
+            "CandyCleanKahlo113 Kahlo 113",
+            "Kah-lo",
+            "a trailing BPM number",
+        ),
+        ("burning_bridges", "Ella Vos", "underscores"),
+        ("BoxingUnderwater", "Golding", "run-together words"),
+        ("CandyCleanKahlo113", "Kah-lo", "run-together words"),
+        ("Kahlo Candy Clean", "Kah-lo", "the artist repeated in the title"),
+        ("Golding Boxing Underwater", "Golding", "the artist repeated in the title"),
+        ("Burning Bridges Ella Vos", "Ella Vos", "the artist repeated in the title"),
+    ],
+)
+def test_a_title_that_looks_like_a_file_name_is_named(title, artist, check) -> None:
+    assert flow.file_name_title(title, artist) == check
+
+
+@pytest.mark.parametrize(
+    ("title", "artist"),
+    [
+        ("Ain't No Sunshine (Explicit)", "Bill Withers"),
+        ("2 AM", "Adrian Marcel"),
+        ("Dernière danse", "Indila"),
+        ("Alive (M4SONIC Remix)", "Krewella"),
+        ("Alive (M4SONIC Remix)", "M4SONIC"),
+        ("Be Like That", "Kane Brown"),
+        ("Temple", "Thomas Gold"),
+        ("Honesty (feat. Kehlani)", "Pink Sweat$ feat. Kehlani"),
+        ("Attention (Lash Remix) (Clean)", "Charlie Puth"),
+        ("Baby What You Want Me To Do <Intro Cut>", "Etta James"),
+        ("Route 66", "Chuck Berry"),
+        ("McDonald's Theme", "DeBarge"),
+        ("Bad Company", "Bad Company"),
+    ],
+)
+def test_an_ordinary_title_reads_as_a_title(title, artist) -> None:
+    assert flow.file_name_title(title, artist) is None
+
+
+def test_a_file_name_title_goes_to_review_unrenamed(settings, wired, drive) -> None:
+    data = _tagged("CandyCleanKahlo113 Kahlo 113", "Kah-lo")
+    file_id = drive.add("CandyCleanKahlo113.mp3", IN, data)
+    ordinary = drive.add("be.mp3", IN, _tagged("Be Like That", "Kane Brown"))
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.needs_review == [
+        "CandyCleanKahlo113.mp3 (its title tag looks like a file name (a trailing "
+        "BPM number): 'CandyCleanKahlo113 Kahlo 113')"
+    ]
+    item = drive.items[file_id]
+    assert item.parents == [REVIEW] and item.name == "CandyCleanKahlo113.mp3"
+    assert item.data == data
+    assert summary.identified == ["be.mp3 -> Be Like That_Kane Brown.mp3"]
+    assert drive.items[ordinary].parents == [ORIG]
+    [review, deliver] = _record(drive)["entries"]
+    assert review["action"] == "review" and review["file_id"] == file_id
+    assert review["move"] == {"from": IN, "to": REVIEW}
+    assert "a trailing BPM number" in review["reason"]
+    assert deliver["action"] == "deliver"
+
+
+def test_a_dry_run_moves_no_file_name_title(
+    settings, wired, drive, monkeypatch
+) -> None:
+    file_id = drive.add("x.mp3", IN, _tagged("burning_bridges", "Ella Vos"))
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.needs_review and drive.items[file_id].parents == [IN]
+    assert drive.writes(except_folder=STATE) == []
+    [entry] = _record(drive)["entries"]
+    assert entry["action"] == "review" and entry["state"] == "planned"

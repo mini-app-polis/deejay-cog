@@ -183,7 +183,18 @@ identify with its fingerprint check, duplicates, reconcile and sync; see
 1. **Not an MP3** → moved, unchanged, to needs-review (the main library
    takes MP3s only).
 2. **No usable title or artist** → moved, unchanged, to needs-review.
-3. **Otherwise** → taken in: copied, tags and audio unchanged, into New
+3. **A title tag that looks like an old file name** → moved, unchanged and
+   unrenamed, to needs-review, the reason naming the check that found it
+   (`new_music.file_name_title`): underscores; a number from 70 to 180 at
+   its end (a BPM, as in `… Kahlo 113`); words run together (three
+   lowercase letters then a capital or two digits: `BoxingUnderwater`,
+   `Kahlo113`; `McDonald` or `M4SONIC` are not); the main artist again
+   outside the title's brackets (a song named after its artist aside); or
+   three or more brackets of one word each (`Burning (Bridges) (Sistek)
+   (Remix) (Ella)`). Named by such a tag, the file would carry the old name
+   into the library; a false alarm costs only a review. A dry run moves
+   nothing; the record lists the move it would make.
+4. **Otherwise** → taken in: copied, tags and audio unchanged, into New
    Music, named from its own tags.
 
 A release label in the file's own title (Clean, Explicit, Radio Edit, an

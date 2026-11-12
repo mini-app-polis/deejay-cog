@@ -17,7 +17,8 @@ name is already taken, in the destination or by any file in the library
 (the API's library registry), the featured artists are added. Characters
 a file name can't hold are left out, ``<`` and ``>`` among them, so an
 owner edit's name carries its version without them. A file that is not
-an MP3 or has no usable title or artist, whose name is taken even so (or has
+an MP3 or has no usable title or artist, whose title tag looks like an old
+file name (:func:`file_name_title`), whose name is taken even so (or has
 no featured artists to add), or whose name cannot be checked because the
 registry cannot be read, is moved unchanged to ``NEW_MUSIC_REVIEW_FOLDER_ID``. Nothing
 is deleted and nothing is overwritten. This is the only flow that names a
@@ -205,6 +206,53 @@ def delivery_names(tags: dict[str, str], original_name: str) -> list[str]:
     if featured and named(with_featured) not in names:
         names.append(named(with_featured))
     return names
+
+
+#: A number at the end of a title, as a file name carries its BPM ("… 95").
+_TRAILING_NUMBER = re.compile(r"\s(\d{2,3})$")
+#: The BPMs a trailing number is read as: a "Route 66" or "Area 51" is not one.
+_BPM_RANGE = range(70, 181)
+#: A word run into the next: three lowercase letters, then a capital
+#: ("BoxingUnderwater", "featCailin"), or then two digits ("Kahlo113").
+#: "McDonald", "DeBarge" and "M4SONIC" are not.
+_RUN_TOGETHER = re.compile(r"[^\W\d_]*[^\W\d_A-Z]{3}(?:[A-Z]|\d{2})")
+#: A bracketed part of a title: a version, a feature, a label.
+_BRACKETED = re.compile(r"[(\[][^)\]]*[)\]]")
+#: A bracket holding a single word: "(Bridges)".
+_ONE_WORD_BRACKET = re.compile(r"[(\[]\s*[^\s()\[\]]+\s*[)\]]")
+
+
+def _folded(text: str) -> str:
+    return re.sub(r"[\W_]+", "", text.casefold())
+
+
+def file_name_title(title: str, artist: str) -> str | None:
+    """Which check finds ``title`` (with ``artist``, the artist tag) looking
+    like an old file name a tagger copied into the title tag, or None when
+    it reads as a title: underscores; a BPM-like number at its end
+    (70-180); words run together; the main artist again outside its
+    brackets; or three or more brackets of one word each. A file whose name
+    this would build is sent to review rather than named by it."""
+    title = title.strip()
+    if "_" in title:
+        return "underscores"
+    number = _TRAILING_NUMBER.search(title)
+    if number and int(number.group(1)) in _BPM_RANGE:
+        return "a trailing BPM number"
+    if any(_RUN_TOGETHER.match(word) for word in title.split()):
+        return "run-together words"
+    bare = _BRACKETED.sub(" ", title)
+    words = {_folded(w) for w in bare.split()}
+    main, _featured = split_artist(artist)
+    for name in main:
+        folded = _folded(name)
+        if len(folded) < 3 or folded == _folded(bare):
+            continue  # too short to tell, or a song named after its artist
+        if folded in words or (" " in name.strip() and folded in _folded(bare)):
+            return "the artist repeated in the title"
+    if len(_ONE_WORD_BRACKET.findall(title)) >= 3:
+        return "words in brackets one by one"
+    return None
 
 
 def delivery_name(tags: dict[str, str], original_name: str) -> str | None:
@@ -499,8 +547,18 @@ def intake_one(intake: Intake, file_id: str) -> None:
     if not is_mp3(downloaded, name):
         intake.review(file_id, name, None, "not an MP3: only ID3 tags are read")
         return
-    if ingest_track(read_tag_row(data)) is None:
+    tags = read_tag_row(data)
+    if ingest_track(tags) is None:
         intake.review(file_id, name, data, "no usable title or artist")
+        return
+    check = file_name_title(tags["title"], tags["artist"])
+    if check is not None:
+        intake.review(
+            file_id,
+            name,
+            data,
+            f"its title tag looks like a file name ({check}): {tags['title']!r}",
+        )
         return
     intake.deliver(file_id, name, data, data, identified_by="own tags")
 
