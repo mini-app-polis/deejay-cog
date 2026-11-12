@@ -1,3 +1,10 @@
+# [2.56.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.55.0...v2.56.0) (2026-11-12)
+
+
+### Features
+
+* **library-duplicates:** send every main-library song with two or more files, other edits marked kept on purpose ([474e371](https://github.com/mini-app-polis/deejay-cog/commit/474e37155784cf674ceb772392bd6d0f72b6959d))
+
 # [2.55.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.54.0...v2.55.0) (2026-11-12)
 
 
