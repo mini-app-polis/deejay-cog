@@ -647,3 +647,31 @@ def _display_of(title: str) -> CatalogDisplay:
 )
 def test_a_files_label_is_added_to_the_title_once(title, label, expected) -> None:
     assert music_tags.display_title(_display_of(title), label) == expected
+
+
+@pytest.mark.parametrize(
+    ("genre", "expected"),
+    [
+        ("Pop, Pop", "Pop"),
+        ("Dance, Dance", "Dance"),
+        ("Pop, Pop, Pop", "Pop"),
+        ("Pop, Rock", "Pop, Rock"),
+        ("Pop, pop", "Pop, pop"),
+        ("Pop", "Pop"),
+        ("", ""),
+    ],
+)
+def test_an_m4a_genre_repeating_one_value_is_read_once(
+    monkeypatch, genre, expected
+) -> None:
+    monkeypatch.setattr(
+        music_tags.audio_formats,
+        "read",
+        lambda *_: ({"genre": genre}, ""),
+    )
+    monkeypatch.setattr(
+        music_tags,
+        "other_format",
+        lambda *_: music_tags.audio_formats.AudioFormat.M4A,
+    )
+    assert music_tags.read_tag_row(b"")["genre"] == expected
