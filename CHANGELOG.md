@@ -1,3 +1,10 @@
+## [2.58.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.58.0...v2.58.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* **library:** don't add a file's release label to a title that already carries it ([04276f1](https://github.com/mini-app-polis/deejay-cog/commit/04276f1e8cada325164137b6c573ba7e9f64deb3))
+
 # [2.58.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.57.0...v2.58.0) (2026-11-12)
 
 
