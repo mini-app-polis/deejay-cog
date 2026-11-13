@@ -701,7 +701,11 @@ the `flags.deejay_cog.library_identify` flag is `dry-run` or `write` (see
 unidentified files it has not tried before. Every file tried, and its
 outcome, is kept in `library-identify-tried.json` in the state folder, so a
 file is not fingerprinted again every run; remove an id from it (or trash
-it) to try again.
+it) to try again. A file skipped because its own tags name no song (an FX
+Music file or an owner edit) is the exception: its md5 is kept with it, and
+it is tried again once the registry's md5 for it changes, so fixed tags
+(by hand or with `fx_untagged`) are taken in without editing the state file.
+An entry kept before the md5 was is tried once more, to record it.
 
 **Per file:**
 

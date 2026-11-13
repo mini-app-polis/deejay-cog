@@ -79,7 +79,11 @@ more, after the untried files, so the fingerprint function's second opinion
 (:mod:`deejay_cog.second_opinion`) is taken on it; it is then marked, and
 not tried again, unless its note says Spotify could not be asked (no client,
 or a failed search): the second opinion was not taken, so it is tried again
-on later runs, after the untried files, until it is.
+on later runs, after the untried files, until it is. A file skipped because
+its own tags named no song (an FX Music file or an owner edit, outcomes
+:data:`TAGS_MISSED`) is tried again once its md5 in the registry changes,
+so tags the owner fixes (by hand or with :mod:`deejay_cog.fx_untagged`) are
+taken in on the next run after the scan sees the new file.
 
 **Safety:** ``flags.deejay_cog.library_identify`` is ``off`` unless ``dry-run`` or
 ``write``. A dry run reads and looks up, and names what it would link,
@@ -282,6 +286,10 @@ _NO_ARTIST = re.compile(r"^(?:unknown(?: artist)?|various(?: artists)?|va|n/?a)$
 
 #: A title that names no song.
 _NO_TITLE = re.compile(r"^(?:untitled|unknown|track\s*\d*|\d+)$", re.I)
+
+#: Outcomes that wait on the owner fixing the file's own tags: the file is
+#: tried again once it changes (:func:`_tags_changed_since`), not only once.
+TAGS_MISSED = frozenset({"fx_unnamed", "owner_edit_unnamed"})
 
 
 def _squashed(text: str) -> str:
@@ -572,6 +580,9 @@ class Identify:
 
     def _mark(self, row: LibraryFile, outcome: str) -> None:
         entry: dict[str, Any] = {"outcome": outcome, "at": _now()}
+        if outcome in TAGS_MISSED:
+            # Kept so a later run can tell the owner has since fixed the tags.
+            entry["md5"] = row.md5
         if row.drive_file_id in self.again:
             entry[SECOND_OPINION] = True
         self.tried[row.drive_file_id] = entry
@@ -898,7 +909,11 @@ def _identify(
         for row in _unidentified(api, root.root_id):
             root_of[row.drive_file_id] = root
             unidentified.append(row)
-    again = [r for r in unidentified if _second_opinion_due(r, tried)]
+    again = [
+        r
+        for r in unidentified
+        if _second_opinion_due(r, tried) or _tags_changed_since(r, tried)
+    ]
     waiting = [r for r in unidentified if r.drive_file_id not in tried] + again
     summary.waiting = len(waiting)
     summary.fingerprinted_unlinked = sum(
@@ -975,6 +990,20 @@ def _identify(
                 )
     if summary.aborted:
         _report_abort(run_id, summary)
+
+
+def _tags_changed_since(row: LibraryFile, tried: dict[str, Any]) -> bool:
+    """Whether a file skipped because its own tags named no song
+    (:data:`TAGS_MISSED`) has changed since, so its new tags are worth
+    reading: the registry's md5 differs from the one it had when tried.
+    An entry from before the md5 was kept is taken as changed, once: the
+    retry keeps the md5, so it is not taken again unless the file changes."""
+    entry = tried.get(row.drive_file_id) or {}
+    if entry.get("outcome") not in TAGS_MISSED:
+        return False
+    if "md5" not in entry:
+        return True
+    return row.md5 is not None and row.md5 != entry["md5"]
 
 
 def _second_opinion_due(row: LibraryFile, tried: dict[str, Any]) -> bool:
