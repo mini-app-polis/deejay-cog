@@ -798,7 +798,7 @@ def test_a_registered_path_is_shown_from_its_root(registered: str, shown: str) -
 @dataclass
 class KeyedCatalog(FakeCatalog):
     """The API's own count: a group is added when its key is new to the
-    root's open groups, dropped when it is no longer sent."""
+    root's open groups, dropped when a report leaves it out."""
 
     open_keys: set[str] = field(default_factory=set)
 

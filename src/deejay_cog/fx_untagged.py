@@ -41,13 +41,14 @@ import re
 import sys
 from dataclasses import dataclass, fields
 from pathlib import PurePosixPath
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from mini_app_polis import logger as logger_mod
 from mini_app_polis.api.contract import LibraryFile, LibraryFilesAbsentRequest
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 from mini_app_polis.mp3.tag import AudioTagger
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from deejay_cog import audio_formats
 from deejay_cog.api_client import api_client
@@ -116,6 +117,39 @@ class Row:
 
 
 COLUMNS = [f.name for f in fields(Row)]
+
+
+class CsvRow(BaseModel):
+    """A line of the CSV as read back after review. The owner may have edited
+    it, so the action must be one this command carries out; a column that is
+    missing or empty reads as "", and other columns are ignored."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    action: Literal["tag", "trash", "skip"] = Field(
+        description='"tag" writes the title and artist, "trash" moves the copy to the trash, "skip" leaves the file.'
+    )
+    path: str = Field(
+        default="", description="The file's path under its root, as listed."
+    )
+    file_id: str = Field(default="", description="The file's Drive id.")
+    title: str = Field(default="", description="The title to write.")
+    artist: str = Field(default="", description="The artist to write.")
+    current_title: str = Field(
+        default="", description="The title the file has now, for the owner to compare."
+    )
+    current_artist: str = Field(
+        default="", description="The artist the file has now, for the owner to compare."
+    )
+    note: str = Field(default="", description="Why the line was proposed as it was.")
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _cell(cls, value: object) -> object:
+        """A cell as text with its surrounding spaces removed; empty for none."""
+        if value is None:
+            return ""
+        return value.strip() if isinstance(value, str) else value
 
 
 def _stem(path: str) -> str:
@@ -226,6 +260,7 @@ def propose(drive: Any, api: Api, fx_root: str) -> list[Row]:
 
 
 def write_csv(path: str, rows: list[Row]) -> None:
+    """Write the proposal to ``path`` as a CSV for the owner to review."""
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=COLUMNS)
         writer.writeheader()
@@ -234,10 +269,10 @@ def write_csv(path: str, rows: list[Row]) -> None:
 
 
 def read_csv(path: str) -> list[Row]:
+    """The reviewed proposal at ``path``, each line checked through CsvRow."""
     with open(path, newline="", encoding="utf-8") as handle:
         return [
-            Row(**{c: (r.get(c) or "").strip() for c in COLUMNS})
-            for r in csv.DictReader(handle)
+            Row(**CsvRow.model_validate(r).model_dump()) for r in csv.DictReader(handle)
         ]
 
 

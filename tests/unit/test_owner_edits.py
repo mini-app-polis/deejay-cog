@@ -13,6 +13,7 @@ from mini_app_polis.api.contract import LibraryFile
 from mini_app_polis.mp3.tag import AudioFormat
 from music_fakes import FakeDrive, mp3
 from mutagen.id3 import TIT2, TPE1
+from pydantic import ValidationError
 
 from deejay_cog import owner_edits
 from deejay_cog.music_tags import read_tag_row
@@ -163,6 +164,21 @@ def test_the_csv_round_trips(tmp_path) -> None:
     owner_edits.write_csv(str(path), rows)
 
     assert owner_edits.read_csv(str(path)) == rows
+
+
+def test_a_reviewed_csv_is_read_leniently_but_its_action_is_checked(tmp_path) -> None:
+    path = tmp_path / "p.csv"
+    path.write_text("action,path,extra\n retitle ,a.mp3,ignored\n", encoding="utf-8")
+    [row] = owner_edits.read_csv(str(path))
+    assert row.action == "retitle" and row.path == "a.mp3" and row.file_id == ""
+
+    path.write_text("action,path\ntag,a.mp3\n", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        owner_edits.read_csv(str(path))
+
+
+def test_the_csv_model_has_every_column() -> None:
+    assert list(owner_edits.CsvRow.model_fields) == owner_edits.COLUMNS
 
 
 # --- writing ----------------------------------------------------------------------
