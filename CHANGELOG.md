@@ -1,3 +1,10 @@
+## [2.61.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.0...v2.61.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **library-duplicates:** readable run report — copies and versions apart, root names, counters in words ([e831085](https://github.com/mini-app-polis/deejay-cog/commit/e8310857c6e1bfdb8304d947e0ef51e211242d36))
+
 # [2.61.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.60.2...v2.61.0) (2026-11-13)
 
 
