@@ -241,6 +241,7 @@ from deejay_cog.music_safety import (
     write_in_place,
 )
 from deejay_cog.music_tags import (
+    display_title,
     duration_secs,
     edit_label,
     ingest_track,
@@ -501,12 +502,11 @@ def _shown(value: Any) -> str:
 
 
 def expected(display: CatalogDisplay, row: LibraryFile) -> dict[str, str]:
-    """The owned fields as this file should carry them."""
-    title = display.title
-    if row.edit_label:
-        title = f"{title} ({row.edit_label})"
+    """The owned fields as this file should carry them. The title is the one
+    the sync writes (:func:`display_title`): with the file's own release
+    label, unless the entry's title already carries it."""
     return {
-        "title": title,
+        "title": display_title(display, row.edit_label),
         "artist": display.artist,
         "year": _shown(display.release_year),
         "genre": _shown(display.genre),
