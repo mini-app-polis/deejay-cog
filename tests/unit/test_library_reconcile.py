@@ -1559,6 +1559,27 @@ def test_every_fx_difference_goes_up_to_its_entry_without_approval(
     assert backfill.ROOT_FOLDER_VAR not in text
 
 
+def test_the_run_counts_add_up_across_the_roots(
+    two_roots, writing, drive, posted
+) -> None:
+    # Run 269ba2d1: 26 compared, 1 matching and 23 with differences. FX
+    # Music counted its files compared but not those with differences.
+    _library(drive, writing, [{"genre": "Neo Soul"}, {}])
+    _fx_file(drive, writing, genre="Neo Soul")
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    (_, main), (_, fx) = summary.roots
+    assert (main.compared, main.matching, main.files_with_differences) == (2, 1, 1)
+    assert (fx.compared, fx.matching, fx.files_with_differences) == (1, 0, 1)
+    counts = posted.call_args.kwargs
+    assert (counts["compared"], counts["matching"], counts["with_differences"]) == (
+        3,
+        1,
+        2,
+    )
+
+
 @pytest.mark.parametrize("fmt", OTHER_FORMATS, ids=lambda f: f.value)
 def test_an_fx_file_in_any_supported_format_sends_its_values_up(
     two_roots, writing, drive, fmt

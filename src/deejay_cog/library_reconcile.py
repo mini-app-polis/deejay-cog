@@ -1718,6 +1718,9 @@ def _record_fx(report: Any, summary: ReconcileSummary, duration_sec: float) -> N
     report.count("compared", summary.compared)
     report.count("changed_left", summary.changed_left)
     report.count("matching", summary.matching)
+    # Counted as the main library counts it, so the run's totals (added up
+    # across the roots) have compared = matching + with differences.
+    report.count("with_differences", summary.files_with_differences)
     report.count(
         "fx_sent_up" if writes else "fx_would_send_up", len(summary.fx_sent_up)
     )
