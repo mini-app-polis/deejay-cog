@@ -1,3 +1,10 @@
+## [2.60.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.60.1...v2.60.2) (2026-11-13)
+
+
+### Bug Fixes
+
+* **music:** check a reviewed proposal CSV through a Pydantic model ([ae3ab50](https://github.com/mini-app-polis/deejay-cog/commit/ae3ab50c607383f2a557814cee8ad818add6b508))
+
 ## [2.60.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.60.0...v2.60.1) (2026-11-13)
 
 
