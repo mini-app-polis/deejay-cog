@@ -145,6 +145,41 @@ def test_a_copy_filed_since_is_left_and_its_original_stays(drive: FakeDrive) -> 
     assert api.absent == []
 
 
+def test_a_copy_whose_tags_the_library_rewrote_is_still_sent_back(
+    drive: FakeDrive,
+) -> None:
+    ids = _intake_run(drive)
+    # library sync writes the catalog's values into the copy: new bytes,
+    # same audio
+    drive.rewrite(ids["junk_copy"], _song("Candy (Clean)", "Kah-lo"), "later")
+    api = FakeApi()
+
+    lines = redo.apply(drive, api, STATE, redo.propose(drive, STATE), write=True)
+
+    assert all(line.endswith("[done]") for line in lines)
+    assert drive.items[ids["junk_copy"]].trashed is True
+    assert drive.items[ids["junk"]].parents == [IN]
+
+
+def test_a_copy_with_other_audio_is_left_and_so_is_its_original(
+    drive: FakeDrive,
+) -> None:
+    ids = _intake_run(drive)
+    other = mp3(TIT2(encoding=3, text=["x"]), audio=b"\xff\xfb" + b"\x01" * 600)
+    drive.rewrite(ids["junk_copy"], other, "later")
+    api = FakeApi()
+
+    lines = redo.apply(drive, api, STATE, redo.propose(drive, STATE), write=False)
+
+    assert [line.split()[0] for line in lines] == ["skip", "skip"]
+    assert "audio is not the original's" in lines[0]
+    assert "its copy was left alone" in lines[1]
+    redo.apply(drive, api, STATE, redo.propose(drive, STATE), write=True)
+    assert drive.items[ids["junk_copy"]].trashed is False
+    assert drive.items[ids["junk"]].parents == [ORIG]
+    assert api.absent == []
+
+
 def test_a_skipped_row_and_an_unknown_copy_change_nothing(drive: FakeDrive) -> None:
     ids = _intake_run(drive)
     [row] = redo.propose(drive, STATE)

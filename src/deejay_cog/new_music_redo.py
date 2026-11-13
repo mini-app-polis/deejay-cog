@@ -26,9 +26,11 @@ do and changes nothing. With ``--write``, for each ``redo`` row:
 - **The original is gone**: the copy itself is moved to the input folder
   and marked absent.
 
-A copy or original moved or changed since its run is left alone and said
-so, as :mod:`deejay_cog.music_rollback` does. Nothing is deleted or
-renamed, and what was done is saved to the state folder as
+The library's steps write tags into a copy once it is in New Music, so a
+copy whose tags changed since its run is still sent back, as long as its
+audio is the original's. A copy moved since its run, or whose audio
+differs, is left alone, and so is its original; each is said so. Nothing
+is deleted or renamed, and what was done is saved to the state folder as
 ``new-music-redo-<time>.json``. The next new-music run takes the files in.
 """
 
@@ -50,10 +52,12 @@ from mini_app_polis.google import GoogleAPI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from deejay_cog.api_client import api_client
-from deejay_cog.music_rollback import Step, _move_back_step, _trash_copy_step
+from deejay_cog.music_rollback import Step, _move_back_step
 from deejay_cog.music_safety import (
     RECORD_MIME_TYPE,
     STATE_FOLDER_VAR,
+    AudioChanged,
+    check_audio_unchanged,
     file_meta,
     parse_record,
 )
@@ -205,9 +209,35 @@ def _entries(drive: Any, state_folder: str) -> dict[str, tuple[dict, dict]]:
     return out
 
 
+def _copy_left(drive: Any, row: Row, entry: dict, destination: str) -> str:
+    """Why the copy must be left alone, or "" when it may be sent back: it is
+    still in the folder its run put it in and still carries the audio its
+    run wrote. Tags may differ: the library's steps write them."""
+    copy = file_meta(drive, row.copy_id)
+    if copy.get("trashed"):
+        return "the copy is in the trash"
+    if (copy.get("parents") or []) != [destination]:
+        return "the copy was moved since the run"
+    written = entry.get("written_md5")
+    if written and copy.get("md5Checksum") == written:
+        return ""
+    source = row.file_id
+    if file_meta(drive, source).get("trashed"):
+        return ""  # nothing to compare with; the copy is all there is
+    try:
+        check_audio_unchanged(
+            drive.download_file_bytes(source).data,
+            drive.download_file_bytes(row.copy_id).data,
+        )
+    except AudioChanged as exc:
+        return f"the copy's audio is not the original's ({exc})"
+    return ""
+
+
 def _steps(drive: Any, row: Row, entry: dict, folders: dict) -> list[Step]:
     """What sending one copy back takes: trash the copy and move the original
-    back, or, with the original gone, move the copy itself to the input."""
+    back, or, with the original gone, move the copy itself to the input. A
+    copy left alone leaves its original where it is."""
     name = row.copy_name or row.copy_id
     move = entry.get("move") or {}
     originals = move.get("to") or folders.get("originals") or ""
@@ -216,26 +246,30 @@ def _steps(drive: Any, row: Row, entry: dict, folders: dict) -> list[Step]:
         "destination", ""
     )
     original = file_meta(drive, row.file_id)
-    if not original.get("trashed") and originals in (original.get("parents") or []):
+    have_original = not original.get("trashed") and originals in (
+        original.get("parents") or []
+    )
+    trash = f"trash the copy {name} ({row.copy_id})"
+    back = "move the copy to the input folder (its original is gone)"
+    left = _copy_left(drive, row, entry, destination)
+    if left:
+        steps = [Step(name, trash if have_original else back, skipped=left)]
+        if have_original:
+            steps.append(
+                Step(name, "move the original back", skipped="its copy was left alone")
+            )
+        return steps
+    if not have_original:
         return [
-            _trash_copy_step(drive, entry, entry.get("copy") or {}, name),
-            _move_back_step(drive, row.file_id, name, originals, input_folder),
+            Step(
+                name,
+                back,
+                action=lambda: drive.move_file(row.copy_id, new_parent_id=input_folder),
+            )
         ]
-    copy = file_meta(drive, row.copy_id)
-    what = "move the copy to the input folder (its original is gone)"
-    if copy.get("trashed"):
-        return [Step(name, what, skipped="the copy is in the trash")]
-    if (copy.get("parents") or []) != [destination]:
-        return [Step(name, what, skipped="moved since the run; left alone")]
-    written = entry.get("written_md5")
-    if written and copy.get("md5Checksum") and copy["md5Checksum"] != written:
-        return [Step(name, what, skipped="changed since the run; left alone")]
     return [
-        Step(
-            name,
-            what,
-            action=lambda: drive.move_file(row.copy_id, new_parent_id=input_folder),
-        )
+        Step(name, trash, action=lambda: drive.trash_file(row.copy_id)),
+        _move_back_step(drive, row.file_id, name, originals, input_folder),
     ]
 
 
