@@ -104,6 +104,17 @@ def test_a_bare_edited_is_left_for_the_owner() -> None:
     assert "official" in got.note
 
 
+@pytest.mark.parametrize(
+    ("path", "title"),
+    [
+        ("capsize_radioedit_frenship.mp3", "Capsize (Radio Edit)"),
+        ("LetsGo_RadioEdit_CalvinHarrisNeYo_128.mp3", "Lets Go (Radio Edit)"),
+    ],
+)
+def test_a_radio_edit_is_not_proposed(path: str, title: str) -> None:
+    assert propose_row(_row(path), title) is None
+
+
 def test_a_file_already_marked_or_with_no_sign_is_not_proposed() -> None:
     assert propose_row(_row("a.mp3"), "Song <Intro Cut>") is None
     assert propose_row(_row("Credit_Artist_100.mp3"), "Credit") is None

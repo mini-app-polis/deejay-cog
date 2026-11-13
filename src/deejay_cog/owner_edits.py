@@ -84,8 +84,15 @@ HINTS = (
     Hint(re.compile(r"self[\s_-]*censor|censored", re.I), "Self Censored", True),
     Hint(re.compile(r"routine|team[\s_-]*cut|\bteam\b", re.I), "Routine Cut", True),
     # "Edited" as a word, or run together after a lower-case letter only when
-    # capitalised ("SongEdited"), so a word like "Credit" doesn't match.
-    Hint(re.compile(r"\b[Ee]dit(?:ed)?\b|(?<=[a-z])Edit(?:ed)?\b"), "Edit", False),
+    # capitalised ("SongEdited"), so a word like "Credit" doesn't match. A
+    # "Radio Edit" is an official release, never an owner edit.
+    Hint(
+        re.compile(
+            r"(?<![Rr]adio )(?<![Rr]adio)\b[Ee]dit(?:ed)?\b|(?<=[a-z])(?<!radio)Edit(?:ed)?\b"
+        ),
+        "Edit",
+        False,
+    ),
 )
 
 #: A bracketed part or a trailing " - part" naming the edit, dropped from the
