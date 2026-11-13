@@ -177,6 +177,18 @@ def test_the_expected_title_carries_the_files_own_edit_label() -> None:
     assert rec.expected(display, plain)["title"] == "Baby What You Want Me To Do"
 
 
+def test_the_expected_title_never_gives_a_release_label_twice() -> None:
+    # Run 269ba2d1 proposed "Ain't No Sunshine (Explicit) (Explicit)".
+    display = _display(uuid.uuid4(), title="Ain't No Sunshine (Explicit)")
+    row = _row("f1", display.id, edit_label="Explicit")
+    assert rec.expected(display, row)["title"] == "Ain't No Sunshine (Explicit)"
+    bracketed = _display(uuid.uuid4(), title="Panda [clean]")
+    assert (
+        rec.expected(bracketed, _row("f2", bracketed.id, edit_label="Clean"))["title"]
+        == "Panda [clean]"
+    )
+
+
 # ---------------------------------------------------------------------------
 # A run
 # ---------------------------------------------------------------------------
@@ -440,6 +452,28 @@ def test_a_dry_run_files_each_difference_and_writes_no_music(
     }
     text = _text(posted)
     assert "2.mp3" in text and "genre_remapped" in text
+
+
+def test_a_kind_past_the_examples_ends_in_how_many_more_and_fill_ups_read_as_going_up(
+    settings, wired, drive, catalog, posted
+) -> None:
+    # Run 269ba2d1 counted 14 fill-ups but listed 5, with no note, and its
+    # lines ("bpm '95' -> ''") read as erasing the file's BPM.
+    n = rec.REPORT_EXAMPLES + 3
+    _library(drive, catalog, [{} for _ in range(n)])
+    for entry in list(catalog.displays):
+        catalog.displays[entry] = _display(entry, label=None)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert len(summary.differences["fill_up"]) == n
+    text = _text(posted)
+    assert (
+        "label 'Atlantic' (empty in the catalog; the catalog takes the file's value)"
+        in text
+    )
+    assert "-> ''" not in text
+    assert "3 more" in text
 
 
 def test_the_comment_frame_is_never_compared(settings, wired, drive, catalog) -> None:

@@ -241,6 +241,7 @@ from deejay_cog.music_safety import (
     write_in_place,
 )
 from deejay_cog.music_tags import (
+    display_title,
     duration_secs,
     edit_label,
     ingest_track,
@@ -298,7 +299,8 @@ KINDS = (
 #: The owned fields, as ``read_tag_row`` names them.
 FIELDS = ("title", "artist", "year", "genre", "bpm", "label")
 
-#: How many examples of each kind the run report shows (the record has all).
+#: How many examples of each kind the run report shows; the rest are
+#: counted as "N more" (the record has all).
 REPORT_EXAMPLES = 5
 
 #: BPM closer than this is a rounding difference, not a different tempo:
@@ -412,7 +414,15 @@ class Difference:
         )
 
     def example(self) -> str:
-        """One line naming the file, the field and both values, for reports."""
+        """One line naming the file, the field and both values, for reports:
+        ``file -> catalog``, the value the file would take. A fill-up goes the
+        other way (the catalog, empty there, takes the file's value), so it
+        says so rather than showing the file's value going to empty."""
+        if self.kind == "fill_up":
+            return (
+                f"{self.path}: {self.field} {self.file_value!r} "
+                "(empty in the catalog; the catalog takes the file's value)"
+            )
         return (
             f"{self.path}: {self.field} {self.file_value!r} -> {self.catalog_value!r}"
         )
@@ -501,12 +511,11 @@ def _shown(value: Any) -> str:
 
 
 def expected(display: CatalogDisplay, row: LibraryFile) -> dict[str, str]:
-    """The owned fields as this file should carry them."""
-    title = display.title
-    if row.edit_label:
-        title = f"{title} ({row.edit_label})"
+    """The owned fields as this file should carry them. The title is the one
+    the sync writes (:func:`display_title`): with the file's own release
+    label, unless the entry's title already carries it."""
     return {
-        "title": title,
+        "title": display_title(display, row.edit_label),
         "artist": display.artist,
         "year": _shown(display.release_year),
         "genre": _shown(display.genre),
@@ -2046,6 +2055,10 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
         shown = diffs if kind == "other" else diffs[:REPORT_EXAMPLES]
         for diff in shown:
             report.notice(kind, diff.example())
+        # The rest counted without a line each, so the section ends in
+        # "N more" and its count matches what it lists (the record has all).
+        for _ in diffs[len(shown) :]:
+            report.notice(kind)
     for failure in summary.failed:
         report.issue("failed", failure)
     report.ok(summary.compared)
