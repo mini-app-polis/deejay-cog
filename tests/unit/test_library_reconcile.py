@@ -1554,10 +1554,30 @@ def test_every_fx_difference_goes_up_to_its_entry_without_approval(
     assert {d.drive_file_id for d in review.differences} == {main_id}
     assert _state(drive, "library-reconcile-fx-seen.json")["files"].keys() == {fx_id}
     text = _text(posted)
-    assert (
-        f"{backfill.FX_ROOT_FOLDER_VAR}: Bow/bow.mp3: genre 'Pop' -> 'Neo Soul'" in text
+    assert "FX Music: Bow/bow.mp3: genre 'Pop' -> 'Neo Soul'" in text
+    assert "Main library: " in text
+    assert backfill.ROOT_FOLDER_VAR not in text
+
+
+def test_the_run_counts_add_up_across_the_roots(
+    two_roots, writing, drive, posted
+) -> None:
+    # Run 269ba2d1: 26 compared, 1 matching and 23 with differences. FX
+    # Music counted its files compared but not those with differences.
+    _library(drive, writing, [{"genre": "Neo Soul"}, {}])
+    _fx_file(drive, writing, genre="Neo Soul")
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    (_, main), (_, fx) = summary.roots
+    assert (main.compared, main.matching, main.files_with_differences) == (2, 1, 1)
+    assert (fx.compared, fx.matching, fx.files_with_differences) == (1, 0, 1)
+    counts = posted.call_args.kwargs
+    assert (counts["compared"], counts["matching"], counts["with_differences"]) == (
+        3,
+        1,
+        2,
     )
-    assert f"{backfill.ROOT_FOLDER_VAR}: " in text
 
 
 @pytest.mark.parametrize("fmt", OTHER_FORMATS, ids=lambda f: f.value)
@@ -1721,7 +1741,7 @@ def test_a_root_that_fails_does_not_stop_the_other(
         rec.library_reconcile(run_id="r-1")
 
     assert [k.drive_file_id for k in writing.kept] == [fx_id]
-    assert f"{backfill.ROOT_FOLDER_VAR}: the run over this root failed" in _text(posted)
+    assert "Main library: the run over this root failed" in _text(posted)
 
 
 def test_a_held_difference_is_reported_once_not_on_every_run(

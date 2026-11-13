@@ -1132,8 +1132,8 @@ def test_each_root_has_its_own_manifest_cursor_and_lines(
     # One run, one record: every write of both roots.
     assert len(_record(drive, "m-1")["entries"]) == 4
     text = _text(posted)
-    assert f"{flow.FX_ROOT_FOLDER_VAR}: walk on.mp3" in text
-    assert f"{flow.ROOT_FOLDER_VAR}: 00 song.mp3" in text
+    assert "FX Music: walk on.mp3" in text
+    assert "Main library: 00 song.mp3" in text
 
 
 def test_a_main_file_never_links_to_an_fx_entry(
@@ -1200,7 +1200,7 @@ def test_a_root_whose_state_is_refused_does_not_stop_the_other(
     assert main.problems and main.scanned == 0
     assert fx.outcomes["written"] == ["walk on.mp3"]
     assert linked_catalog_id(drive.items[walk_on].data) == str(_FX_ID)
-    assert f"{flow.ROOT_FOLDER_VAR}: " in _text(posted)
+    assert "Main library: " in _text(posted)
     assert "trash all but one" in _text(posted)
 
 
@@ -1224,7 +1224,7 @@ def test_a_root_that_fails_does_not_stop_the_other_and_the_run_still_fails(
 
     assert linked_catalog_id(drive.items[walk_on].data) == str(_FX_ID)
     text = _text(posted)
-    assert f"{flow.ROOT_FOLDER_VAR}: the run over this root failed" in text
+    assert "Main library: the run over this root failed" in text
 
 
 def test_a_new_manifest_lists_new_music_under_the_main_root(

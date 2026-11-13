@@ -217,8 +217,11 @@ def test_each_root_is_trashed_on_its_own_and_named(
     assert catalog.absent == [copy, fx_copy]
     assert [a["library_root_id"] for a in catalog.asked] == [ROOT, FX]
     text = posted[-1]
-    assert f"{backfill.ROOT_FOLDER_VAR}: House/{copy}.mp3" in text
-    assert f"{backfill.FX_ROOT_FOLDER_VAR}: House/{fx_copy}.mp3" in text
+    assert f"Main library: House/{copy}.mp3" in text
+    assert f"FX Music: House/{fx_copy}.mp3" in text
+    # Named as the owner calls the roots, not by their settings.
+    assert backfill.ROOT_FOLDER_VAR not in text
+    assert backfill.FX_ROOT_FOLDER_VAR not in text
 
 
 def test_a_root_that_fails_does_not_stop_the_other(

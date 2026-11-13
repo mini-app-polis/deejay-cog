@@ -1266,8 +1266,8 @@ def test_the_catalog_is_never_written_over_an_fx_file(
     marked = {i: m.values[i] for m in catalog.marked for i in m.drive_file_ids}
     assert marked[fx] == _synced(**before)
     text = _text(posted)
-    assert f"{backfill.FX_ROOT_FOLDER_VAR}: RnB/bow.mp3 (artist, title)" in text
-    assert f"{backfill.ROOT_FOLDER_VAR}: RnB/honesty.mp3" in text
+    assert "FX Music: RnB/bow.mp3 (artist, title)" in text
+    assert "Main library: RnB/honesty.mp3" in text
 
 
 def test_an_edit_made_in_an_fx_file_goes_up_from_its_own_listing(
@@ -1352,7 +1352,7 @@ def test_a_root_that_fails_does_not_stop_the_other(
         sync.library_sync(run_id="y-1")
 
     assert [i for m in catalog.marked for i in m.drive_file_ids] == [fx]
-    assert f"{backfill.ROOT_FOLDER_VAR}: the run over this root failed" in _text(posted)
+    assert "Main library: the run over this root failed" in _text(posted)
 
 
 def _fx_root() -> backfill.LibraryRoot:
