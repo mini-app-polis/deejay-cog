@@ -1589,6 +1589,80 @@ def test_an_fx_file_the_shared_tagger_cannot_tag_is_left_for_the_owner(
     assert summary.skipped
 
 
+def test_an_fx_file_whose_tags_name_no_song_is_tried_again_once_it_changes(
+    settings, fx_api, drive
+) -> None:
+    api = fx_api
+    drive_id = _unidentified(drive, api, "bow.mp3", _no_tags(), root=FX)
+    api.rows[0] = api.rows[0].model_copy(update={"md5": "before"})
+
+    first = ident.library_identify(run_id="i-1")
+    kept = _state(drive, ident.TRIED_NAME)["files"][drive_id]
+    unchanged = ident.library_identify(run_id="i-2")
+    # The owner fixes its tags; the scan records the new md5.
+    drive.items[drive_id].data = _song()
+    api.rows[0] = api.rows[0].model_copy(update={"md5": "after"})
+    fixed = ident.library_identify(run_id="i-3")
+
+    assert first.skipped and first.tried == 1
+    assert kept["outcome"] == "fx_unnamed" and kept["md5"] == "before"
+    assert unchanged.tried == 0 and unchanged.waiting == 0
+    assert fixed.tried == 1 and fixed.fx_entries == [
+        "New/bow.mp3 -> thomas gold - temple"
+    ]
+    assert _state(drive, ident.TRIED_NAME)["files"][drive_id]["outcome"] == "linked"
+
+
+def test_an_fx_file_skipped_before_md5s_were_kept_is_tried_once_more(
+    settings, fx_api, drive
+) -> None:
+    api = fx_api
+    drive_id = _unidentified(drive, api, "bow.mp3", _song(), root=FX)
+    api.rows[0] = api.rows[0].model_copy(update={"md5": "now"})
+    state = {
+        "flow": ident.FLOW_NAME,
+        "files": {drive_id: {"outcome": "fx_unnamed", "at": "2026-11-11"}},
+    }
+    backfill.StateFile(drive, STATE, ident.TRIED_NAME).save(state)
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert summary.tried == 1 and len(summary.fx_entries) == 1
+
+
+def test_a_legacy_skip_still_unnamed_is_not_retried_every_run(
+    settings, fx_api, drive
+) -> None:
+    api = fx_api
+    drive_id = _unidentified(drive, api, "bow.mp3", _no_tags(), root=FX)
+    api.rows[0] = api.rows[0].model_copy(update={"md5": "same"})
+    state = {
+        "flow": ident.FLOW_NAME,
+        "files": {drive_id: {"outcome": "fx_unnamed", "at": "2026-11-11"}},
+    }
+    backfill.StateFile(drive, STATE, ident.TRIED_NAME).save(state)
+
+    first = ident.library_identify(run_id="i-1")
+    second = ident.library_identify(run_id="i-2")
+
+    assert first.tried == 1 and first.skipped
+    assert _state(drive, ident.TRIED_NAME)["files"][drive_id]["md5"] == "same"
+    assert second.tried == 0
+
+
+def test_a_file_tried_for_another_reason_is_not_retried_when_it_changes(
+    settings, wired, drive, api, jobs
+) -> None:
+    _unidentified(drive, api, "track01.mp3", _no_tags())
+    api.rows[0] = api.rows[0].model_copy(update={"md5": "before"})
+    ident.library_identify(run_id="i-1")
+    api.rows[0] = api.rows[0].model_copy(update={"md5": "after"})
+
+    summary = ident.library_identify(run_id="i-2")
+
+    assert summary.tried == 0 and len(jobs.sent) == 1
+
+
 def test_a_dry_run_names_the_fx_entry_it_would_make_and_changes_nothing(
     settings, fx_api, drive, jobs, posted, monkeypatch
 ) -> None:
