@@ -1282,7 +1282,8 @@ files under that root (leaving out those already marked for the trash) and the c
 the entries they link to (`POST /v1/catalog/display`), and links files that
 share an md5 (exact copies), a catalog entry, a title and artist as the
 display rules write them out (case, spacing and punctuation ignored), or a
-file name in the same folder (ignoring a copy suffix such as ` (1)`).
+file name in the same folder (ignoring a copy suffix such as ` (1)`,
+` copy` or ` - Copy`).
 
 **Kept on purpose:** files of one song with a different release label
 (Clean, Explicit, Radio Edit, an official No Intro Edit, …) or durations
@@ -1333,14 +1334,27 @@ a dry run only reports them. A root whose files can't be read or whose
 groups can't be sent is reported (`failed`, naming the root), and the other
 root still runs.
 
-**Report:** counts for `files` and `groups` over every root (and, in write,
-the API's `open_groups`, `added` and `dropped`), and every group with its
-reasons and files by path, when the root's groups changed (or in a dry
-run). Open groups the same as last run wait on the duplicates page and are
-not named again. With more than one root, each root's group count
-(`groups_main`, `groups_fx`) is given and every group line starts with the
-root, named by the settings naming its folders; with FX Music set,
-`fx_across_folders` counts its sets of copies across folders.
+**Report:** the headline counts the files checked; the counters, in
+words, are the duplicate groups over every root, split into groups with
+copies to resolve and groups of a song whose files are only versions kept on
+purpose (and, in write, the API's groups open on the duplicates page, new
+since the last run and closed since the last run). When a root's groups
+changed (or in a dry run) every group is named, in one of two sections:
+
+- **Copies to resolve:** why the files are linked, in words (identical
+  file, same catalog entry, same title and artist, same file name), the
+  copies, and the song's other versions as "also kept", each with its
+  release label or owner edit and its length. Two copies at one path are
+  told apart by length, or by the start of their drive id.
+- **Several versions to review:** a song whose files are each a different
+  version, every file with its release label or owner edit and its length.
+
+Files are listed the root's own folder first, then New Music, by folder and
+name. Open groups the same as last run wait on the duplicates page and are
+not named again. With more than one root, each root's group count is given
+(`groups_main`, `groups_fx`) and each section is headed by the root's name
+(Main library, FX Music); with FX Music set, its copies across folders are
+counted and listed, by path, under "Same song in several folders".
 
 **No report when nothing changed.** `library-duplicates-seen.json` in the
 state folder keeps a digest of each root's groups (each group's key,

@@ -249,6 +249,9 @@ class LibraryFolder:
 #: The profiles themselves live in common-python-utils.
 ROOT_PROFILES: dict[str, str] = {"main": "main", "fx": "fx"}
 
+#: Each library root's name in a report a person reads, by the root's key.
+ROOT_NAMES: dict[str, str] = {"main": "Main library", "fx": "FX Music"}
+
 
 def root_profile(key: str) -> RuleProfile:
     """The rule profile the root called ``key`` follows."""
@@ -308,6 +311,11 @@ class LibraryRoot:
     def label(self) -> str:
         """The settings naming its folders, for a report."""
         return " and ".join(folder.setting for folder in self.folders)
+
+    @property
+    def name(self) -> str:
+        """What the owner calls it, for a report a person reads."""
+        return ROOT_NAMES.get(self.key, self.key)
 
 
 @dataclass(frozen=True)
