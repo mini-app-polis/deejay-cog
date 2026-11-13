@@ -1,3 +1,11 @@
+## [2.61.4](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.3...v2.61.4) (2026-11-13)
+
+
+### Bug Fixes
+
+* **library-reconcile:** count FX Music's files with differences so the run's counts add up ([58f4090](https://github.com/mini-app-polis/deejay-cog/commit/58f40907c5fc2bb1103fdc8791d88198c96185d3))
+* **reports:** name library roots as Main library and FX Music in every flow's report lines ([c9e2e36](https://github.com/mini-app-polis/deejay-cog/commit/c9e2e364128730422aaee4b56cc6576592b6999e))
+
 ## [2.61.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.2...v2.61.3) (2026-11-13)
 
 
