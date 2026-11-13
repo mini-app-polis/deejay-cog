@@ -1,3 +1,11 @@
+## [2.61.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.2...v2.61.3) (2026-11-13)
+
+
+### Bug Fixes
+
+* **library-reconcile:** say how many more of a kind the report leaves out, and word fill-ups as the catalog taking the file's value ([1f5850b](https://github.com/mini-app-polis/deejay-cog/commit/1f5850ba8ba156fa85ef4357cb29953db9c5dfff))
+* **reports:** name library roots as Main library and FX Music, not by their settings ([ae143bd](https://github.com/mini-app-polis/deejay-cog/commit/ae143bdc18a47142722eeddf9d7a5a79342e0c62))
+
 ## [2.61.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.1...v2.61.2) (2026-11-13)
 
 
