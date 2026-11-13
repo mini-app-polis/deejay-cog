@@ -573,13 +573,12 @@ def test_a_name_key_keeps_copy_inside_a_title() -> None:
     assert dup.name_key("Pop/Copy That.mp3") != dup.name_key("Pop/That.mp3")
 
 
-def _grouped(report: MagicMock) -> list[tuple[str, str]]:
-    """The run report's lines naming a group, by section."""
+def _grouped(notices: list[Any]) -> list[tuple[str, str]]:
+    """The run report's lines naming a group, by section, from the report
+    mock's ``notice`` calls."""
     titles = (dup.COPIES_SECTION.casefold(), dup.VERSIONS_SECTION.casefold())
     return [
-        (c.args[0], c.args[1])
-        for c in report.notice.call_args_list
-        if c.args[0].casefold().endswith(titles)
+        (c.args[0], c.args[1]) for c in notices if c.args[0].casefold().endswith(titles)
     ]
 
 
@@ -592,7 +591,7 @@ def test_open_groups_unchanged_since_last_run_are_not_named_again() -> None:
 
     dup._record(report, summary, 1.0)
 
-    assert _grouped(report) == []
+    assert _grouped(report.notice.call_args_list) == []
 
 
 def test_a_new_group_is_named() -> None:
@@ -602,7 +601,7 @@ def test_a_new_group_is_named() -> None:
 
     dup._record(report, summary, 1.0)
 
-    assert _grouped(report)
+    assert _grouped(report.notice.call_args_list)
 
 
 # ── The run report ────────────────────────────────────────────────────────
@@ -635,7 +634,7 @@ def test_copies_and_versions_are_reported_in_their_own_sections() -> None:
         ]
     )
 
-    assert _grouped(report) == [
+    assert _grouped(report.notice.call_args_list) == [
         (
             dup.COPIES_SECTION,
             "same catalog entry: /coldcall_boulevards.mp3"
@@ -661,7 +660,7 @@ def test_a_copy_line_names_the_versions_kept_beside_it() -> None:
         ]
     )
 
-    [(_, line)] = _grouped(report)
+    [(_, line)] = _grouped(report.notice.call_args_list)
     assert line == (
         "same catalog entry, same file name: /Pop/song.mp3 · /Pop/song (1).mp3"
         " — also kept: /Pop/song_clean.mp3 (Clean, 3:20)"
@@ -678,7 +677,7 @@ def test_two_copies_at_one_path_are_told_apart() -> None:
         ]
     )
 
-    lines = [line for _, line in _grouped(report)]
+    lines = [line for _, line in _grouped(report.notice.call_args_list)]
     assert (
         "identical file, same file name: /2step_edsheeran.mp3 (id cccccccc)"
         " · /2step_edsheeran.mp3 (id dddddddd)"
@@ -885,7 +884,7 @@ def test_with_two_roots_each_group_names_its_root(roots) -> None:
     summary = dup.run_duplicates(run_id="d-1", mode=FlowMode.DRY_RUN, api=catalog)
     dup._record(report, summary, 1.0)
 
-    assert _grouped(report) == [
+    assert _grouped(report.notice.call_args_list) == [
         (
             "Main library: copies to resolve",
             "identical file: /Pop/x.mp3 · /New Music/x.mp3",
