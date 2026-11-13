@@ -518,11 +518,12 @@ def record_roots(
     duration_sec: float,
 ) -> None:
     """Record each root's summary with ``record`` (a step's own report
-    writer), every line naming its root and the counts added up."""
+    writer), every line naming its root as the owner calls it (Main
+    library, FX Music) and the counts added up."""
     report.duration_sec = duration_sec
     totals: dict[str, Any] = {}
     for root, part in roots:
-        record(NamedReport(report, f"{root.label}: ", totals), part, duration_sec)
+        record(NamedReport(report, f"{root.name}: ", totals), part, duration_sec)
     set_totals(report, totals)
 
 

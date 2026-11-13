@@ -1554,10 +1554,9 @@ def test_every_fx_difference_goes_up_to_its_entry_without_approval(
     assert {d.drive_file_id for d in review.differences} == {main_id}
     assert _state(drive, "library-reconcile-fx-seen.json")["files"].keys() == {fx_id}
     text = _text(posted)
-    assert (
-        f"{backfill.FX_ROOT_FOLDER_VAR}: Bow/bow.mp3: genre 'Pop' -> 'Neo Soul'" in text
-    )
-    assert f"{backfill.ROOT_FOLDER_VAR}: " in text
+    assert "FX Music: Bow/bow.mp3: genre 'Pop' -> 'Neo Soul'" in text
+    assert "Main library: " in text
+    assert backfill.ROOT_FOLDER_VAR not in text
 
 
 @pytest.mark.parametrize("fmt", OTHER_FORMATS, ids=lambda f: f.value)
@@ -1721,7 +1720,7 @@ def test_a_root_that_fails_does_not_stop_the_other(
         rec.library_reconcile(run_id="r-1")
 
     assert [k.drive_file_id for k in writing.kept] == [fx_id]
-    assert f"{backfill.ROOT_FOLDER_VAR}: the run over this root failed" in _text(posted)
+    assert "Main library: the run over this root failed" in _text(posted)
 
 
 def test_a_held_difference_is_reported_once_not_on_every_run(
