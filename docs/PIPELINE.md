@@ -205,6 +205,16 @@ identify with its fingerprint check, duplicates, reconcile and sync; see
    (Remix) (Ella)`). Named by such a tag, the file would carry the old name
    into the library; a false alarm costs only a review. A dry run moves
    nothing; the record lists the move it would make.
+
+   Copies an earlier intake named from such a tag go back through it with
+   `python -m deejay_cog.new_music_redo` (run like `fx_untagged`, under
+   `doppler run --config prd`): `propose --out new-music-redo.csv` lists,
+   from the new-music run records, each delivered copy whose title tag the
+   check finds; `apply new-music-redo.csv` shows what it would do, and with
+   `--write` trashes each approved copy, marks it absent in the registry and
+   moves its original from processed-originals back to the input folder (or,
+   with the original gone, moves the copy itself there). The next run takes
+   them in. Anything moved or changed since its run is left alone.
 5. **Otherwise** → taken in: copied, tags and audio unchanged, into New
    Music, named from its own tags.
 
