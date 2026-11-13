@@ -1,3 +1,10 @@
+## [2.60.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.60.0...v2.60.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **owner-edits:** never propose a Radio Edit as an owner edit ([ca9008b](https://github.com/mini-app-polis/deejay-cog/commit/ca9008b657e90404fb2bb14022a451fcf27f7f90))
+
 # [2.60.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.59.0...v2.60.0) (2026-11-12)
 
 
