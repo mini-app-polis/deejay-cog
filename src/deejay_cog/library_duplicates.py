@@ -13,7 +13,7 @@ that are linked by any of:
 - ``same_title_artist`` — linked to entries the display rules write out
   with the same title and artist (case, spacing and punctuation ignored);
 - ``same_name`` — the same file name in the same folder, ignoring a copy
-  suffix such as `` (1)``.
+  suffix such as `` (1)`` or `` copy``.
 
 **Kept on purpose.** Files of one song that are different edits are never
 duplicates of each other: a different release label (Clean, Super Clean,
@@ -116,7 +116,19 @@ SEEN_NAME = f"{FLOW_NAME}-seen.json"
 #: Why files were grouped, in the order a group's key names the first.
 REASONS = ("same_md5", "same_catalog_id", "same_title_artist", "same_name")
 
-_COPY_SUFFIX = re.compile(r"\s*\(\d+\)$")
+#: A copy suffix a file manager adds: `` (1)``, `` copy``, `` - Copy``,
+#: `` copy 2``.
+_COPY_SUFFIX = re.compile(
+    r"(?:\s*\(\d+\)|\s+(?:-\s+)?copy(?:\s+\(?\d+\)?)?)$", re.IGNORECASE
+)
+
+#: Each reason a group's files are linked, in words for the run report.
+REASON_WORDS = {
+    "same_md5": "identical file",
+    "same_catalog_id": "same catalog entry",
+    "same_title_artist": "same title and artist",
+    "same_name": "same file name",
+}
 _NOT_WORD = re.compile(r"[^\w]+")
 
 
@@ -166,6 +178,10 @@ class DuplicatesSummary:
     files: int = 0
     groups: list[DuplicateGroupReport] = field(default_factory=list)
     paths: dict[str, str] = field(default_factory=dict)
+    #: Every file read, by drive id: its label and length for the report.
+    rows: dict[str, LibraryFile] = field(default_factory=dict)
+    #: The drive ids of files linked to an owner-edit entry.
+    owner_edit_files: set[str] = field(default_factory=set)
     left_out: int = 0
     result: DuplicateReportResult | None = None
     roots: list[RootDuplicates] = field(default_factory=list)
@@ -188,7 +204,8 @@ def shown_path(path: str) -> str:
 
 def name_key(path: str) -> str:
     """The folder and file name with the extension and a copy suffix
-    dropped: ``House/9to5 (1).mp3`` -> ``house/9to5``."""
+    dropped: ``House/9to5 (1).mp3`` -> ``house/9to5``, and
+    ``House/9to5 copy.mp3`` too."""
     folder, _, name = path.rpartition("/")
     stem = name.rsplit(".", 1)[0] if "." in name else name
     stem = _COPY_SUFFIX.sub("", stem)
@@ -281,7 +298,7 @@ def _why_kept(
     lengths = [e.duration_secs for e in edit if e.duration_secs is not None]
     if f.duration_secs is not None and lengths:
         return (
-            f"a different edit ({_minutes(f.duration_secs)} against "
+            f"a different edit ({_minutes(f.duration_secs)} vs "
             f"{_minutes(sum(lengths) / len(lengths))})"
         )
     return "a different edit"
@@ -533,7 +550,13 @@ def _root_duplicates(
         rows = _files(api, root.root_id)
         found.files = len(rows)
         summary.paths.update({r.drive_file_id: r.path for r in rows})
+        summary.rows.update({r.drive_file_id: r for r in rows})
         shown = _displays(api, rows)
+        summary.owner_edit_files.update(
+            r.drive_file_id
+            for r in rows
+            if r.catalog_id in shown and shown[r.catalog_id].owner_edit
+        )
         if root.key == "fx":
             groups, found.across_folders = find_fx_groups(rows, shown)
         else:
@@ -545,7 +568,7 @@ def _root_duplicates(
                 DuplicateReport(library_root_id=root.root_id, groups=found.groups)
             )
     except Exception as exc:  # noqa: BLE001 — one root must not stop the other
-        log.exception("library-duplicates: %s failed", root.label)
+        log.exception("library-duplicates: %s failed", root.name)
         found.failed = f"{type(exc).__name__}: {exc}"
     return found
 
@@ -587,7 +610,7 @@ def _record(report: Any, summary: DuplicatesSummary, duration_sec: float) -> Non
         report.count("unchanged_since_last_run", len(summary.groups))
         if summary.result is not None:
             report.count("open_groups", summary.result.open_groups)
-        report.ok(len(summary.groups))
+        report.ok(summary.files)
         return
     if summary.mode is FlowMode.DRY_RUN:
         report.notice(
@@ -599,41 +622,158 @@ def _record(report: Any, summary: DuplicatesSummary, duration_sec: float) -> Non
             f"{summary.left_out} groups past the first "
             f"{DUPLICATE_REPORT_MAX_GROUPS} were not sent",
         )
-    report.count("files", summary.files)
-    report.count("groups", len(summary.groups))
+    copies, versions = _split(summary.groups, summary)
+    report.count("groups", len(summary.groups), label=GROUPS_LABEL)
+    report.count("copies", len(copies), label=COPIES_LABEL)
+    report.count("versions", len(versions), label=VERSIONS_LABEL)
     if summary.result is not None:
-        report.count("open_groups", summary.result.open_groups)
-        report.count("added", summary.result.added)
-        report.count("dropped", summary.result.dropped)
-    # With more than one root, every line names the root it is about.
+        report.count("open_groups", summary.result.open_groups, label=OPEN_LABEL)
+        report.count("added", summary.result.added, label=ADDED_LABEL)
+        report.count("dropped", summary.result.dropped, label=DROPPED_LABEL)
+    # With more than one root, every section names the root it is about.
     several = len(summary.roots) > 1
     for found in summary.roots:
-        named = f"{found.root.label}: " if several else ""
         if found.failed:
-            report.issue("failed", f"{found.root.label}: {found.failed}")
+            report.issue("failed", f"{found.root.name}: {found.failed}")
         if several:
-            report.count(f"groups_{found.root.key}", len(found.groups))
+            report.count(
+                f"groups_{found.root.key}",
+                len(found.groups),
+                label=f"groups in {found.root.name}",
+            )
         result = found.result
         unchanged = result is not None and not result.added and not result.dropped
-        for group in [] if unchanged else found.groups:
+        if not unchanged:
             # The groups are named when they change (or in a dry run); open
             # groups that are the same as last run wait on the page, unrepeated.
-            parts = []
-            for m in group.files:
-                registered = summary.paths.get(m.drive_file_id)
-                path = (
-                    shown_path(registered)
-                    if registered is not None
-                    else m.drive_file_id
+            mine, theirs = _split(found.groups, summary)
+            for group in mine:
+                report.notice(
+                    _section(found, COPIES_SECTION, several),
+                    copies_line(group, summary),
                 )
-                parts.append(
-                    f"{path} (kept: {m.why_kept})" if m.kept_on_purpose else path
+            for group in theirs:
+                report.notice(
+                    _section(found, VERSIONS_SECTION, several),
+                    versions_line(group, summary),
                 )
-            report.notice(
-                "group", f"{named}{', '.join(group.reasons)}: {'; '.join(parts)}"
-            )
         if found.root.key == "fx":
-            report.count("fx_across_folders", len(found.across_folders))
+            report.count(
+                "fx_across_folders", len(found.across_folders), label=ACROSS_LABEL
+            )
             for paths in found.across_folders:
-                report.notice("fx_across_folders", f"{named}{'; '.join(paths)}")
-    report.ok(len(summary.groups))
+                report.notice(
+                    _section(found, ACROSS_SECTION, several),
+                    " · ".join(shown_path(p) for p in paths),
+                )
+    report.ok(summary.files)
+
+
+#: The run report's sections and counters, in words.
+COPIES_SECTION = "Copies to resolve"
+VERSIONS_SECTION = "Several versions to review (each kept on purpose)"
+ACROSS_SECTION = "Same song in several folders (decide case by case)"
+GROUPS_LABEL = "duplicate groups"
+COPIES_LABEL = "groups with copies to resolve"
+VERSIONS_LABEL = "songs with only versions kept on purpose"
+OPEN_LABEL = "open on the duplicates page"
+ADDED_LABEL = "new since the last run"
+DROPPED_LABEL = "closed since the last run (resolved or gone)"
+ACROSS_LABEL = "FX songs in several folders"
+
+
+def _section(found: RootDuplicates, title: str, several: bool) -> str:
+    """A section of the run report, named for its root when there are more."""
+    return f"{found.root.name}: {title[0].lower()}{title[1:]}" if several else title
+
+
+def _split(
+    groups: list[DuplicateGroupReport], summary: DuplicatesSummary
+) -> tuple[list[DuplicateGroupReport], list[DuplicateGroupReport]]:
+    """``groups`` as those with copies to resolve (two or more files offered)
+    and those of a song whose files are all different versions (one file
+    offered, the rest kept on purpose)."""
+    copies = [g for g in groups if sum(not m.kept_on_purpose for m in g.files) > 1]
+    versions = [g for g in groups if g not in copies]
+    return copies, versions
+
+
+def _order(
+    m: DuplicateMember, summary: DuplicatesSummary
+) -> tuple[bool, str, str, str]:
+    """Files in the root's own folder first, then those of its other folders
+    (New Music, registered under ``/New Music/``); by folder, then name."""
+    registered = summary.paths.get(m.drive_file_id, m.drive_file_id)
+    folder, _, name = registered.lstrip("/").rpartition("/")
+    return (
+        registered.startswith("/"),
+        folder.casefold(),
+        name.rsplit(".", 1)[0].casefold(),
+        m.drive_file_id,
+    )
+
+
+def _path(m: DuplicateMember, summary: DuplicatesSummary) -> str:
+    registered = summary.paths.get(m.drive_file_id)
+    return shown_path(registered) if registered is not None else m.drive_file_id
+
+
+def _length(m: DuplicateMember, summary: DuplicatesSummary) -> str:
+    row = summary.rows.get(m.drive_file_id)
+    if row is None or row.duration_secs is None:
+        return ""
+    return _minutes(row.duration_secs)
+
+
+def _version(m: DuplicateMember, summary: DuplicatesSummary) -> str:
+    """What sets a file apart, in brackets: an owner edit or its release
+    label, and its length."""
+    row = summary.rows.get(m.drive_file_id)
+    parts = []
+    if m.drive_file_id in summary.owner_edit_files:
+        parts.append("owner edit")
+    elif row is not None and row.edit_label:
+        parts.append(row.edit_label)
+    if length := _length(m, summary):
+        parts.append(length)
+    return f" ({', '.join(parts)})" if parts else ""
+
+
+def copies_line(group: DuplicateGroupReport, summary: DuplicatesSummary) -> str:
+    """A group with copies, for the run report: why they are linked, the
+    copies, and the song's versions kept beside them. Two copies at the
+    same path are told apart by length, or by drive id."""
+    copies = sorted(
+        (m for m in group.files if not m.kept_on_purpose),
+        key=lambda m: _order(m, summary),
+    )
+    kept = sorted(
+        (m for m in group.files if m.kept_on_purpose),
+        key=lambda m: _order(m, summary),
+    )
+    paths = [_path(m, summary) for m in copies]
+    shown = []
+    for m, path in zip(copies, paths, strict=True):
+        if paths.count(path) > 1:
+            same = [c for c, p in zip(copies, paths, strict=True) if p == path]
+            lengths = [_length(c, summary) for c in same]
+            length = _length(m, summary)
+            if length and lengths.count(length) == 1:
+                path = f"{path} ({length})"
+            else:
+                path = f"{path} (id {m.drive_file_id[:8]})"
+        shown.append(path)
+    why = ", ".join(REASON_WORDS.get(r, r) for r in group.reasons)
+    line = f"{why}: {' · '.join(shown)}"
+    if kept:
+        line += " — also kept: " + ", ".join(
+            f"{_path(m, summary)}{_version(m, summary)}" for m in kept
+        )
+    return line
+
+
+def versions_line(group: DuplicateGroupReport, summary: DuplicatesSummary) -> str:
+    """A song whose files are all different versions, for the run report:
+    every file with what sets it apart."""
+    files = sorted(group.files, key=lambda m: _order(m, summary))
+    return " · ".join(f"{_path(m, summary)}{_version(m, summary)}" for m in files)

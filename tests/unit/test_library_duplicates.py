@@ -164,7 +164,7 @@ def test_a_no_intro_edit_is_sent_kept_on_purpose_not_left_out() -> None:
 
     assert _members(group) == {
         "cut": None,
-        "full": "a different edit (2:30 against 2:12)",
+        "full": "a different edit (2:30 vs 2:12)",
     }
 
 
@@ -180,7 +180,7 @@ def test_another_edit_is_shown_kept_in_the_group_of_real_copies() -> None:
 
     members = _members(group)
     assert members["full"] is None and members["full2"] is None
-    assert members["cut"] == "a different edit (2:12 against 2:31)"
+    assert members["cut"] == "a different edit (2:12 vs 2:31)"
     kept = [m for m in group.files if m.kept_on_purpose]
     assert [m.drive_file_id for m in kept] == ["cut"]
 
@@ -556,6 +556,33 @@ def test_a_name_key_drops_the_extension_and_copy_suffix() -> None:
     assert dup.name_key("Pop/9to5.mp3") != dup.name_key("Rock/9to5.mp3")
 
 
+@pytest.mark.parametrize(
+    "copy",
+    [
+        "_MCIntro/01 - Peru [Explicit] copy.mp3",
+        "_MCIntro/01 - Peru [Explicit] - Copy.mp3",
+        "_MCIntro/01 - Peru [Explicit] copy 2.mp3",
+    ],
+)
+def test_a_name_key_drops_a_file_manager_copy_suffix(copy: str) -> None:
+    assert dup.name_key(copy) == dup.name_key("_MCIntro/01 - Peru [Explicit].mp3")
+
+
+def test_a_name_key_keeps_copy_inside_a_title() -> None:
+    assert dup.name_key("Pop/copycat.mp3") != dup.name_key("Pop/cat.mp3")
+    assert dup.name_key("Pop/Copy That.mp3") != dup.name_key("Pop/That.mp3")
+
+
+def _grouped(report: MagicMock) -> list[tuple[str, str]]:
+    """The run report's lines naming a group, by section."""
+    titles = (dup.COPIES_SECTION.casefold(), dup.VERSIONS_SECTION.casefold())
+    return [
+        (c.args[0], c.args[1])
+        for c in report.notice.call_args_list
+        if c.args[0].casefold().endswith(titles)
+    ]
+
+
 def test_open_groups_unchanged_since_last_run_are_not_named_again() -> None:
     catalog = _catalog()
     summary = dup.run_duplicates(run_id="d-4", mode=FlowMode.WRITE, api=catalog)
@@ -565,7 +592,7 @@ def test_open_groups_unchanged_since_last_run_are_not_named_again() -> None:
 
     dup._record(report, summary, 1.0)
 
-    assert all(c.args[0] != "group" for c in report.notice.call_args_list)
+    assert _grouped(report) == []
 
 
 def test_a_new_group_is_named() -> None:
@@ -575,7 +602,114 @@ def test_a_new_group_is_named() -> None:
 
     dup._record(report, summary, 1.0)
 
-    assert any(c.args[0] == "group" for c in report.notice.call_args_list)
+    assert _grouped(report)
+
+
+# ── The run report ────────────────────────────────────────────────────────
+
+
+def _record_dry(rows: list[LibraryFile], **kw: Any) -> MagicMock:
+    catalog = FakeCatalog(rows=rows, **kw)
+    summary = dup.run_duplicates(run_id="r-1", mode=FlowMode.DRY_RUN, api=catalog)
+    report = MagicMock()
+    dup._record(report, summary, 1.0)
+    return report
+
+
+def test_copies_and_versions_are_reported_in_their_own_sections() -> None:
+    copy, versions = uuid.uuid4(), uuid.uuid4()
+    report = _record_dry(
+        [
+            # Cold Call: a copy in New Music of a main-library file.
+            _file("a", "coldcall_boulevards.mp3", catalog_id=copy),
+            _file("b", "/New Music/Cold Call_Boulevards.mp3", catalog_id=copy),
+            # Lay Low: one file of each release label, nothing to resolve.
+            _file("c", "LayLow_ORKID_86.mp3", catalog_id=versions, secs=190),
+            _file(
+                "d",
+                "LayLow_Explicit_ORKID_86.mp3",
+                catalog_id=versions,
+                label="Explicit",
+                secs=190,
+            ),
+        ]
+    )
+
+    assert _grouped(report) == [
+        (
+            dup.COPIES_SECTION,
+            "same catalog entry: /coldcall_boulevards.mp3"
+            " · /New Music/Cold Call_Boulevards.mp3",
+        ),
+        (
+            dup.VERSIONS_SECTION,
+            "/LayLow_Explicit_ORKID_86.mp3 (Explicit, 3:10)"
+            " · /LayLow_ORKID_86.mp3 (3:10)",
+        ),
+    ]
+    counts = {c.args[0]: c.args[1] for c in report.count.call_args_list}
+    assert counts["copies"] == 1 and counts["versions"] == 1
+
+
+def test_a_copy_line_names_the_versions_kept_beside_it() -> None:
+    entry = uuid.uuid4()
+    report = _record_dry(
+        [
+            _file("a", "Pop/song.mp3", catalog_id=entry, secs=200),
+            _file("b", "Pop/song (1).mp3", catalog_id=entry, secs=201),
+            _file("c", "Pop/song_clean.mp3", catalog_id=entry, label="Clean"),
+        ]
+    )
+
+    [(_, line)] = _grouped(report)
+    assert line == (
+        "same catalog entry, same file name: /Pop/song.mp3 · /Pop/song (1).mp3"
+        " — also kept: /Pop/song_clean.mp3 (Clean, 3:20)"
+    )
+
+
+def test_two_copies_at_one_path_are_told_apart() -> None:
+    report = _record_dry(
+        [
+            _file("aaaaaaaaaa1", "boyfriend_justinbieber.mp3", secs=170),
+            _file("bbbbbbbbbb2", "boyfriend_justinbieber.mp3", secs=171),
+            _file("ccccccccc3", "2step_edsheeran.mp3", md5="m"),
+            _file("ddddddddd4", "2step_edsheeran.mp3", md5="m"),
+        ]
+    )
+
+    lines = [line for _, line in _grouped(report)]
+    assert (
+        "identical file, same file name: /2step_edsheeran.mp3 (id cccccccc)"
+        " · /2step_edsheeran.mp3 (id dddddddd)"
+    ) in lines
+    assert (
+        "same file name: /boyfriend_justinbieber.mp3 (2:50)"
+        " · /boyfriend_justinbieber.mp3 (2:51)"
+    ) in lines
+
+
+def test_the_headline_counts_files_checked_and_counters_are_in_words() -> None:
+    report = _record_dry(_catalog().rows)
+
+    report.ok.assert_called_once_with(2)  # the file marked for the trash is out
+    labels = {c.args[0]: c.kwargs.get("label") for c in report.count.call_args_list}
+    assert labels["groups"] == dup.GROUPS_LABEL
+    assert all(label for label in labels.values())
+
+
+def test_the_api_counts_are_in_words(roots) -> None:
+    catalog = RootsCatalog(rows=[_fx("c", "Bows/y.mp3", md5="m")])
+    summary = dup.run_duplicates(run_id="r-1", mode=FlowMode.WRITE, api=catalog)
+    summary.result = DuplicateReportResult(open_groups=2, added=1, dropped=1)
+    report = MagicMock()
+
+    dup._record(report, summary, 1.0)
+
+    labels = {c.args[0]: c.kwargs.get("label") for c in report.count.call_args_list}
+    assert labels["open_groups"] == dup.OPEN_LABEL
+    assert labels["dropped"] == dup.DROPPED_LABEL
+    assert labels["groups_main"] == "groups in Main library"
 
 
 # ── Per library root ──────────────────────────────────────────────────────
@@ -672,7 +806,7 @@ def test_fx_copies_in_one_folder_are_a_group_unless_they_are_different_cuts(
     assert _members(group) == {
         "a": None,
         "b": None,
-        "c": "a different edit (0:30 against 3:20)",
+        "c": "a different edit (0:30 vs 3:20)",
     }
     [_, fx] = catalog.reports
     assert fx.library_root_id == FX and fx.groups == [group]
@@ -700,8 +834,8 @@ def test_fx_copies_in_different_folders_are_listed_for_the_owner_not_grouped(
     [_, fx] = summary.roots
     assert fx.across_folders == [["Events/MADjam 2026/song.mp3", "Walk-ons/song.mp3"]]
     assert (
-        "fx_across_folders",
-        f"{FX_LABEL}: Events/MADjam 2026/song.mp3; Walk-ons/song.mp3",
+        f"FX Music: {dup.ACROSS_SECTION[0].lower()}{dup.ACROSS_SECTION[1:]}",
+        "/Events/MADjam 2026/song.mp3 · /Walk-ons/song.mp3",
     ) in [c.args for c in report.notice.call_args_list]
 
 
@@ -751,11 +885,15 @@ def test_with_two_roots_each_group_names_its_root(roots) -> None:
     summary = dup.run_duplicates(run_id="d-1", mode=FlowMode.DRY_RUN, api=catalog)
     dup._record(report, summary, 1.0)
 
-    groups = [c.args[1] for c in report.notice.call_args_list if c.args[0] == "group"]
-    main_label = f"{backfill.ROOT_FOLDER_VAR} and {backfill.NEW_MUSIC_FOLDER_VAR}"
-    assert groups == [
-        f"{main_label}: same_md5: /Pop/x.mp3; /New Music/x.mp3",
-        f"{FX_LABEL}: same_md5, same_name: /Bows/y.mp3; /Bows/y (1).mp3",
+    assert _grouped(report) == [
+        (
+            "Main library: copies to resolve",
+            "identical file: /Pop/x.mp3 · /New Music/x.mp3",
+        ),
+        (
+            "FX Music: copies to resolve",
+            "identical file, same file name: /Bows/y.mp3 · /Bows/y (1).mp3",
+        ),
     ]
     assert catalog.reports == []  # a dry run sends nothing
 
@@ -774,7 +912,7 @@ def test_a_root_that_fails_does_not_stop_the_other(roots) -> None:
     assert fx.library_root_id == FX and len(fx.groups) == 1
     assert "registry down" in summary.roots[0].failed
     issues = [c.args for c in report.issue.call_args_list]
-    assert issues[0][0] == "failed" and backfill.ROOT_FOLDER_VAR in issues[0][1]
+    assert issues[0][0] == "failed" and issues[0][1].startswith("Main library: ")
 
 
 @pytest.mark.parametrize(
