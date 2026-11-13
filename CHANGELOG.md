@@ -1,3 +1,15 @@
+# [2.61.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.60.2...v2.61.0) (2026-11-13)
+
+
+### Bug Fixes
+
+* **new-music:** send back a copy whose tags the library rewrote ([a9c4554](https://github.com/mini-app-polis/deejay-cog/commit/a9c455416c938604a407d918e02d308f44c1b33b))
+
+
+### Features
+
+* **new-music:** send copies named from an old file name back through intake, from an approved list ([068b448](https://github.com/mini-app-polis/deejay-cog/commit/068b44879995a671cb1c61d96e3850d4b55b2adc))
+
 ## [2.60.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.60.1...v2.60.2) (2026-11-13)
 
 
