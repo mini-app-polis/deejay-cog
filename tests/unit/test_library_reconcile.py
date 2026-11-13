@@ -454,6 +454,28 @@ def test_a_dry_run_files_each_difference_and_writes_no_music(
     assert "2.mp3" in text and "genre_remapped" in text
 
 
+def test_a_kind_past_the_examples_ends_in_how_many_more_and_fill_ups_read_as_going_up(
+    settings, wired, drive, catalog, posted
+) -> None:
+    # Run 269ba2d1 counted 14 fill-ups but listed 5, with no note, and its
+    # lines ("bpm '95' -> ''") read as erasing the file's BPM.
+    n = rec.REPORT_EXAMPLES + 3
+    _library(drive, catalog, [{} for _ in range(n)])
+    for entry in list(catalog.displays):
+        catalog.displays[entry] = _display(entry, label=None)
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert len(summary.differences["fill_up"]) == n
+    text = _text(posted)
+    assert (
+        "label 'Atlantic' (empty in the catalog; the catalog takes the file's value)"
+        in text
+    )
+    assert "-> ''" not in text
+    assert "3 more" in text
+
+
 def test_the_comment_frame_is_never_compared(settings, wired, drive, catalog) -> None:
     _library(drive, catalog, [{}])
 
