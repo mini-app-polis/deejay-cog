@@ -1,3 +1,13 @@
+## [2.61.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.1...v2.61.2) (2026-11-13)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 9.10.2 ([94a4c4f](https://github.com/mini-app-polis/deejay-cog/commit/94a4c4f9a48424afa1d7cd1b783cbf0f3a33b9d5))
+* **deps:** bump miniapppolis-common-utils to 9.10.3 ([5a63553](https://github.com/mini-app-polis/deejay-cog/commit/5a6355368fcfad8af80f1083884a368bc9b8bbfb))
+* **deps:** bump miniapppolis-common-utils to 9.10.4 ([6973aee](https://github.com/mini-app-polis/deejay-cog/commit/6973aeed146bd78371e7f587fdc3a057bbc8226c))
+* **library-identify:** retry a file skipped for unnamed tags once its md5 changes ([e6a4b5a](https://github.com/mini-app-polis/deejay-cog/commit/e6a4b5aca9787e482154cd0cdc5da7ce8f8dabdb))
+
 ## [2.61.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.0...v2.61.1) (2026-11-13)
 
 
