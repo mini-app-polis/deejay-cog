@@ -151,7 +151,7 @@ def test_unset_or_unknown_mode_is_off_and_nothing_is_touched(
     assert summary.scanned == 0
     wired.from_env.assert_not_called()
     assert drive.calls == []
-    assert "is off" in posted.call_args.kwargs["text"]
+    assert _silent(posted)  # the hourly sweep is silent while it is off
 
 
 @pytest.mark.parametrize(
@@ -1018,8 +1018,11 @@ def test_a_collapsed_follow_up_is_reported(
     summary = flow.new_music(run_id="m-1")
 
     assert summary.follow_up == "" and "collapsed" in summary.follow_up_problem
-    assert posted.call_args.args[1] == "WARN"
-    assert "follow_up_not_queued" in posted.call_args.kwargs["text"]
+    # The run it was merged into is queued and takes the files: not a WARN.
+    assert posted.call_args.args[1] == "SUCCESS"
+    text = posted.call_args.kwargs["text"]
+    assert "follow_up_merged" in text and "q-0, which takes them" in text
+    assert "follow_up_not_queued" not in text
 
 
 def test_a_follow_up_the_api_refuses_is_reported_and_the_run_stands(
@@ -1038,6 +1041,36 @@ def test_a_follow_up_the_api_refuses_is_reported_and_the_run_stands(
 
     assert summary.identified and "deejay.runs.create" in summary.follow_up_problem
     assert posted.call_args.args[1] == "WARN"
+    assert "hourly new-music sweep" in posted.call_args.kwargs["text"]
+
+
+def _silent(posted) -> bool:
+    """The run's finding would not reach Discord: a SUCCESS not marked
+    notable is logged, not sent (pipeline_status's own rule)."""
+    if not posted.called:
+        return True
+    return (
+        posted.call_args.args[1] == "SUCCESS" and not posted.call_args.kwargs["notable"]
+    )
+
+
+def test_a_run_that_finds_the_folder_empty_sends_nothing(
+    settings, wired, drive, posted
+) -> None:
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.scanned == 0
+    assert _silent(posted)
+
+
+def test_a_dry_run_that_finds_the_folder_empty_sends_nothing(
+    settings, wired, drive, posted, monkeypatch
+) -> None:
+    monkeypatch.setitem(FLAGS, flow.MODE_FLAG, "dry-run")
+
+    flow.new_music(run_id="m-1")
+
+    assert _silent(posted)
 
 
 def test_a_dry_run_queues_no_follow_up(

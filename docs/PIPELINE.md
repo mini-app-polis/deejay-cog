@@ -270,10 +270,23 @@ collapses an identical request made within its window
 by this cog's own follow-up would ask for the same thing again; such a run
 sends its follow-up no sooner than 65 s after the request that started it,
 waiting the rest when its deadline allows. The report names the follow-up
-(`follow_up_queued`); one the API refuses or still collapses is a WARN
-(`follow_up_not_queued`), and the files wait for the watcher's next sweep.
-A dry run, or a run that moved no file (every file failed), asks for
-nothing; a run stopped at its deadline is delivered again instead.
+(`follow_up_queued`). One the API still collapses was merged into a run
+already queued, which takes the files (`follow_up_merged`, not a WARN); one
+the API refuses is a WARN (`follow_up_not_queued`), and the files wait for
+the hourly sweep below. A dry run, or a run that moved no file (every file
+failed), asks for nothing; a run stopped at its deadline is delivered again
+instead.
+
+**No file is left behind.** The music-uploads watcher claims each input
+file once per version (by its id and modified time) and never asks for it
+again, so a file it already asked for and that is still in the folder (one
+left past a cap when a follow-up could not be queued, or an original
+`new_music_redo` moved back) would wait for ever. watcher-cog's
+`new-music-sweep` job (hourly, at minute 53, declared in
+mini-app-polis/infra) asks for one new-music run naming no file, which no
+claim stands in the way of, so every file in the folder is taken in within
+the hour. A run that finds the folder empty, or the flow off, sends no
+report, so the sweep is silent when there is nothing to do.
 
 **Audio check failure** stops the run at once: nothing is written for that
 file (after an upload, the bad copy goes to the Drive trash and the original
@@ -289,7 +302,8 @@ destinations.
 **Report:** counts for `scanned`, `identified` (taken in),
 `needs_review`, `collisions`, `failed`,
 `no_longer_in_input`, `left_past_cap` (and `not_written_dry_run` in a dry run), with the files
-by name. Off, the report says only that the flow is off; a missing setting
+by name. Off, or with the input folder empty, the run sends no report (it is
+logged); a missing setting
 is a WARN naming it.
 
 ## The library jobs
