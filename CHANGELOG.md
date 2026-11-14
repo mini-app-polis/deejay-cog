@@ -1,3 +1,10 @@
+## [2.61.5](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.4...v2.61.5) (2026-11-14)
+
+
+### Bug Fixes
+
+* **new-music-redo:** ask for a new-music run after sending files back, since the watcher's claims on moved files never lapse ([ebb9aae](https://github.com/mini-app-polis/deejay-cog/commit/ebb9aaeb1526522f6a67fd8ff2eb2d1b53ed0e73))
+
 ## [2.61.4](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.3...v2.61.4) (2026-11-13)
 
 
