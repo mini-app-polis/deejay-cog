@@ -1,3 +1,10 @@
+## [2.65.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.65.1...v2.65.2) (2026-11-14)
+
+
+### Bug Fixes
+
+* **library:** hold a BPM-edit title for review when the BPM tag or file name disagrees ([ff8433b](https://github.com/mini-app-polis/deejay-cog/commit/ff8433ba886e16da0f9bcc5c62e8a7a67dd0c1f9))
+
 ## [2.65.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.65.0...v2.65.1) (2026-11-14)
 
 
