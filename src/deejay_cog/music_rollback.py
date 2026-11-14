@@ -114,10 +114,12 @@ def find_record(drive: Any, state_folder: str, run_id: str) -> tuple[str, str]:
         # The start of a run id, as a run report shows it. Only a run's own
         # record: not a dry run's, nor a file kept beside it (a reconcile's
         # ``.differences.json``), whose names carry a further ``.`` part.
+        # Nor a rollback's own report (``music-rollback-<run id>-<time>``).
         matches = [
             f
             for f in files
             if re.search(rf"-{re.escape(run_id)}[^.]*\.json$", str(f.name))
+            and not str(f.name).startswith(f"{ROLLBACK_FLOW}-")
         ]
     if not matches:
         dry = [f for f in files if str(f.name).endswith(f"-{run_id}.dry-run.json")]

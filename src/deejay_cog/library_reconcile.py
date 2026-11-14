@@ -98,6 +98,11 @@ owner's review, and a write run names each such entry (``bpm_split_held``)
 when it held an approved one. library-sync writes no BPM to those files
 either.
 
+**A file whose title names another song** (:func:`names_another_song`: a
+likely wrong link) has no whole approved kind applied to it, either side:
+only differences approved for that file, field by field, are settled, and
+a write run names it (``other_song_held``) when it held an approved kind.
+
 **Long-open differences.** ``library-reconcile-open.json`` in the state
 folder keeps when each open difference was first seen (a difference whose
 values change starts again). Every run counts those open longer than
@@ -770,6 +775,10 @@ class ReconcileSummary:
     #: Approved BPM differences held because the entry's files hold BPMs
     #: further apart than ``BPM_ROUNDING``: "path: bpm 'a' (entry's files: ...)".
     bpm_split_held: list[str] = field(default_factory=list)
+    #: Files whose title names another song than their entry's (a likely
+    #: wrong link): whole approved kinds were not applied to them, only
+    #: what was approved for the file itself.
+    other_song_held: list[str] = field(default_factory=list)
     #: Open-difference keys already named in an earlier run's report with
     #: the same values: left out of this one (still sent to the review).
     reported_before: set[str] = field(default_factory=set)
@@ -1037,6 +1046,21 @@ def _bpm_spread(
     return split
 
 
+def names_another_song(diffs: list[Difference]) -> tuple[str, str] | None:
+    """The file's title and its entry's, when they name different songs:
+    neither, with case, spacing and symbols left out, holds the other. A file linked to another song (a fingerprint that
+    matched the wrong recording) looks like this; a title VirtualDJ ran
+    together with the artist ("Song Artist" for "Song") or one missing its
+    version does not."""
+    for d in diffs:
+        if d.field != "title" or d.kind != "other":
+            continue
+        have, want = _fold(d.file_value), _fold(d.catalog_value)
+        if have and want and have not in want and want not in have:
+            return d.file_value, d.catalog_value
+    return None
+
+
 def _apply_one(
     drive: Any,
     api: Catalog,
@@ -1057,6 +1081,20 @@ def _apply_one(
     difference is settled. Raises :class:`AudioChanged`."""
     name, read, diffs, wanted = compared
     approved = [d for d in diffs if approvals.approves(d)]
+    other_song = names_another_song(diffs)
+    if other_song is not None:
+        # Possibly linked to another song: a whole kind approved for every
+        # file must not carry that song's values into this one, or this
+        # file's up into that song's entry. Only what was approved for this
+        # file, field by field, is settled.
+        by_file = [d for d in approved if d.kind == "other"]
+        if len(by_file) < len(approved):
+            summary.other_song_held.append(
+                f"{row.path}: the file says {other_song[0]!r}, its entry "
+                f"{other_song[1]!r}; {len(approved) - len(by_file)} approved "
+                "kind(s) not applied (relink it, or approve its fields one by one)"
+            )
+        approved = by_file
     summary.not_approved += len(diffs) - len(approved)
     if bpm_split:
         for d in approved:
@@ -2051,6 +2089,8 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
             report.notice("kept_held", item)
         for item in summary.bpm_split_held:
             report.notice("bpm_split_held", item)
+        for item in summary.other_song_held:
+            report.notice("other_song_held", item)
     if summary.aborted:
         report.issue("audio_changed_run_stopped", summary.aborted)
     for kind in KINDS:

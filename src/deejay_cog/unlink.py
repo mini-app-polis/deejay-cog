@@ -8,8 +8,9 @@ The file is named by its Drive id, its path under the library root, or its
 name alone when no other present file has that name. Without ``--apply``
 it prints the file's registry row and changes nothing. With ``--apply`` the
 row is made unidentified, its link cleared, with a note saying why
-(``--note``), so the file goes to the owner's unidentified-files page to be
-linked again. With no link, the library sync and reconcile leave its tags
+(``--note``, kept after ``UNLINKED_BY_OWNER``), so the file goes to the
+owner's unidentified-files page to be linked again. library-identify never
+links such a file itself: the identification it had was wrong. With no link, the library sync and reconcile leave its tags
 alone: the catalog entry it was wrongly linked to is never written into it.
 The file's tags are not changed here; ``music_rollback --file`` undoes a
 run's write to one file.
@@ -26,11 +27,12 @@ from mini_app_polis.environment import api_base_url
 
 from deejay_cog.api_client import api_client
 from deejay_cog.fingerprint_check import Api, registry_rows
+from deejay_cog.library_identify import UNLINKED_BY_OWNER
 
 log = logger_mod.get_logger()
 
 #: The note the row is left with when ``--note`` gives none.
-DEFAULT_NOTE = "linked to another song; unlinked by the owner, left for review"
+DEFAULT_NOTE = "it was linked to another song"
 
 
 class UnlinkError(RuntimeError):
@@ -71,7 +73,7 @@ def unlink(api: Api, name: str, *, apply: bool, note: str = DEFAULT_NOTE) -> str
             path=row.path,
             identification_status="unidentified",
             catalog_id=None,
-            identify_note=note,
+            identify_note=UNLINKED_BY_OWNER + note,
         )
     )
     return f"{now}; unlinked"

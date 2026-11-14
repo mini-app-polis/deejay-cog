@@ -34,6 +34,11 @@ this step takes the next ``LIBRARY_IDENTIFY_CHUNK_SIZE`` of them (default
    them, and the fingerprint never will. A file the fingerprint names as
    another song stays for the owner (ADR-0008, decided 2026-11-09).
 
+**A file the owner unlinked** (:mod:`deejay_cog.unlink`; its note starts
+``UNLINKED_BY_OWNER``) is never taken here: the identification it had was
+wrong, and its fingerprint would link it back. It is counted
+(``left_for_owner``) and waits for the owner's unidentified-files page.
+
 **An owner edit** (a version in ``< >`` in its title, "Song <Intro Cut>": a
 cut the owner made himself) is linked only to an owner-edit entry, never to
 the published song's: by its tags when the catalog has one, otherwise to an
@@ -529,11 +534,25 @@ class IdentifySummary:
     not_linkable: list[str] = field(default_factory=list)
     no_queue: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    #: Unidentified files the owner unlinked by hand: left for the owner.
+    left_for_owner: int = 0
     #: Files left for the next run because Drive's rate limit outlasted the
     #: backoff (:func:`deejay_cog.music_safety.drive_call`).
     rate_limited: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     aborted: str = ""
+
+
+#: How the note of a file the owner unlinked by hand starts
+#: (:mod:`deejay_cog.unlink`): such a file is never identified again here,
+#: since the identification it had was wrong. The owner links it on the
+#: unidentified-files page.
+UNLINKED_BY_OWNER = "unlinked by the owner: "
+
+
+def unlinked_by_owner(row: LibraryFile) -> bool:
+    """Whether the owner unlinked ``row`` by hand."""
+    return (row.identify_note or "").startswith(UNLINKED_BY_OWNER)
 
 
 def _unidentified(api: Catalog, root: str) -> list[LibraryFile]:
@@ -907,6 +926,9 @@ def _identify(
     unidentified: list[LibraryFile] = []
     for root in settings.roots:
         for row in _unidentified(api, root.root_id):
+            if unlinked_by_owner(row):
+                summary.left_for_owner += 1
+                continue
             root_of[row.drive_file_id] = root
             unidentified.append(row)
     again = [
@@ -1092,6 +1114,7 @@ def _record(report: Any, summary: IdentifySummary, duration_sec: float) -> None:
         )
     report.count("waiting", summary.waiting)
     report.count("fingerprinted_unlinked", summary.fingerprinted_unlinked)
+    report.count("left_for_owner", summary.left_for_owner)
     report.count("tried", summary.tried)
     report.count("linked", len(summary.linked))
     report.count("written", len(summary.written))
