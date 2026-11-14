@@ -1,3 +1,11 @@
+## [2.64.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.64.0...v2.64.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **library:** no blanket approvals on likely wrong links; identify leaves owner-unlinked files ([e5029e8](https://github.com/mini-app-polis/deejay-cog/commit/e5029e804933ffddef245c5397838543a94fdf5d))
+* **rollback:** a run id never matches a rollback's own report ([a0bb6f9](https://github.com/mini-app-polis/deejay-cog/commit/a0bb6f9db88ca15347ce74af95ac58431ad9c434))
+
 # [2.64.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.63.0...v2.64.0) (2026-11-14)
 
 
