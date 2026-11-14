@@ -30,6 +30,11 @@ files in a bulk change (``CATALOG_PUT_BACK``):
 
     doppler run -- uv run python -m deejay_cog.music_rollback --catalog-put-backs --apply
 
+``--file`` undoes one file of a run and leaves the run's other files as
+they are (its Drive id, or its name as the run recorded it):
+
+    doppler run -- uv run python -m deejay_cog.music_rollback <run-id> --file "<name>.mp3" --apply
+
 An original moved back into the new-music input folder is taken in again by
 the next new-music run; set the ``flags.deejay_cog.new_music`` flag to ``off`` first to stop that.
 """
@@ -39,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -105,13 +111,13 @@ def find_record(drive: Any, state_folder: str, run_id: str) -> tuple[str, str]:
     )
     matches = [f for f in files if str(f.name).endswith(f"-{run_id}.json")]
     if not matches:
-        # The start of a run id, as a run report shows it.
+        # The start of a run id, as a run report shows it. Only a run's own
+        # record: not a dry run's, nor a file kept beside it (a reconcile's
+        # ``.differences.json``), whose names carry a further ``.`` part.
         matches = [
             f
             for f in files
-            if f"-{run_id}" in str(f.name)
-            and str(f.name).endswith(".json")
-            and not str(f.name).endswith(".dry-run.json")
+            if re.search(rf"-{re.escape(run_id)}[^.]*\.json$", str(f.name))
         ]
     if not matches:
         dry = [f for f in files if str(f.name).endswith(f"-{run_id}.dry-run.json")]
@@ -262,13 +268,32 @@ def _restore_fields_step(drive: Any, entry: dict[str, Any], name: str) -> Step:
     return Step(name, what, action=restore, restores=file_id)
 
 
-def plan_rollback(drive: Any, record: dict[str, Any]) -> list[Step]:
-    """What undoing ``record`` takes, file by file, last first."""
+def _is_file(entry: dict[str, Any], only: str) -> bool:
+    """Whether ``entry`` is the file ``only`` names: its Drive id, its name,
+    or its name without the folders."""
+    name = str(entry.get("original_name") or "")
+    return only in (str(entry.get("file_id") or ""), name, name.rsplit("/", 1)[-1])
+
+
+def _entries(record: dict[str, Any], only: str) -> list[dict[str, Any]]:
+    """The record's entries, or with ``only`` just that file's."""
+    entries = list(record.get("entries") or [])
+    if not only:
+        return entries
+    mine = [e for e in entries if _is_file(e, only)]
+    if not mine:
+        raise RollbackError(f"that run has no file {only!r}")
+    return mine
+
+
+def plan_rollback(drive: Any, record: dict[str, Any], only: str = "") -> list[Step]:
+    """What undoing ``record`` takes, file by file, last first. With
+    ``only`` (a file's Drive id or name), just that file."""
     if record.get("dry_run"):
         raise RollbackError("a dry run's record: that run wrote nothing")
     folders = record.get("folders") or {}
     steps: list[Step] = []
-    for entry in reversed(record.get("entries") or []):
+    for entry in reversed(_entries(record, only)):
         action = entry.get("action")
         file_id = str(entry.get("file_id") or "")
         name = str(entry.get("original_name") or file_id)
@@ -324,15 +349,18 @@ def rollback(
     apply: bool,
     forget: Callable[[list[str]], None] = forget_synced_values,
     forget_every_file: bool = False,
+    only: str = "",
 ) -> tuple[str, list[Step]]:
     """Plan, and with ``apply`` carry out, the undoing of one run. Returns
     the record's name and the steps, each with its result. ``forget`` is
     given the files whose tags were put back; with ``forget_every_file``,
     every file the run wrote in place, put back now or not (a catalog
-    put-back records the catalog's values, which its files do not hold)."""
+    put-back records the catalog's values, which its files do not hold).
+    With ``only`` (a file's Drive id or name), just that file is undone and
+    the run's other files are left as they are."""
     record_id, record_name = find_record(drive, state_folder, run_id)
     record = parse_record(drive.download_file_bytes(record_id).data)
-    steps = plan_rollback(drive, record)
+    steps = plan_rollback(drive, record, only)
     if not apply:
         return record_name, steps
     for step in steps:
@@ -350,7 +378,7 @@ def rollback(
         restored = sorted(
             {
                 str(e["file_id"])
-                for e in record.get("entries") or []
+                for e in _entries(record, only)
                 if e.get("action") == "in_place" and e.get("written_md5")
             }
         )
@@ -371,6 +399,7 @@ def rollback(
         "flow": ROLLBACK_FLOW,
         "run_id": run_id,
         "record": record_name,
+        "only": only,
         "at": stamp,
         "steps": [
             {
@@ -410,6 +439,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--file",
+        default="",
+        help=(
+            "undo only this file (its Drive id, or its name as the run "
+            "recorded it); the run's other files are left as they are"
+        ),
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help="carry it out (without this, only print what would be done)",
@@ -422,6 +459,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if bool(args.run_id) == args.catalog_put_backs:
         print("give a run id or --catalog-put-backs, not both", file=sys.stderr)
+        return 2
+    if args.file and args.catalog_put_backs:
+        print("--file goes with a run id, not --catalog-put-backs", file=sys.stderr)
         return 2
     drive = GoogleAPI.from_env().drive
     run_ids = (
@@ -437,14 +477,24 @@ def main(argv: list[str] | None = None) -> int:
         status = max(
             status,
             _rollback_one(
-                drive, state_folder, run_id, args.apply, args.catalog_put_backs
+                drive,
+                state_folder,
+                run_id,
+                args.apply,
+                args.catalog_put_backs,
+                args.file.strip(),
             ),
         )
     return status
 
 
 def _rollback_one(
-    drive: Any, state_folder: str, run_id: str, apply: bool, forget_every_file: bool
+    drive: Any,
+    state_folder: str,
+    run_id: str,
+    apply: bool,
+    forget_every_file: bool,
+    only: str = "",
 ) -> int:
     try:
         record_name, steps = rollback(
@@ -453,11 +503,13 @@ def _rollback_one(
             run_id,
             apply=apply,
             forget_every_file=forget_every_file,
+            only=only,
         )
     except RollbackError as exc:
         print(f"{exc}; nothing done.", file=sys.stderr)
         return 2
-    print(f"{'Rolling back' if apply else 'Dry run of rolling back'} {record_name}")
+    what = f"{record_name}, only {only}" if only else record_name
+    print(f"{'Rolling back' if apply else 'Dry run of rolling back'} {what}")
     for step in steps:
         print(step.line + (f"  [{step.result}]" if step.result else ""))
     if not steps:

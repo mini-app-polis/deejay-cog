@@ -1109,3 +1109,36 @@ def test_a_batch_within_the_cap_queues_no_follow_up(
     summary = flow.new_music(run_id="m-1")
 
     assert summary.left_past_cap == 0 and api.runs == []
+
+
+# -- a file is downloaded whole only when it is taken in ---------------------
+
+
+def _long(title: str, artist: str) -> bytes:
+    """A file longer than a tag read's start, so a ranged read is not whole."""
+    frames = (TIT2(encoding=3, text=[title]), TPE1(encoding=3, text=[artist]))
+    return mp3(*frames, audio=AUDIO * (1 + (1024 * 1024) // len(AUDIO)))
+
+
+def test_a_file_sent_to_review_is_never_downloaded_whole(
+    settings, wired, drive
+) -> None:
+    file_id = drive.add("junk.mp3", IN, _long("CandyCleanKahlo113 Kahlo 113", "Kah-lo"))
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.needs_review and drive.items[file_id].parents == [REVIEW]
+    assert drive.downloads == []  # its start and end only
+    assert {span for fid, span in drive.ranges if fid == file_id} == {
+        f"bytes=0-{512 * 1024 - 1}",
+        "bytes=-256",
+    }
+
+
+def test_a_file_taken_in_is_downloaded_whole_once(settings, wired, drive) -> None:
+    file_id = drive.add("temple.mp3", IN, _long("Temple", "Thomas Gold"))
+
+    summary = flow.new_music(run_id="m-1")
+
+    assert summary.identified and drive.items[file_id].parents == [ORIG]
+    assert drive.downloads.count(file_id) == 1
