@@ -31,7 +31,17 @@ copy whose tags changed since its run is still sent back, as long as its
 audio is the original's. A copy moved since its run, or whose audio
 differs, is left alone, and so is its original; each is said so. Nothing
 is deleted or renamed, and what was done is saved to the state folder as
-``new-music-redo-<time>.json``. The next new-music run takes the files in.
+``new-music-redo-<time>.json``.
+
+The files that went back keep their Drive ids and modified times, so the
+watcher's claims on them from their first intake still stand and it never
+asks for them again. So when ``apply --write`` has moved at least one file
+back, it asks for a new-music run itself (``POST /v1/deejay/runs``), as
+intake asks for its own follow-up: the request names no file, so no claim
+stands in its way, and that run takes the files in. ``request-run`` asks
+for one on its own, for files sent back before ``apply`` did this:
+
+    doppler run --config prd -- uv run python -m deejay_cog.new_music_redo request-run
 """
 
 from __future__ import annotations
@@ -46,7 +56,11 @@ from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
 from mini_app_polis import logger as logger_mod
-from mini_app_polis.api.contract import LibraryFilesAbsentRequest
+from mini_app_polis.api.contract import (
+    DeejayRunAccepted,
+    DeejayRunRequest,
+    LibraryFilesAbsentRequest,
+)
 from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -74,6 +88,10 @@ class Api(Protocol):
 
     def mark_library_files_absent(self, payload: LibraryFilesAbsentRequest) -> Any:
         """Mark registry rows absent."""
+        ...
+
+    def request_deejay_run(self, payload: DeejayRunRequest) -> DeejayRunAccepted:
+        """``POST /v1/deejay/runs``."""
         ...
 
 
@@ -280,6 +298,7 @@ def apply(
     entries = _entries(drive, state_folder)
     lines: list[str] = []
     report: list[dict[str, str]] = []
+    sent_back = 0
     for row in rows:
         if row.action != "redo":
             lines.append(f"skip  {row.copy_name}: skipped")
@@ -298,6 +317,8 @@ def apply(
             continue
         if write:
             _carry_out(api, row, steps)
+            if steps[-1].result == "done":
+                sent_back += 1
         for step in steps:
             lines.append(step.line + (f"  [{step.result}]" if step.result else ""))
             report.append(
@@ -318,7 +339,26 @@ def apply(
             ).encode(),
             mime_type=RECORD_MIME_TYPE,
         )
+    if sent_back:
+        lines.append(request_run(api))
     return lines
+
+
+def request_run(api: Api) -> str:
+    """Ask for a new-music run, naming no file, so the files sent back are
+    taken in although the watcher's claims on them still stand. One result
+    line: ``run`` with the queue message, or ``fail`` with why."""
+    try:
+        accepted = api.request_deejay_run(DeejayRunRequest(mode="new-music"))
+    except Exception as exc:  # noqa: BLE001 — the files are back; say so and stop
+        log.exception("new-music-redo: the new-music run could not be queued")
+        return f"fail  new-music run not queued: {type(exc).__name__}: {exc}"
+    if accepted.deduplicated:
+        return (
+            "run   new-music run already queued as "
+            f"{accepted.message_id or 'an earlier request'}"
+        )
+    return f"run   new-music run queued as {accepted.message_id or 'a new message'}"
 
 
 def _carry_out(api: Api, row: Row, steps: list[Step]) -> None:
@@ -357,7 +397,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="make the changes (without this, only print what would be done)",
     )
+    sub.add_parser(
+        "request-run", help="ask for a new-music run to take in files sent back"
+    )
     args = parser.parse_args(argv)
+    if args.command == "request-run":
+        line = request_run(api_client(base_url=api_base_url().strip() or None))
+        print(line)
+        return 1 if line.startswith("fail ") else 0
     state_folder = os.getenv(STATE_FOLDER_VAR, "").strip()
     if not state_folder:
         print(f"{STATE_FOLDER_VAR} must be set; nothing done.", file=sys.stderr)

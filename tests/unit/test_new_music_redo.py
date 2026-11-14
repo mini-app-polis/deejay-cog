@@ -8,6 +8,7 @@ import json
 from typing import Any
 
 import pytest
+from mini_app_polis.api.contract import DeejayRunAccepted, DeejayRunRequest
 from music_fakes import FakeDrive, mp3
 from mutagen.id3 import TIT2, TPE1
 from pydantic import ValidationError
@@ -22,11 +23,24 @@ JUNK_TITLE = "CandyCleanKahlo113 Kahlo 113"
 
 
 class FakeApi:
-    def __init__(self) -> None:
+    def __init__(self, *, runs_fail: bool = False, collapse: bool = False) -> None:
         self.absent: list[list[str]] = []
+        self.runs: list[DeejayRunRequest] = []
+        self.runs_fail = runs_fail
+        self.collapse = collapse
 
     def mark_library_files_absent(self, payload: Any) -> None:
         self.absent.append(list(payload.drive_file_ids))
+
+    def request_deejay_run(self, payload: DeejayRunRequest) -> DeejayRunAccepted:
+        if self.runs_fail:
+            raise ConnectionError("API down")
+        self.runs.append(payload)
+        return DeejayRunAccepted(
+            message_id=f"q-{len(self.runs)}",
+            mode=payload.mode,
+            deduplicated=self.collapse,
+        )
 
 
 def _song(title: str, artist: str) -> bytes:
@@ -93,6 +107,7 @@ def test_apply_without_write_changes_nothing(drive: FakeDrive) -> None:
 
     assert drive.calls[before:] == []
     assert api.absent == []
+    assert api.runs == []
     assert [line.split()[0] for line in lines] == ["do", "do"]
 
 
@@ -104,7 +119,9 @@ def test_apply_trashes_the_copy_marks_it_absent_and_returns_the_original(
 
     lines = redo.apply(drive, api, STATE, redo.propose(drive, STATE), write=True)
 
-    assert all(line.endswith("[done]") for line in lines)
+    assert all(line.endswith("[done]") for line in lines[:-1])
+    assert lines[-1] == "run   new-music run queued as q-1"
+    assert [r.mode for r in api.runs] == ["new-music"]
     assert drive.items[ids["junk_copy"]].trashed is True
     assert drive.items[ids["junk"]].parents == [IN]
     assert api.absent == [[ids["junk_copy"]]]
@@ -125,7 +142,8 @@ def test_with_the_original_gone_the_copy_itself_goes_back(drive: FakeDrive) -> N
 
     assert lines == [
         f"do    {drive.items[ids['junk_copy']].name}: move the copy to the input "
-        "folder (its original is gone)  [done]"
+        "folder (its original is gone)  [done]",
+        "run   new-music run queued as q-1",
     ]
     assert drive.items[ids["junk_copy"]].parents == [IN]
     assert drive.items[ids["junk_copy"]].trashed is False
@@ -143,6 +161,7 @@ def test_a_copy_filed_since_is_left_and_its_original_stays(drive: FakeDrive) -> 
     assert drive.items[ids["junk_copy"]].trashed is False
     assert drive.items[ids["junk"]].parents == [ORIG]
     assert api.absent == []
+    assert api.runs == []  # nothing went back, so no run is asked for
 
 
 def test_a_copy_whose_tags_the_library_rewrote_is_still_sent_back(
@@ -156,7 +175,8 @@ def test_a_copy_whose_tags_the_library_rewrote_is_still_sent_back(
 
     lines = redo.apply(drive, api, STATE, redo.propose(drive, STATE), write=True)
 
-    assert all(line.endswith("[done]") for line in lines)
+    assert all(line.endswith("[done]") for line in lines[:-1])
+    assert lines[-1].startswith("run ")
     assert drive.items[ids["junk_copy"]].trashed is True
     assert drive.items[ids["junk"]].parents == [IN]
 
@@ -193,6 +213,37 @@ def test_a_skipped_row_and_an_unknown_copy_change_nothing(drive: FakeDrive) -> N
     assert "no delivery of this copy" in lines[1]
     assert [m for m, _ in drive.calls[before:] if m != "download_file_bytes"] == []
     assert drive.items[ids["junk_copy"]].trashed is False
+
+
+def test_a_run_that_cannot_be_queued_is_a_failure_line(drive: FakeDrive) -> None:
+    ids = _intake_run(drive)
+    api = FakeApi(runs_fail=True)
+
+    lines = redo.apply(drive, api, STATE, redo.propose(drive, STATE), write=True)
+
+    assert drive.items[ids["junk"]].parents == [IN]  # the files still went back
+    assert lines[-1] == "fail  new-music run not queued: ConnectionError: API down"
+
+
+def test_request_run_says_when_the_queue_already_has_one() -> None:
+    assert redo.request_run(FakeApi()) == "run   new-music run queued as q-1"
+    assert (
+        redo.request_run(FakeApi(collapse=True))
+        == "run   new-music run already queued as q-1"
+    )
+
+
+def test_request_run_command_asks_for_one_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = FakeApi()
+    monkeypatch.setattr(redo, "api_client", lambda **_: api)
+
+    assert redo.main(["request-run"]) == 0
+    assert [r.mode for r in api.runs] == ["new-music"]
+
+    monkeypatch.setattr(redo, "api_client", lambda **_: FakeApi(runs_fail=True))
+    assert redo.main(["request-run"]) == 1
 
 
 def test_the_csv_round_trips_and_checks_its_action(tmp_path) -> None:
