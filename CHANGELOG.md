@@ -1,3 +1,10 @@
+# [2.67.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.66.0...v2.67.0) (2026-11-14)
+
+
+### Features
+
+* **intake:** new-music runs on its own intake worker ([06d7e18](https://github.com/mini-app-polis/deejay-cog/commit/06d7e1854bbdf7be30c902eb7b97249516a94053))
+
 # [2.66.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.65.2...v2.66.0) (2026-11-14)
 
 
