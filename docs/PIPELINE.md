@@ -1486,6 +1486,22 @@ record, takes each fingerprint write whose old title and artist disagree
 with the new ones, rolls its run back (the rollback below) and makes its
 registry row unidentified, its link cleared, with a note.
 
+### Unlinking one file linked to another song
+
+```bash
+doppler run --config prd -- uv run python -m deejay_cog.unlink "Song_Artist.mp3"          # what it would do
+doppler run --config prd -- uv run python -m deejay_cog.unlink "Song_Artist.mp3" --apply  # do it
+```
+
+A dry run unless `--apply`. The file is named by its Drive id, its path
+under the library root, or its name when no other present file has it. Its
+registry row is made unidentified, its link cleared, with a note (`--note`,
+or a default saying it was linked to another song), so it goes to the
+owner's unidentified-files page to be linked again. The library sync and
+reconcile only compare linked files, so the wrong entry's values are not
+written into it meanwhile. Its tags are not changed: to undo a run's write
+to the file, roll that one file back with `music_rollback --file` (below).
+
 ### Linking by their own tags the files the fingerprint found nothing for
 
 ```bash
