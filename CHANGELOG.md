@@ -1,3 +1,10 @@
+# [2.65.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.64.1...v2.65.0) (2026-11-14)
+
+
+### Features
+
+* **library:** link_audit lists files whose names disagree with their entries ([787e9a5](https://github.com/mini-app-polis/deejay-cog/commit/787e9a571b97099dd7f4a791b5bd2c6f1b023fff))
+
 ## [2.64.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.64.0...v2.64.1) (2026-11-14)
 
 
