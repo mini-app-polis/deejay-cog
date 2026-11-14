@@ -299,3 +299,90 @@ def test_a_run_is_found_by_the_start_of_its_id(drive: FakeDrive) -> None:
     _sync_run(drive, "47bafb95-1111-2222-3333-444455556666", "sync")
     _, name = rb.find_record(drive, STATE, "47bafb95")
     assert name == "library-sync-47bafb95-1111-2222-3333-444455556666.json"
+
+
+def _two_file_sync_run(drive: FakeDrive) -> tuple[str, str, bytes, bytes]:
+    """A library-reconcile run that wrote two files in place."""
+    record = RunRecord("library-reconcile", "r-3", FlowMode.WRITE).attach(drive, STATE)
+    out = []
+    for name in ("Right_Song.mp3", "Wrong_Link.mp3"):
+        original = mp3(TIT2(encoding=3, text=[name[:-4]]))
+        file_id = drive.add(name, "library", original)
+        write_in_place(
+            drive,
+            record,
+            file_id=file_id,
+            name=f"/New Music/{name}",
+            original=original,
+            tagged=mp3(TIT2(encoding=3, text=["Catalog Title"])),
+            identified_by="reconcile (catalog wins)",
+        )
+        out += [file_id, original]
+    record.finish("complete")
+    return out[0], out[2], out[1], out[3]
+
+
+@pytest.mark.parametrize("only", ["Wrong_Link.mp3", "/New Music/Wrong_Link.mp3"])
+def test_one_file_of_a_run_is_undone_and_the_rest_left(
+    drive: FakeDrive, only: str
+) -> None:
+    right, wrong, _, wrong_original = _two_file_sync_run(drive)
+    right_now = drive.items[right].data
+    forgotten: list[list[str]] = []
+
+    _, steps = rb.rollback(
+        drive, STATE, "r-3", apply=True, forget=forgotten.append, only=only
+    )
+
+    assert drive.items[wrong].data == wrong_original
+    assert drive.items[right].data == right_now
+    assert forgotten == [[wrong]]
+    assert [s.result for s in steps] == ["done", "done"]
+
+
+def test_one_file_is_found_by_its_drive_id(drive: FakeDrive) -> None:
+    right, wrong, _, wrong_original = _two_file_sync_run(drive)
+
+    rb.rollback(drive, STATE, "r-3", apply=True, forget=list, only=wrong)
+
+    assert drive.items[wrong].data == wrong_original
+
+
+def test_a_file_the_run_did_not_touch_is_refused(drive: FakeDrive) -> None:
+    right, wrong, _, _ = _two_file_sync_run(drive)
+    before = {i: drive.items[i].data for i in (right, wrong)}
+
+    with pytest.raises(rb.RollbackError, match="no file"):
+        rb.rollback(drive, STATE, "r-3", apply=True, only="Other.mp3")
+
+    assert {i: drive.items[i].data for i in (right, wrong)} == before
+
+
+def test_the_command_undoes_one_file(
+    drive: FakeDrive, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    right, wrong, _, wrong_original = _two_file_sync_run(drive)
+    right_now = drive.items[right].data
+    monkeypatch.setenv("MUSIC_TAGGING_STATE_FOLDER_ID", STATE)
+    google = MagicMock()
+    google.from_env.return_value = SimpleNamespace(drive=drive)
+    monkeypatch.setattr(rb, "GoogleAPI", google)
+    api = MagicMock()
+    monkeypatch.setattr(rb, "api_client", MagicMock(return_value=api))
+
+    assert rb.main(["r-3", "--file", "Wrong_Link.mp3"]) == 0
+    assert "only Wrong_Link.mp3" in capsys.readouterr().out
+    assert rb.main(["r-3", "--file", "Wrong_Link.mp3", "--apply"]) == 0
+
+    assert drive.items[wrong].data == wrong_original
+    assert drive.items[right].data == right_now
+    sent = api.mark_library_files_synced.call_args.args[0]
+    assert sent.drive_file_ids == [wrong] and sent.forget is True
+
+
+def test_the_command_refuses_one_file_with_every_put_back(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    monkeypatch.setenv("MUSIC_TAGGING_STATE_FOLDER_ID", STATE)
+    assert rb.main(["--catalog-put-backs", "--file", "x.mp3"]) == 2
+    assert "--file" in capsys.readouterr().err

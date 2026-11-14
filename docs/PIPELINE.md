@@ -1542,6 +1542,14 @@ doppler run -- uv run python -m deejay_cog.music_rollback <run id>          # wh
 doppler run -- uv run python -m deejay_cog.music_rollback <run id> --apply  # do it
 ```
 
+To undo one file of a run and leave its other files as they are, add
+`--file` with the file's Drive id or its name as the run recorded it:
+
+```bash
+doppler run -- uv run python -m deejay_cog.music_rollback <run id> --file "Song_Artist.mp3"          # what it would do
+doppler run -- uv run python -m deejay_cog.music_rollback <run id> --file "Song_Artist.mp3" --apply  # do it
+```
+
 A dry run unless `--apply`. It reads the run's record and, last file first:
 moves a copy the run made to the Drive **trash** (never deletes it), only
 while it is still in that folder with the contents the run wrote; moves an
