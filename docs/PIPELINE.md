@@ -1179,6 +1179,18 @@ is not marked synced; the reconcile links it to its owner-edit entry
 (`owner_edit_left_for_reconcile`). An owner-edit entry's displayed title
 carries its version in `< >`, and the sync writes it so.
 
+**A title or artist edit waits for the owner**
+([ADR-0008, amended 2026-11-13](decisions/ADR-0008-catalog-source-of-truth.md)).
+In the main library a title or artist a file changed is not sent up: its
+recorded value goes in its place, and the report names the change
+(`title_or_artist_edit_left_for_review`). The file then differs from its
+entry, so the reconcile files the difference on the review page, where the
+owner sends it up (file wins) or has the catalog's value written back
+(catalog wins). A wrong title or artist would otherwise reach every file of
+its entry. Genre, year, BPM and label edits go up as before, FX Music's
+files still win, and a retitle as an owner edit (`< >`) is still the
+reconcile's.
+
 **Only a field the file changed since its last sync is an edit.** The
 values recorded for a file never synced before are its entry's, written
 down without reading the file, so a file that already differed from its
