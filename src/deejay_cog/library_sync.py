@@ -67,6 +67,16 @@ against the file's Drive revision at its last sync: one the file already
 held then is not sent up (``already_differed``); the reconcile settles it.
 When Drive keeps no revision that old, the field goes up as before.
 
+**A field with an open reconcile difference is the reconcile's**
+(ADR-0008, decided 2026-11-14). Each run first reads, for its root, the
+fields of each file the reconcile holds an open difference for
+(``GET /v1/catalog/library/reconcile/differences``). Such a field is neither
+sent up as an edit nor written over until the owner settles it; both are
+named in the report (``field_left_to_reconcile``). The file's other fields
+go up and come down as before. When those fields cannot be read, the root
+is not synced in that run. The Drive revision check above stays as a
+backstop.
+
 **Edits that share an entry at different tempos keep their BPMs.** When
 the entry's BPM moved for a file and the files linked to that entry hold
 BPMs ``BPM_REMEASURE`` or more apart (two edits of a song cut at different
@@ -150,6 +160,7 @@ from mini_app_polis.api.contract import (
     LibraryFilesSynced,
     LibraryFilesSyncedResult,
     LibraryFileTags,
+    ReconcileOpenFields,
 )
 from mini_app_polis.deadline import remaining_seconds, without_run_deadline
 from mini_app_polis.environment import api_base_url
@@ -279,6 +290,12 @@ class Catalog(Protocol):
         """Send up the fields a file changed outside the pipeline."""
         ...
 
+    def list_reconcile_open_fields(
+        self, *, library_root_id: str | None = None
+    ) -> list[ReconcileOpenFields]:
+        """Each file's fields with an open reconcile difference."""
+        ...
+
 
 def chunk_size_setting() -> int | str:
     """The chunk size as the worker logs it: the number, or the raw text
@@ -358,6 +375,9 @@ class SyncSummary:
     #: Files whose entry's BPM moved but whose entry's files hold BPMs too
     #: far apart to share one: the BPM is not written to them.
     bpm_split_kept: list[str] = field(default_factory=list)
+    #: Fields with an open reconcile difference, neither sent up nor written:
+    #: "path: field 'value' not sent up|not written (...)".
+    left_to_reconcile: list[str] = field(default_factory=list)
     #: With more than one root, each root's own summary, in order.
     roots: list[tuple[LibraryRoot, SyncSummary]] = field(default_factory=list)
 
@@ -407,18 +427,25 @@ def _sync_one(
     display: CatalogDisplay,
     summary: SyncSummary,
     bpm_split: Callable[[LibraryFile], str] | None = None,
+    reconciling: frozenset[str] = frozenset(),
 ) -> LibraryFileTags | None:
     """Write one file's moved fields from its entry. The values to record
     when it now carries them (written, already so, or nothing moved), None
     when not. ``bpm_split`` names the BPMs of the entry's files when they
-    are too far apart to share one: then the BPM is not written. Raises
-    :class:`AudioChanged`."""
+    are too far apart to share one: then the BPM is not written. A field in
+    ``reconciling`` has an open reconcile difference and is not written.
+    Raises :class:`AudioChanged`."""
     now = display_fields(display, label=row.edit_label)
     values = LibraryFileTags(**now)
     if row.synced is None:
         summary.recorded.append(row.path)
         return values
     moved = _moved(now, row.synced)
+    for name in sorted(reconciling & moved.keys()):
+        summary.left_to_reconcile.append(
+            f"{row.path}: {name} {moved.pop(name)!r} not written (an open "
+            "reconcile difference)"
+        )
     if "bpm" in moved and bpm_split is not None:
         spread = bpm_split(row)
         if spread:
@@ -803,6 +830,7 @@ def _edits(
     run_id: str,
     summary: SyncSummary,
     cutoff: float | None = None,
+    reconciling: dict[str, frozenset[str]] | None = None,
 ) -> None:
     """Send up what files changed outside the pipeline since their last
     sync. A field that now holds a value the pipeline replaced in that file
@@ -865,6 +893,7 @@ def _edits(
             summary,
             cutoff,
             owner_edits=not root.file_wins,
+            reconciling=reconciling or {},
         )
     finally:
         with without_run_deadline():
@@ -890,10 +919,13 @@ def _read_edits(
     cutoff: float | None,
     *,
     owner_edits: bool = True,
+    reconciling: dict[str, frozenset[str]] | None = None,
 ) -> None:
     """Read each changed file and send its edits up. With ``owner_edits``
     off (FX Music, whose files win), a retitle as an owner edit goes up
-    like any other edit."""
+    like any other edit. A field in ``reconciling`` (the file's fields with
+    an open reconcile difference) does not go up."""
+    reconciling = reconciling or {}
     for index, row in enumerate(rows):
         if shared_deadline_passed():
             summary.stopped = f"run deadline reached before reading {row.path}"
@@ -921,6 +953,9 @@ def _read_edits(
                 )
                 summary.owner_edit_ids.add(row.drive_file_id)
                 continue
+            tags = _leave_to_reconcile(
+                row, tags, reconciling.get(row.drive_file_id, frozenset()), summary
+            )
             if owner_edits:
                 tags = _hold_names_for_review(row, tags, summary)
             result = api.report_library_file_edited(
@@ -1020,6 +1055,39 @@ def _retitled_as_owner_edit(api: Catalog, row: LibraryFile, title: str) -> bool:
     return display is not None and needs_owner_edit_entry(title, display)
 
 
+def _open_fields(api: Catalog, root_id: str) -> dict[str, frozenset[str]]:
+    """Each of the root's files with an open reconcile difference, and the
+    fields that differ: those are the reconcile's, not the sync's."""
+    return {
+        row.drive_file_id: frozenset(row.fields)
+        for row in api.list_reconcile_open_fields(library_root_id=root_id)
+    }
+
+
+def _leave_to_reconcile(
+    row: LibraryFile,
+    tags: dict[str, str | None],
+    reconciling: frozenset[str],
+    summary: SyncSummary,
+) -> dict[str, str | None]:
+    """``tags`` with each field that has an open reconcile difference set
+    back to its recorded value, so it does not go up: the reconcile settles
+    it with the owner."""
+    synced = row.synced.model_dump() if row.synced is not None else {}
+    out = dict(tags)
+    for f in sorted(reconciling):
+        if f not in out:
+            continue
+        now = _norm(f, tags.get(f))
+        if now and now != _norm(f, synced.get(f)):
+            out[f] = synced.get(f) or None
+            summary.left_to_reconcile.append(
+                f"{row.path}: {f} {tags.get(f)!r} not sent up (an open "
+                "reconcile difference)"
+            )
+    return out
+
+
 def _sync(
     drive: Any,
     api: Catalog,
@@ -1030,7 +1098,25 @@ def _sync(
     run_id: str,
     summary: SyncSummary,
 ) -> None:
-    _edits(drive, api, settings, root, flood, run_id, summary, _edits_cutoff())
+    try:
+        reconciling = _open_fields(api, root.root_id)
+    except Exception as exc:  # noqa: BLE001 — without them, nothing is safe to sync
+        summary.failed.append(
+            "the reconcile's open differences could not be read, so nothing was "
+            f"synced ({type(exc).__name__}: {exc})"
+        )
+        return
+    _edits(
+        drive,
+        api,
+        settings,
+        root,
+        flood,
+        run_id,
+        summary,
+        _edits_cutoff(),
+        reconciling,
+    )
     if summary.stopped or summary.aborted:
         if summary.aborted:
             _report_abort(run_id, summary)
@@ -1071,7 +1157,15 @@ def _sync(
                 values = (
                     _fx_one(row, display, summary)
                     if root.file_wins
-                    else _sync_one(drive, record, row, display, summary, spread)
+                    else _sync_one(
+                        drive,
+                        record,
+                        row,
+                        display,
+                        summary,
+                        spread,
+                        reconciling.get(row.drive_file_id, frozenset()),
+                    )
                 )
                 if values is not None:
                     done[row.drive_file_id] = values
@@ -1247,6 +1341,9 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
     report.count("held_for_review", len(summary.held_for_review))
     for line in summary.held_for_review:
         report.notice("title_or_artist_edit_left_for_review", line)
+    report.count("left_to_reconcile", len(summary.left_to_reconcile))
+    for line in summary.left_to_reconcile:
+        report.notice("field_left_to_reconcile", line)
     report.count("already_differed", len(summary.already_differed))
     for line in summary.already_differed:
         report.notice("not_an_edit_already_differed_at_last_sync", line)

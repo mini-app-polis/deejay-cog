@@ -1170,6 +1170,16 @@ recorded as synced with their values
 (`POST /v1/catalog/library/files/synced`), including those that already
 carried them.
 
+**A field with an open reconcile difference is the reconcile's**
+([ADR-0008](decisions/ADR-0008-catalog-source-of-truth.md), 2026-11-14).
+Each run first reads its root's open differences
+(`GET /v1/catalog/library/reconcile/differences`: each file's fields that
+differ). Such a field is neither sent up as an edit nor written over until
+the owner settles it on the review page, and the report names each one
+(`field_left_to_reconcile`). The file's other fields go up and come down as
+usual. When the open differences cannot be read, that root is not synced in
+that run.
+
 **Edits that share an entry at different tempos keep their BPMs.** When a
 file's BPM moved and the files linked to its entry hold BPMs 1.5 or more
 apart (read from their tags, once per entry per run), the BPM is written to

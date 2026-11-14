@@ -437,6 +437,28 @@ them into the catalog, and one into another file of its entry.
    Drive revision from the last sync, an empty value then, or one the
    pipeline also replaced. That file's fields do not go up.
 
+## Decided with the owner, 2026-11-14 (an unreconciled field belongs to the reconcile)
+
+On 2026-11-13 the sync recorded entry values for newly linked files without
+reading them, then sent a dozen old-library titles up to the catalog as
+edits once the reconcile wrote other fields of those files. 2.61.6 caught
+that case with a Drive revision check. This makes field ownership explicit.
+
+1. **A field with an open reconcile difference is the reconcile's.** The
+   sync reads each file's fields with an open difference from the API
+   (`GET /v1/catalog/library/reconcile/differences`). It neither sends such
+   a field up as an edit nor writes the catalog's value over it, and names
+   each one in its report. The owner settles it in the reconcile review
+   (file wins or catalog wins), and the reconcile's write run carries it
+   out.
+2. **Every other field goes up and comes down as before**, including the
+   other fields of a file that has an open difference.
+3. **No list, no sync.** When the open differences cannot be read, the sync
+   does nothing for that root in that run, rather than guess.
+4. **The Drive revision check stays as a backstop** for a field that differs
+   from its recorded value but has no open difference yet (one the
+   reconcile has not compared since the change).
+
 ## Decided with the owner, 2026-11-09 (the steps' modes are feature flags)
 
 1. **Each step's mode lives in the API's feature flags**, not in a setting.

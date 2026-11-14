@@ -27,6 +27,7 @@ from mini_app_polis.api.contract import (
     LibraryFilesSynced,
     LibraryFilesSyncedResult,
     LibraryFileTags,
+    ReconcileOpenFields,
 )
 from music_fakes import DriveItem, FakeDrive, mp3
 from mutagen.id3 import COMM, ID3, TBPM, TCON, TIT2, TPE1, TXXX
@@ -101,6 +102,10 @@ class FakeCatalog:
     edited: list[LibraryFileEdited] = field(default_factory=list)
     #: What the API answers for a file's edits, by Drive id.
     edit_answers: dict[str, list[LibraryFieldEdit]] = field(default_factory=dict)
+    #: Fields with an open reconcile difference, by Drive id.
+    open_fields: dict[str, list[str]] = field(default_factory=dict)
+    #: Raised when the open differences are read, when set.
+    open_fields_error: Exception | None = None
 
     def list_library_files_needing_sync(self, **kwargs: Any) -> list[LibraryFile]:
         done = {i for m in self.marked for i in m.drive_file_ids}
@@ -124,6 +129,18 @@ class FakeCatalog:
         rows = [r for r in self.rows if r.library_root_id == kwargs["library_root_id"]]
         start = kwargs["offset"]
         return rows[start : start + kwargs["limit"]]
+
+    def list_reconcile_open_fields(
+        self, *, library_root_id: str | None = None
+    ) -> list[ReconcileOpenFields]:
+        if self.open_fields_error is not None:
+            raise self.open_fields_error
+        roots = {r.drive_file_id: r.library_root_id for r in self.rows}
+        return [
+            ReconcileOpenFields.model_validate({"drive_file_id": f, "fields": fields})
+            for f, fields in self.open_fields.items()
+            if roots.get(f) == library_root_id
+        ]
 
     def report_library_file_edited(self, payload: LibraryFileEdited):
         self.edited.append(payload)
@@ -1458,4 +1475,101 @@ def test_with_no_revision_from_the_last_sync_the_field_goes_up_as_before(
     assert summary.already_differed == []
     assert summary.held_for_review == [
         "RnB/honesty.mp3: title 'Honesty' -> 'Honesty Pink Sweat$'"
+    ]
+
+
+def test_a_field_with_an_open_reconcile_difference_is_not_written(
+    settings, wired, drive, catalog, posted
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry, genre="Neo Soul", bpm=96.0)
+    drive_id = _linked(
+        drive,
+        catalog,
+        "honesty.mp3",
+        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", bpm="95.5"),
+        entry,
+    )
+    catalog.open_fields[drive_id] = ["bpm"]
+
+    summary = sync.library_sync(run_id="y-1")
+
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TCON"] == "Neo Soul"  # no open difference: written as before
+    assert frames["TBPM"] == "95.5"  # the reconcile's until the owner settles it
+    assert summary.written == ["RnB/honesty.mp3 (genre)"]
+    assert summary.left_to_reconcile == [
+        "RnB/honesty.mp3: bpm '96' not written (an open reconcile difference)"
+    ]
+    assert "field_left_to_reconcile" in _text(posted)
+
+
+def test_an_edit_in_a_field_with_an_open_reconcile_difference_is_not_sent_up(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    drive_id = _linked(
+        drive,
+        catalog,
+        "honesty.mp3",
+        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", "Neo Soul", bpm="97"),
+        entry,
+    )
+    _listed(drive, {drive_id: "2026-11-08T09:30:00.000Z"})
+    catalog.open_fields[drive_id] = ["genre"]
+
+    summary = sync.library_sync(run_id="y-1")
+
+    [edited] = catalog.edited
+    assert edited.tags.genre == "R&B/Soul"  # its recorded value, not the file's
+    assert edited.tags.bpm == "97"  # no open difference: goes up as before
+    assert summary.left_to_reconcile == [
+        "RnB/honesty.mp3: genre 'Neo Soul' not sent up (an open reconcile difference)"
+    ]
+
+
+def test_open_differences_of_another_root_do_not_hold_this_ones_files(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry, bpm=96.0)
+    drive_id = _linked(
+        drive,
+        catalog,
+        "honesty.mp3",
+        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", bpm="95.5"),
+        entry,
+    )
+    other = _linked(drive, catalog, "x.mp3", _song(entry, "X", "Y"), entry, root=FX)
+    catalog.open_fields[other] = ["bpm"]
+
+    sync.library_sync(run_id="y-1")
+
+    assert _frames(drive.items[drive_id].data)["TBPM"] == "96"
+
+
+def test_without_the_open_differences_nothing_is_synced(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry, bpm=96.0)
+    drive_id = _linked(
+        drive,
+        catalog,
+        "honesty.mp3",
+        _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", "Neo Soul", bpm="95.5"),
+        entry,
+    )
+    _listed(drive, {drive_id: "2026-11-08T09:30:00.000Z"})
+    before = drive.items[drive_id].data
+    catalog.open_fields_error = RuntimeError("503")
+
+    summary = sync.library_sync(run_id="y-1")
+
+    assert drive.items[drive_id].data == before
+    assert catalog.edited == [] and catalog.marked == []
+    assert summary.failed == [
+        "the reconcile's open differences could not be read, so nothing was "
+        "synced (RuntimeError: 503)"
     ]

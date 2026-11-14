@@ -35,6 +35,7 @@ from mini_app_polis.api.contract import (
     LibraryFilesSynced,
     LibraryFilesSyncedResult,
     ReconcileApprovals,
+    ReconcileOpenFields,
     ReconcileReport,
     ReconcileReportResult,
 )
@@ -64,6 +65,8 @@ class Catalog:
     entries: dict[uuid.UUID, CatalogDisplay] = field(default_factory=dict)
     rows: dict[str, LibraryFile] = field(default_factory=dict)
     approvals: ReconcileApprovals = field(default_factory=ReconcileApprovals)
+    #: The open differences, as the API holds them: Drive id to fields.
+    differences: dict[str, set[str]] = field(default_factory=dict)
     #: Each field a file's edit sent up to its entry: (drive id, field, value).
     sent_up: list[tuple[str, str, str]] = field(default_factory=list)
 
@@ -191,10 +194,29 @@ class Catalog:
     def read_reconcile_approvals(self) -> ReconcileApprovals:
         return self.approvals
 
+    def _hold(self, payload: ReconcileReport) -> None:
+        """The API's rule: a report replaces its compared files' differences."""
+        for drive_id in payload.compared:
+            self.differences.pop(drive_id, None)
+        for d in payload.differences:
+            self.differences.setdefault(d.drive_file_id, set()).add(d.field)
+
+    def list_reconcile_open_fields(
+        self, *, library_root_id: str | None = None
+    ) -> list[ReconcileOpenFields]:
+        return [
+            ReconcileOpenFields(drive_file_id=r.drive_file_id, fields=sorted(fields))
+            for r in self.rows.values()
+            if r.present
+            and r.library_root_id == library_root_id
+            and (fields := self.differences.get(r.drive_file_id))
+        ]
+
     def report_reconcile_differences(
         self, payload: ReconcileReport
     ) -> ReconcileReportResult:
         self.reported = payload
+        self._hold(payload)
         return ReconcileReportResult(
             open_differences=len(payload.differences),
             files_with_differences=len({d.drive_file_id for d in payload.differences}),
