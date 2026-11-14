@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -110,13 +111,13 @@ def find_record(drive: Any, state_folder: str, run_id: str) -> tuple[str, str]:
     )
     matches = [f for f in files if str(f.name).endswith(f"-{run_id}.json")]
     if not matches:
-        # The start of a run id, as a run report shows it.
+        # The start of a run id, as a run report shows it. Only a run's own
+        # record: not a dry run's, nor a file kept beside it (a reconcile's
+        # ``.differences.json``), whose names carry a further ``.`` part.
         matches = [
             f
             for f in files
-            if f"-{run_id}" in str(f.name)
-            and str(f.name).endswith(".json")
-            and not str(f.name).endswith(".dry-run.json")
+            if re.search(rf"-{re.escape(run_id)}[^.]*\.json$", str(f.name))
         ]
     if not matches:
         dry = [f for f in files if str(f.name).endswith(f"-{run_id}.dry-run.json")]

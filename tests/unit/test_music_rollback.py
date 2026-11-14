@@ -386,3 +386,13 @@ def test_the_command_refuses_one_file_with_every_put_back(
     monkeypatch.setenv("MUSIC_TAGGING_STATE_FOLDER_ID", STATE)
     assert rb.main(["--catalog-put-backs", "--file", "x.mp3"]) == 2
     assert "--file" in capsys.readouterr().err
+
+
+def test_a_file_kept_beside_a_record_is_not_taken_for_it(drive: FakeDrive) -> None:
+    run_id = "556f210e-1977-4af4-8404-0d6fca80e7f9"
+    _sync_run(drive, run_id, "sync")
+    drive.add(f"library-sync-{run_id}.differences.json", STATE, b"{}")
+
+    _, name = rb.find_record(drive, STATE, "556f210e")
+
+    assert name == f"library-sync-{run_id}.json"
