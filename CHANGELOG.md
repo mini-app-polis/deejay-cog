@@ -1,3 +1,10 @@
+## [2.61.6](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.5...v2.61.6) (2026-11-14)
+
+
+### Bug Fixes
+
+* **library-sync:** don't send up a field the file already held at its last sync, since recorded values can be the entry's ([19e7196](https://github.com/mini-app-polis/deejay-cog/commit/19e71967c78dbddaa84272d05f0afc5bd964dfa8))
+
 ## [2.61.5](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.4...v2.61.5) (2026-11-14)
 
 
