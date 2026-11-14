@@ -44,6 +44,17 @@ are read from the start and end of the file (a ranged Drive download); the
 whole file is downloaded only when its ID3v2 tag runs past the start read,
 or when a stale field is put back.
 
+**Only a field the file changed since its last sync is an edit.** The
+values recorded for a file never synced before are its entry's, not read
+from the file, so a file that already differed from its entry then (an old
+title tag such as ``1973 James Blunt`` under an entry titled ``1973``, a
+difference the reconcile holds for the owner) would look edited the first
+time Drive saw any change to it, a pipeline write of another field
+included. So a field that differs from its recorded value is checked
+against the file's Drive revision at its last sync: one the file already
+held then is not sent up (``already_differed``); the reconcile settles it.
+When Drive keeps no revision that old, the field goes up as before.
+
 **Edits that share an entry at different tempos keep their BPMs.** When
 the entry's BPM moved for a file and the files linked to that entry hold
 BPMs ``BPM_REMEASURE`` or more apart (two edits of a song cut at different
@@ -304,6 +315,9 @@ class SyncSummary:
     edits: dict[str, list[str]] = field(default_factory=dict)
     #: Files changed outside the pipeline when that was a bulk change.
     flood: int = 0
+    #: Fields that differed from the recorded values already at the file's
+    #: last sync, so not edits and not sent up: "path: field 'a' (recorded 'b')".
+    already_differed: list[str] = field(default_factory=list)
     #: Each stale field put back (or that would be): "path: field 'a' -> 'b'".
     put_back: list[str] = field(default_factory=list)
     #: Stale fields left as they are, and why.
@@ -877,6 +891,7 @@ def _read_edits(
                 # A stale field that could not be put back must not go up.
                 continue
             tags = {k: v or None for k, v in read_tag_row(data).items()}
+            tags = _drop_differences_from_before(drive, row, tags, summary)
             if owner_edits and _retitled_as_owner_edit(
                 api, row, tags.get("title") or ""
             ):
@@ -907,6 +922,48 @@ def _read_edits(
             continue
         for edit in result.fields:
             summary.edits.setdefault(edit.outcome, []).append(_edit_line(row, edit))
+
+
+def _drop_differences_from_before(
+    drive: Any,
+    row: LibraryFile,
+    tags: dict[str, str | None],
+    summary: SyncSummary,
+) -> dict[str, str | None]:
+    """``tags`` with each field the file already held at its last sync set
+    back to its recorded value, so it does not go up as an edit.
+
+    A file's recorded values can be its entry's rather than the file's own
+    (the sync records an entry's values for a file never synced, without
+    reading it), so a field that differs from them may have differed all
+    along. Only a field that differs is checked, against the file's Drive
+    revision at its last sync; when Drive keeps none that old, ``tags`` is
+    returned as it is and the fields go up as before."""
+    synced = row.synced.model_dump() if row.synced is not None else {}
+    # An empty field is not sent up as an edit anyway (a frame the file
+    # lacks), so only a value the file holds is checked.
+    differ = [
+        f
+        for f in OWNED_FIELDS
+        if _norm(f, tags.get(f)) and _norm(f, tags.get(f)) != _norm(f, synced.get(f))
+    ]
+    if not differ or row.last_synced is None:
+        return tags
+    rev = revision_at(drive, row.drive_file_id, row.last_synced)
+    if rev is None:
+        return tags
+    before = read_tag_row(revision_bytes(drive, row.drive_file_id, rev))
+    kept = [f for f in differ if _norm(f, before.get(f)) == _norm(f, tags.get(f))]
+    if not kept:
+        return tags
+    out = dict(tags)
+    for f in kept:
+        out[f] = synced.get(f) or None
+        summary.already_differed.append(
+            f"{row.path}: {f} {tags.get(f)!r} (recorded {synced.get(f)!r}; "
+            "the file already held it at its last sync)"
+        )
+    return out
 
 
 def _retitled_as_owner_edit(api: Catalog, row: LibraryFile, title: str) -> bool:
@@ -1144,6 +1201,9 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
             report.notice("would_put_back", line)
     for line in summary.stale_left:
         report.issue("stale_write_back_left", line)
+    report.count("already_differed", len(summary.already_differed))
+    for line in summary.already_differed:
+        report.notice("not_an_edit_already_differed_at_last_sync", line)
     for outcome, lines in sorted(summary.edits.items()):
         report.count(f"edits_{outcome}", len(lines))
     for line in summary.edits.get("sent_up", []):
