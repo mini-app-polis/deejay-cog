@@ -1498,6 +1498,23 @@ record, takes each fingerprint write whose old title and artist disagree
 with the new ones, rolls its run back (the rollback below) and makes its
 registry row unidentified, its link cleared, with a note.
 
+### Finding files linked to another song
+
+```bash
+doppler run --config prd -- uv run python -m deejay_cog.link_audit
+```
+
+Read-only: nothing is downloaded or changed. Every present, identified
+library file is compared with its catalog entry by its file name
+(`Title_Artist.mp3`, or `Title_Artist_BPM.mp3`). A title or artist agrees
+when either, with case, spacing and symbols left out, holds the other (a
+title also with its bracketed parts left out). The files are listed in two
+groups: **likely another song**, where neither the title nor the artist
+agrees, and **title differs, same artist**. Each line names the file, the
+entry it is linked to and the entry's id. A file whose name was itself
+written from a wrong match agrees with it and is not found. Unlink what is
+wrong (below) and link it on the unidentified-files page.
+
 ### Unlinking one file linked to another song
 
 ```bash
