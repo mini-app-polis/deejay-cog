@@ -213,8 +213,13 @@ identify with its fingerprint check, duplicates, reconcile and sync; see
    check finds; `apply new-music-redo.csv` shows what it would do, and with
    `--write` trashes each approved copy, marks it absent in the registry and
    moves its original from processed-originals back to the input folder (or,
-   with the original gone, moves the copy itself there). The next run takes
-   them in. Anything moved or changed since its run is left alone.
+   with the original gone, moves the copy itself there). Anything moved or
+   changed since its run is left alone. A file sent back keeps its Drive id
+   and modified time, so the watcher's claim on it from its first intake
+   still stands and the watcher never asks for it again: once at least one
+   file has gone back, `apply --write` asks for a new-music run itself
+   (`POST /v1/deejay/runs`, naming no file, like intake's follow-up), and
+   that run takes them in. `request-run` asks for one on its own.
 5. **Otherwise** → taken in: copied, tags and audio unchanged, into New
    Music, named from its own tags.
 
