@@ -311,11 +311,38 @@ def _title_is_file_name(title: str, name: str) -> bool:
     return "_" in stem and _squashed(title) == _squashed(stem)
 
 
+#: A tempo named in a title as an edit ("Hush (93 Edit)"), or at the end of a
+#: file name ("Hush_TheMaras_93.mp3").
+_TITLE_BPM_EDIT = re.compile(r"\b(\d{2,3}(?:\.\d+)?)\s+Edit\b", re.I)
+_NAME_BPM = re.compile(r"_(\d{2,3}(?:\.\d+)?)$")
+
+
+def _bpm_disagrees(tags: dict[str, str], name: str) -> bool:
+    """Whether a title naming its tempo as an edit ("93 Edit") has that
+    tempo disagree with the BPM tag or with the tempo the file name ends in,
+    so the entry's name and its filled BPM would come from different values."""
+    named = _TITLE_BPM_EDIT.search(str(tags.get("title") or ""))
+    if named is None:
+        return False
+    stem = name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    in_name = _NAME_BPM.search(stem)
+    try:
+        tag = float(tags.get("bpm") or 0)
+    except ValueError:
+        tag = 0.0
+    others = [float(in_name.group(1))] if in_name else []
+    if tag > 0:
+        others.append(tag)
+    return any(round(other) != round(float(named.group(1))) for other in others)
+
+
 def usable_track(tags: dict[str, str], name: str = "") -> IngestTrack | None:
     """The file's own tags as a track to make a library entry from, or None
     when they do not name a song: no title or artist, an artist such as
     "Unknown" or "Various Artists", a title such as "Untitled" or
-    "Track 3", or a title that is only the file's ``name``."""
+    "Track 3", a title that is only the file's ``name``, or a title naming a
+    tempo ("93 Edit") that the BPM tag or the file name contradicts (held for
+    review, never named or filled from either)."""
     track = ingest_track(tags)
     if track is None:
         return None
@@ -324,6 +351,8 @@ def usable_track(tags: dict[str, str], name: str = "") -> IngestTrack | None:
     if _NO_ARTIST.match(artist) or _NO_TITLE.match(title):
         return None
     if name and _title_is_file_name(title, name):
+        return None
+    if _bpm_disagrees(tags, name):
         return None
     return track
 

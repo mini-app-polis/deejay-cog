@@ -817,6 +817,28 @@ def test_a_title_that_is_only_the_file_name_names_no_song(
     assert (ident.usable_track(tags, name) is not None) is usable
 
 
+@pytest.mark.parametrize(
+    ("title", "bpm", "usable"),
+    [
+        ("Hush (93 Edit)", "105", False),
+        ("Hush (93 Edit)", "93", True),
+        ("Hush (93 Edit)", "", True),
+        ("Hush", "105", True),
+    ],
+)
+def test_a_bpm_edit_name_that_the_bpm_tag_contradicts_is_held(
+    title: str, bpm: str, usable: bool
+) -> None:
+    tags = {"title": title, "artist": "The Maras", "year": "", "bpm": bpm, "genre": ""}
+    name = "Pop/Hush_TheMaras_93.mp3"
+    assert (ident.usable_track(tags, name) is not None) is usable
+
+
+def test_a_bpm_edit_name_that_the_file_name_contradicts_is_held() -> None:
+    tags = {"title": "Hush (93 Edit)", "artist": "The Maras", "bpm": "93"}
+    assert ident.usable_track(tags, "Pop/Hush_TheMaras_105.mp3") is None
+
+
 def test_a_dry_run_unconfident_fingerprint_records_nothing(drive, api) -> None:
     drive_id = drive.add("track01.mp3", ROOT, _no_tags())
 
