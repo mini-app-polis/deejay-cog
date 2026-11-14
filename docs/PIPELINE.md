@@ -485,8 +485,8 @@ What to expect from the queue:
   to. After three receives the message goes to the dead-letter queue and
   its alarm fires. A run that cannot finish holds the queue for every run
   behind it until then; to start over, purge the queue
-  (`deejay-library-jobs.fifo` for a library run, `deejay-jobs.fifo` for any
-  other mode) and, once nothing is running, queue one fresh run.
+  (`deejay-library-jobs.fifo` for a library run, `deejay-intake-jobs.fifo`
+  for new-music, `deejay-jobs.fifo` for any other mode) and, once nothing is running, queue one fresh run.
 - **The code a run uses is the code deployed when it starts**, not when
   it was queued. The worker deploys on a release from `main`.
 
