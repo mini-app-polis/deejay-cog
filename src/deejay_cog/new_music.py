@@ -80,7 +80,9 @@ from deejay_cog.music_safety import (
     flow_mode,
     local_run_id,
     md5,
+    read_tag_bytes,
     tag_snapshot,
+    whole_bytes,
 )
 from deejay_cog.music_tags import ingest_track, read_tag_row
 
@@ -376,8 +378,8 @@ class LibraryNames:
 
 
 def is_mp3(downloaded: Any, name: str) -> bool:
-    """Whether a downloaded file is an MP3, by its type or name: only ID3
-    tags are written."""
+    """Whether a file is an MP3, by its type (from a download or a listing,
+    when there is one) or name: only ID3 tags are written."""
     mime_type = str(getattr(downloaded, "mime_type", "") or "")
     return mime_type == MP3_MIME_TYPE or name.lower().endswith(".mp3")
 
@@ -600,13 +602,19 @@ def max_files_per_run() -> int:
     return int(raw) if raw else DEFAULT_MAX_FILES_PER_RUN
 
 
-def intake_one(intake: Intake, file_id: str) -> None:
+def intake_one(intake: Intake, file_id: str, listed: Any | None = None) -> None:
     """Put one file into New Music unchanged, named by its own tags, or send
-    it to review: intake reads the tags only to name the file."""
-    downloaded = intake.drive.download_file_bytes(file_id)
-    name = str(getattr(downloaded, "name", "") or file_id)
-    data: bytes = downloaded.data
-    if not is_mp3(downloaded, name):
+    it to review: intake reads the tags only to name the file.
+
+    Only a file that is taken in is downloaded whole (its bytes are copied
+    and its audio checked). The decision before that reads Drive's own md5
+    for the exact-copy check and the tags from a ranged download of the
+    file's start and end, as the reconcile reads them, so a file sent to
+    review costs a few kilobytes rather than the whole song. ``listed`` is
+    the folder listing's entry for the file, when the caller has it."""
+    meta = file_meta(intake.drive, file_id)
+    name = str(getattr(listed, "name", "") or meta.get("name") or file_id)
+    if not is_mp3(listed, name):
         intake.review(file_id, name, None, "not an MP3: only ID3 tags are read")
         return
     # A copy an earlier run of this file made is the file itself, not a
@@ -616,33 +624,40 @@ def intake_one(intake: Intake, file_id: str) -> None:
             intake.folders.destination, key=SOURCE_PROPERTY, value=file_id
         )
     )
+    read = read_tag_bytes(intake.drive, file_id)
+    checksum = str(meta.get("md5Checksum") or "")
+    if not checksum:
+        checksum = md5(whole_bytes(intake.drive, file_id, read))
     try:
-        copy = intake.library.copy_of(md5(data), besides=earlier)
+        copy = intake.library.copy_of(checksum, besides=earlier)
     except RegistryUnavailable as exc:
         intake.review(
             file_id,
             name,
-            data,
+            read.data,
             "the library registry could not be read to check for an exact copy "
             f"({exc})",
         )
         return
     if copy is not None:
-        intake.review(file_id, name, data, f"exact copy of a library file ({copy})")
+        intake.review(
+            file_id, name, read.data, f"exact copy of a library file ({copy})"
+        )
         return
-    tags = read_tag_row(data)
+    tags = read_tag_row(read.data)
     if ingest_track(tags) is None:
-        intake.review(file_id, name, data, "no usable title or artist")
+        intake.review(file_id, name, read.data, "no usable title or artist")
         return
     check = file_name_title(tags["title"], tags["artist"])
     if check is not None:
         intake.review(
             file_id,
             name,
-            data,
+            read.data,
             f"its title tag looks like a file name ({check}): {tags['title']!r}",
         )
         return
+    data = whole_bytes(intake.drive, file_id, read)
     intake.deliver(file_id, name, data, data, identified_by="own tags")
 
 
@@ -669,7 +684,7 @@ def intake_files(
             raise RunOutOfTime(f"run deadline reached before {name}")
         summary.scanned += 1
         try:
-            intake_one(intake, f.id)
+            intake_one(intake, f.id, f)
         except AudioChanged:
             summary.failed.append(name)
             raise

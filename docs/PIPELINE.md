@@ -179,7 +179,11 @@ the cap**, below). Intake does not look
 a file up, make catalog entries or write tags: it puts the file into New
 Music as it came, and the library's steps take it from there (scan,
 identify with its fingerprint check, duplicates, reconcile and sync; see
-[ADDING-AND-REMOVING-SONGS.md](ADDING-AND-REMOVING-SONGS.md)). Per file:
+[ADDING-AND-REMOVING-SONGS.md](ADDING-AND-REMOVING-SONGS.md)). A file is
+downloaded whole only when it is taken in: the checks before that use
+Drive's own md5 and read the tags from a ranged download of the file's
+start and end, as the reconcile does, so a file sent to needs-review costs
+a few kilobytes. Per file:
 
 1. **Not an MP3** → moved, unchanged, to needs-review (the main library
    takes MP3s only).
