@@ -1069,6 +1069,12 @@ the owner's review; the report names each one an approval would have
 settled (`bpm_split_held`, with every file's BPM). library-sync writes
 neither BPM ([library-sync](#library-sync)).
 
+**File wins sends up only the approved field.** A field approved for the
+file goes up to its entry with nothing else from the file: the API reads
+any other field that differs from the last sync as an edit made in the
+file, so a whole tag row would carry the file's title and artist into the
+entry along with an approved year.
+
 **A file whose title names another song gets only what was approved for
 it.** When a file's title and its entry's name different songs (neither,
 with case, spacing and symbols left out, holds the other: "Despacito"
