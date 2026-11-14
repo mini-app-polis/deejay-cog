@@ -297,6 +297,23 @@ def test_a_file_already_identified_is_not_sent(
     assert summary.tried == 0 and jobs.sent == []
 
 
+def test_a_file_the_owner_unlinked_is_left_for_the_owner(
+    settings, wired, drive, api, jobs
+) -> None:
+    left = _unidentified(drive, api, "left.mp3", _song())
+    api.rows[0] = api.rows[0].model_copy(
+        update={"identify_note": ident.UNLINKED_BY_OWNER + "was linked to another song"}
+    )
+    _unidentified(drive, api, "temple.mp3", _song())
+
+    summary = ident.library_identify(run_id="i-1")
+
+    assert left not in [job["file_id"] for job in jobs.sent]
+    assert len(jobs.sent) == 1
+    assert summary.left_for_owner == 1 and summary.waiting == 1
+    assert left not in (_state(drive, ident.TRIED_NAME) or {}).get("files", {})
+
+
 def test_garbled_tags_are_read_repaired(settings, wired, drive, api) -> None:
     garbled = "Beyoncé".encode().decode("latin-1")
     data = mp3(TIT2(encoding=0, text=["temple"]), TPE1(encoding=0, text=[garbled]))

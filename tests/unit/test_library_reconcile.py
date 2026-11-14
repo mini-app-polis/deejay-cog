@@ -1780,3 +1780,60 @@ def test_a_held_difference_that_changed_or_is_new_is_reported_again(
     assert again.reported_before == set()
     text = _text(posted)
     assert "0.mp3: genre 'Jazz'" in text and "1.mp3: label 'Other'" in text
+
+
+@pytest.mark.parametrize(
+    ("file_title", "catalog_title", "another"),
+    [
+        (
+            "American Girl Tom Petty And The Heartbreakers",
+            "Tension Makes a Tangle",
+            True,
+        ),
+        ("Despacito", "California Gurls", True),
+        ("Booty Swing Parov Stelar", "Booty Swing", False),  # VirtualDJ's run-together
+        ("Cheerleader", "Cheerleader (Felix Jaehn remix / radio edit)", False),
+        ("10 35 Tiësto", "10:35", False),
+    ],
+)
+def test_a_title_names_another_song_only_when_neither_holds_the_other(
+    file_title: str, catalog_title: str, another: bool
+) -> None:
+    diffs = rec.classify(
+        "x.mp3", "d", _tags(title=file_title), _tags(title=catalog_title)
+    )
+
+    assert (rec.names_another_song(diffs) is not None) is another
+
+
+def test_a_file_naming_another_song_gets_no_whole_kind_written_or_sent_up(
+    settings, writing, drive, posted
+) -> None:
+    [drive_id] = _library(
+        drive, writing, [{"title": "Despacito", "genre": "Neo Soul", "year": "2016"}]
+    )
+    _approve(writing, kinds=["genre_remapped"], file_wins_kinds=["year_later"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TCON"] == "Neo Soul" and frames["TIT2"] == "Despacito"
+    assert summary.written == [] and summary.kept == []
+    [held] = summary.other_song_held
+    assert held.startswith("0.mp3: the file says 'Despacito'")
+    assert "2 approved kind(s) not applied" in held
+    assert "other_song_held" in _text(posted)
+
+
+def test_a_file_naming_another_song_still_gets_what_was_approved_for_it(
+    settings, writing, drive
+) -> None:
+    [drive_id] = _library(drive, writing, [{"title": "Despacito", "genre": "Neo Soul"}])
+    _approve(writing, kinds=["genre_remapped"], files={drive_id: ["title"]})
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TIT2"] == "Attention (Lash Remix)"  # approved for this file
+    assert frames["TCON"] == "Neo Soul"  # a whole kind: not applied here
+    assert len(summary.other_song_held) == 1

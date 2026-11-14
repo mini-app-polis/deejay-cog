@@ -1069,6 +1069,18 @@ the owner's review; the report names each one an approval would have
 settled (`bpm_split_held`, with every file's BPM). library-sync writes
 neither BPM ([library-sync](#library-sync)).
 
+**A file whose title names another song gets only what was approved for
+it.** When a file's title and its entry's name different songs (neither,
+with case, spacing and symbols left out, holds the other: "Despacito"
+against "California Gurls", not "Booty Swing Parov Stelar" against "Booty
+Swing"), the file is likely linked to the wrong song. A kind approved for
+every file (Catalog wins or File wins) is then not applied to it: it would
+write the other song's year or genre into the file, or send the file's up
+into the other song's entry. Only differences approved for that file, field
+by field, are settled. The report names each such file (`other_song_held`)
+when an approved kind was held; relink it ([unlink](#unlinking-one-file-linked-to-another-song)),
+or approve its fields one by one.
+
 **Long-open differences:** `library-reconcile-open.json` in the state folder
 keeps when each open difference was first seen; a difference whose values
 change starts again. Every run counts those open more than 7 days
@@ -1497,9 +1509,12 @@ A dry run unless `--apply`. The file is named by its Drive id, its path
 under the library root, or its name when no other present file has it. Its
 registry row is made unidentified, its link cleared, with a note (`--note`,
 or a default saying it was linked to another song), so it goes to the
-owner's unidentified-files page to be linked again. The library sync and
-reconcile only compare linked files, so the wrong entry's values are not
-written into it meanwhile. Its tags are not changed: to undo a run's write
+owner's unidentified-files page to be linked again. The note starts
+"unlinked by the owner: ", and library-identify leaves such a file alone
+(counted as `left_for_owner`), so its fingerprint does not link it back to
+the song it was wrongly linked to. The library sync and reconcile only
+compare linked files, so the wrong entry's values are not written into it
+meanwhile. Its tags are not changed: to undo a run's write
 to the file, roll that one file back with `music_rollback --file` (below).
 
 ### Linking by their own tags the files the fingerprint found nothing for

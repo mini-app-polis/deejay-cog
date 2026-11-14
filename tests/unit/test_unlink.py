@@ -87,7 +87,7 @@ def test_the_link_is_cleared_with_a_note(name: str) -> None:
     assert sent.path == "New Music/American Girl_Tom Petty.mp3"
     assert sent.identification_status == "unidentified"
     assert sent.catalog_id is None
-    assert sent.identify_note == "wrong song"
+    assert sent.identify_note == ul.UNLINKED_BY_OWNER + "wrong song"
 
 
 def test_a_name_two_files_have_is_refused() -> None:
