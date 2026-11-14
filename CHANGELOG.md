@@ -1,3 +1,10 @@
+## [2.65.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.65.0...v2.65.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **library:** file wins sends up only the approved field ([7219b7a](https://github.com/mini-app-polis/deejay-cog/commit/7219b7ac8911306295650c22a361fa8336caa2b6))
+
 # [2.65.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.64.1...v2.65.0) (2026-11-14)
 
 
