@@ -710,7 +710,9 @@ def queue_follow_up(api: RunRequests, summary: IntakeSummary) -> None:
     a follow-up too: so it is sent no sooner than the window after that one
     (waiting the rest, when the run's deadline allows). A follow-up the API
     still answers as collapsed, or that cannot be sent, is named in the
-    report; the watcher's next claim renewal then starts the next run."""
+    report. Collapsed, the run it was merged into is already queued and
+    takes the files; not sent, the hourly ``new-music-sweep`` (watcher-cog's
+    scheduled job, which names no file) does."""
     request = current_request()
     if request is not None and request.caller == MACHINE_NAME:
         asked = request.requested_at
@@ -752,10 +754,14 @@ def run_intake(
     started_at = monotonic()
     run_id = run_id or local_run_id()
     summary = IntakeSummary(mode)
+    # Not notable by itself: a run sends its report only when it recorded
+    # something (a file taken in or sent to review, a problem, a dry run's
+    # plan), so the hourly new-music-sweep sends nothing when the input
+    # folder is empty or the flow is off.
     with run_report(
         FLOW_NAME,
         repo=REPO,
-        notable=True,
+        notable=False,
         run_id=run_id,
         version=__version__,
     ) as report:
@@ -831,14 +837,15 @@ def new_music(*, run_id: str | None = None) -> IntakeSummary:
 def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
     report.duration_sec = duration_sec
     if summary.mode is FlowMode.OFF:
-        report.notice("off", f"{MODE_FLAG} is off: nothing was read or written")
+        # Logged, not reported: the hourly sweep asks whether the flow is on.
+        log.info("new-music: %s is off: nothing was read or written", MODE_FLAG)
         return
     for problem in summary.problems:
         report.issue("setting", problem)
     if summary.problems:
         return
     dry = summary.mode is FlowMode.DRY_RUN
-    if dry:
+    if dry and summary.scanned:
         report.notice(
             "dry_run",
             f"{MODE_FLAG} is dry-run: nothing was written; would-be record "
@@ -878,11 +885,18 @@ def _record(report: Any, summary: IntakeSummary, duration_sec: float) -> None:
             f"{summary.left_past_cap} files past the cap: the next run is "
             f"{summary.follow_up}",
         )
-    if summary.follow_up_problem:
+    if summary.follow_up_problem.startswith("collapsed"):
+        # Merged into a run already queued: that run takes the files.
+        report.notice(
+            "follow_up_merged",
+            f"{summary.left_past_cap} files past the cap: the follow-up was "
+            f"{summary.follow_up_problem}, which takes them",
+        )
+    elif summary.follow_up_problem:
         report.issue(
             "follow_up_not_queued",
-            f"{summary.left_past_cap} files past the cap wait for the "
-            f"watcher's next sweep: {summary.follow_up_problem}",
+            f"{summary.left_past_cap} files past the cap wait for the hourly "
+            f"new-music sweep: {summary.follow_up_problem}",
         )
 
 
