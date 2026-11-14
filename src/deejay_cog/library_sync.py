@@ -44,6 +44,18 @@ are read from the start and end of the file (a ranged Drive download); the
 whole file is downloaded only when its ID3v2 tag runs past the start read,
 or when a stale field is put back.
 
+**A title or artist edit waits for the owner** (ADR-0008, amended
+2026-11-13). In the main library, a title or artist a file changed does not
+go up by itself: a wrong one reaches every file of its entry (on 2026-11-13
+VirtualDJ, with its write-tags option turned back on by an update, wrote
+titles made from the file names). Its recorded value is sent in its place
+and the report names it (``title_or_artist_edit_left_for_review``); the
+file then differs from its entry, and the reconcile files the difference
+for the owner, who sends it up (file wins) or has the catalog's written
+back (catalog wins). Genre, year, BPM and label edits go up as before, and
+FX Music's files still win. A retitle as an owner edit (``< >``) is still
+the reconcile's, as below.
+
 **Only a field the file changed since its last sync is an edit.** The
 values recorded for a file never synced before are its entry's, not read
 from the file, so a file that already differed from its entry then (an old
@@ -203,6 +215,11 @@ DEFAULT_EDIT_FLOOD = 1000
 #: The owned fields a write-back can make stale (never the catalog link).
 OWNED_FIELDS = ("title", "artist", "year", "genre", "bpm", "label")
 
+#: The fields a file's edit does not send up by itself: the reconcile files
+#: the change for the owner's approval instead (main library only; FX Music's
+#: files win).
+REVIEWED_FIELDS = ("title", "artist")
+
 #: How a run record marks a field put back after a stale write-back.
 STALE_PUT_BACK = "sync (stale write-back put back)"
 
@@ -318,6 +335,9 @@ class SyncSummary:
     #: Fields that differed from the recorded values already at the file's
     #: last sync, so not edits and not sent up: "path: field 'a' (recorded 'b')".
     already_differed: list[str] = field(default_factory=list)
+    #: Each title or artist a file changed, left for the reconcile's review
+    #: rather than sent up: "path: field 'recorded' -> 'file'".
+    held_for_review: list[str] = field(default_factory=list)
     #: Each stale field put back (or that would be): "path: field 'a' -> 'b'".
     put_back: list[str] = field(default_factory=list)
     #: Stale fields left as they are, and why.
@@ -901,6 +921,8 @@ def _read_edits(
                 )
                 summary.owner_edit_ids.add(row.drive_file_id)
                 continue
+            if owner_edits:
+                tags = _hold_names_for_review(row, tags, summary)
             result = api.report_library_file_edited(
                 LibraryFileEdited(
                     drive_file_id=row.drive_file_id,
@@ -963,6 +985,27 @@ def _drop_differences_from_before(
             f"{row.path}: {f} {tags.get(f)!r} (recorded {synced.get(f)!r}; "
             "the file already held it at its last sync)"
         )
+    return out
+
+
+def _hold_names_for_review(
+    row: LibraryFile, tags: dict[str, str | None], summary: SyncSummary
+) -> dict[str, str | None]:
+    """``tags`` with a title or artist the file changed set back to its
+    recorded value, so it does not go up: the file then differs from its
+    entry, and the reconcile files that difference for the owner, who sends
+    it up (file wins) or puts the catalog's back (catalog wins). A wrong
+    title or artist reaches every file of its entry, so neither goes into the
+    catalog without the owner's approval; the other fields go up as before."""
+    synced = row.synced.model_dump() if row.synced is not None else {}
+    out = dict(tags)
+    for f in REVIEWED_FIELDS:
+        now = _norm(f, tags.get(f))
+        if now and now != _norm(f, synced.get(f)):
+            out[f] = synced.get(f) or None
+            summary.held_for_review.append(
+                f"{row.path}: {f} {synced.get(f)!r} -> {tags.get(f)!r}"
+            )
     return out
 
 
@@ -1201,6 +1244,9 @@ def _record(report: Any, summary: SyncSummary, duration_sec: float) -> None:
             report.notice("would_put_back", line)
     for line in summary.stale_left:
         report.issue("stale_write_back_left", line)
+    report.count("held_for_review", len(summary.held_for_review))
+    for line in summary.held_for_review:
+        report.notice("title_or_artist_edit_left_for_review", line)
     report.count("already_differed", len(summary.already_differed))
     for line in summary.already_differed:
         report.notice("not_an_edit_already_differed_at_last_sync", line)

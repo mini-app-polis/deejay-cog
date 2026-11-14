@@ -400,6 +400,29 @@ catalog (stats, summaries, the collection) uses the same rules.
 5. **It runs with the sync**, under the sync's mode, and only for files
    whose values a sync has recorded: off until the library is reconciled.
 
+### Amended 2026-11-13 (a title or artist edit waits for the owner)
+
+Supersedes decision 1 above for the title and artist only. On 2026-11-13
+VirtualDJ, whose write-tags option an update had turned back on, wrote
+titles made from file names (`1973 James Blunt` for `1973_James
+Blunt.mp3`) into about a hundred new files, and the sync carried a dozen of
+them into the catalog, and one into another file of its entry.
+
+1. **A title or artist a main-library file changed does not go up by
+   itself.** The sync sends the recorded value in its place and names the
+   change in its report. The file then differs from its entry, and the
+   reconcile files that difference for the owner like any other: file wins
+   sends it up, catalog wins writes the entry's value back.
+2. **Genre, year, BPM and label edits still go up with no review**, as
+   decided above.
+3. **FX Music's files still win** (ADR-0010), and a retitle as an owner
+   edit (`< >`) is still the reconcile's (decided 2026-11-11).
+4. **Only a change made since the file's last sync is an edit.** The values
+   the sync records for a file never synced are its entry's, not read from
+   the file, so a field the file already held differently then (checked
+   against its Drive revision at that sync) is not an edit and is left to
+   the reconcile.
+
 ## Decided with the owner, 2026-11-10 (a stale write-back is told by its value)
 
 1. **A changed field is stale when it holds a value the pipeline replaced

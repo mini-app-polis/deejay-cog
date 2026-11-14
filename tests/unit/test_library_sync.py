@@ -1127,7 +1127,9 @@ def test_a_dry_run_record_and_files_left_in_the_state_folder_are_not_records(
 
     assert summary.put_back == []
     [edited] = catalog.edited
-    assert edited.tags.title == "honesty"  # an edit, as far as the run can tell
+    # An edit as far as the run can tell, so a title left for the review.
+    assert edited.tags.title == "Honesty"
+    assert summary.held_for_review == ["RnB/honesty.mp3: title 'Honesty' -> 'honesty'"]
 
 
 # ---------------------------------------------------------------------------
@@ -1403,15 +1405,41 @@ def test_a_field_changed_since_the_last_sync_still_goes_up(
 ) -> None:
     entry = uuid.uuid4()
     catalog.displays[entry] = _display(entry)
-    now = _song(entry, "Honesty (Live)", "Pink Sweat$ feat. Kehlani", bpm="95.5")
+    now = _song(entry, "Honesty", "Pink Sweat$ feat. Kehlani", "Neo Soul", "95.5")
     _changed(drive, catalog, entry, now, "honesty.mp3")
     _listed(drive, {catalog.rows[0].drive_file_id: _AFTER_SYNC})
 
     summary = sync.library_sync(run_id="y-1")
 
     [edited] = catalog.edited
-    assert edited.tags.title == "Honesty (Live)"
-    assert summary.already_differed == []
+    assert edited.tags.genre == "Neo Soul"
+    assert summary.already_differed == [] and summary.held_for_review == []
+
+
+# -- a title or artist edit waits for the owner -----------------------------
+
+
+def test_a_title_or_artist_a_file_changed_is_left_for_the_review(
+    settings, wired, drive, catalog, posted
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    now = _song(entry, "Honesty (Live)", "Pink Sweat$", "Neo Soul", "95.5")
+    _changed(drive, catalog, entry, now, "honesty.mp3")
+    _listed(drive, {catalog.rows[0].drive_file_id: _AFTER_SYNC})
+
+    summary = sync.library_sync(run_id="y-1")
+
+    [edited] = catalog.edited
+    # The recorded values go up in their place: no change to the entry.
+    assert edited.tags.title == "Honesty"
+    assert edited.tags.artist == "Pink Sweat$ feat. Kehlani"
+    assert edited.tags.genre == "Neo Soul"  # the other fields go up as before
+    assert summary.held_for_review == [
+        "RnB/honesty.mp3: title 'Honesty' -> 'Honesty (Live)'",
+        "RnB/honesty.mp3: artist 'Pink Sweat$ feat. Kehlani' -> 'Pink Sweat$'",
+    ]
+    assert "title_or_artist_edit_left_for_review" in str(posted.call_args_list)
 
 
 def test_with_no_revision_from_the_last_sync_the_field_goes_up_as_before(
@@ -1425,5 +1453,9 @@ def test_with_no_revision_from_the_last_sync_the_field_goes_up_as_before(
     summary = sync.library_sync(run_id="y-1")
 
     [edited] = catalog.edited
-    assert edited.tags.title == "Honesty Pink Sweat$"
+    # Not proved to predate the sync, so an edit: a title, left for the review.
+    assert edited.tags.title == "Honesty"
     assert summary.already_differed == []
+    assert summary.held_for_review == [
+        "RnB/honesty.mp3: title 'Honesty' -> 'Honesty Pink Sweat$'"
+    ]
