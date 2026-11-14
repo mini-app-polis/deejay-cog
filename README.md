@@ -31,7 +31,9 @@ This repository is the backend cog for a Drive-based DJ set pipeline. It reads C
 
 The **fingerprint function** (`fingerprint.py`) is a second Lambda behind its own queue: it identifies one such file by its sound (AcoustID, MusicBrainz) and tags it, or for a new-music file takes it in with the new-music steps — see [ADR-0007](docs/decisions/ADR-0007-music-tagging-redesign.md). Every flow that writes music goes through `music_safety.py` (modes, the audio check, run records), and `music_rollback.py` undoes a run from its record.
 
-The **library worker** (`library_worker.py`) is a third Lambda behind its own FIFO queue (`deejay-library`), with a longer timeout: the API sends every `library-*` mode there, so a library run that works until its deadline never holds up `process-new-files` or `ingest-live-history` on the shared queue. It runs only `library-*` modes; any other mode it receives fails and dead-letters. The shared worker still accepts every mode.
+The **library worker** (`library_worker.py`) is a third Lambda behind its own FIFO queue (`deejay-library`), with a longer timeout: the API sends every `library-*` mode there, so a library run that works until its deadline never holds up `process-new-files` or `ingest-live-history` on the shared queue. It runs only `library-*` modes; any other mode it receives fails and dead-letters.
+
+The **intake worker** (`intake_worker.py`) is a fourth Lambda behind its own FIFO queue (`deejay-intake`): the API sends `new-music` there, so a batch of hundreds of new files, drained a run at a time, never holds up `process-new-files` or `ingest-live-history`. It runs only `new-music`, one run at a time; any other mode fails and dead-letters. The shared worker still accepts every mode.
 
 ### Local-only (not served; PostgreSQL cutover helpers)
 
@@ -70,6 +72,7 @@ The **library worker** (`library_worker.py`) is a third Lambda behind its own FI
 | **retag_music_from_catalog.py** | Production music tagging from the catalog (the `retag-music` mode). |
 | **fingerprint.py** | The fingerprint function: identifies untagged music files by their sound. |
 | **library_worker.py** | The library worker: the shared worker's handler, for `library-*` modes only. |
+| **intake_worker.py** | The intake worker: the shared worker's handler, for `new-music` only. |
 | **new_music.py** | Production new-music intake (the `new-music` mode). |
 | **library_nightly.py** | The library job (the `library-backfill` mode): runs the six steps below in order. |
 | **library_scan.py**, **library_trash.py**, **library_identify.py**, **library_backfill.py**, **library_sync.py**, **library_duplicates.py** | The library job's steps. |
