@@ -1165,6 +1165,20 @@ is not marked synced; the reconcile links it to its owner-edit entry
 (`owner_edit_left_for_reconcile`). An owner-edit entry's displayed title
 carries its version in `< >`, and the sync writes it so.
 
+**Only a field the file changed since its last sync is an edit.** The
+values recorded for a file never synced before are its entry's, written
+down without reading the file, so a file that already differed from its
+entry then (an old title tag such as `1973 James Blunt` under an entry
+titled `1973`, a difference the reconcile holds for the owner) would look
+edited as soon as Drive saw any change to it, a pipeline write of another
+field included; on 2026-11-13 three such titles went up to the catalog
+that way. So before a changed file's fields go up, each field holding a
+value that differs from the recorded one is checked against the file's
+Drive revision at its last sync: a value the file already held then is not
+an edit, is not sent up (the reconcile settles it), and is named in the
+report (`not_an_edit_already_differed_at_last_sync`). When Drive keeps no
+revision that old, the field goes up as before.
+
 **A stale write-back is told from an edit by its value.** A tagger can
 write its own stored tags back over the library (VirtualDJ did on
 2026-11-09), and those old values must not reach the catalog as edits.

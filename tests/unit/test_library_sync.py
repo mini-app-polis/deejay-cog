@@ -1359,3 +1359,71 @@ def _fx_root() -> backfill.LibraryRoot:
     settings, _ = backfill.BackfillSettings.from_env()
     assert settings is not None
     return settings.roots[1]
+
+
+# -- a difference the file already had at its last sync is not an edit -------
+
+
+def _junk_titled(drive: FakeDrive, catalog: FakeCatalog, entry: uuid.UUID) -> str:
+    """A file whose old title tag already differed from its entry when the
+    sync recorded the entry's values for it, and a pipeline write of
+    another field (its genre) after that."""
+    held = _song(entry, "Honesty Pink Sweat$", "Pink Sweat$ feat. Kehlani", bpm="95.5")
+    drive_id = _linked(drive, catalog, "honesty.mp3", held, entry)
+    drive.items[drive_id].revision_times[0] = _BEFORE_SYNC
+    now = _song(
+        entry, "Honesty Pink Sweat$", "Pink Sweat$ feat. Kehlani", "Neo Soul", "95.5"
+    )
+    drive.rewrite(drive_id, now, _AFTER_SYNC)
+    _listed(drive, {drive_id: _AFTER_SYNC})
+    return drive_id
+
+
+def test_a_field_the_file_already_held_at_its_last_sync_is_not_sent_up(
+    settings, wired, drive, catalog, posted
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    _junk_titled(drive, catalog, entry)
+
+    summary = sync.library_sync(run_id="y-1")
+
+    [edited] = catalog.edited
+    assert edited.tags.title == "Honesty"  # the recorded value: no change
+    assert edited.tags.genre == "Neo Soul"  # changed since the sync: goes up
+    assert summary.already_differed == [
+        "RnB/honesty.mp3: title 'Honesty Pink Sweat$' (recorded 'Honesty'; "
+        "the file already held it at its last sync)"
+    ]
+    assert "not_an_edit_already_differed_at_last_sync" in str(posted.call_args_list)
+
+
+def test_a_field_changed_since_the_last_sync_still_goes_up(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    now = _song(entry, "Honesty (Live)", "Pink Sweat$ feat. Kehlani", bpm="95.5")
+    _changed(drive, catalog, entry, now, "honesty.mp3")
+    _listed(drive, {catalog.rows[0].drive_file_id: _AFTER_SYNC})
+
+    summary = sync.library_sync(run_id="y-1")
+
+    [edited] = catalog.edited
+    assert edited.tags.title == "Honesty (Live)"
+    assert summary.already_differed == []
+
+
+def test_with_no_revision_from_the_last_sync_the_field_goes_up_as_before(
+    settings, wired, drive, catalog
+) -> None:
+    entry = uuid.uuid4()
+    catalog.displays[entry] = _display(entry)
+    drive_id = _junk_titled(drive, catalog, entry)
+    drive.items[drive_id].revision_times[0] = None  # Drive kept none that old
+
+    summary = sync.library_sync(run_id="y-1")
+
+    [edited] = catalog.edited
+    assert edited.tags.title == "Honesty Pink Sweat$"
+    assert summary.already_differed == []
