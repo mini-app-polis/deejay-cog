@@ -396,3 +396,14 @@ def test_a_file_kept_beside_a_record_is_not_taken_for_it(drive: FakeDrive) -> No
     _, name = rb.find_record(drive, STATE, "556f210e")
 
     assert name == f"library-sync-{run_id}.json"
+
+
+def test_a_rollbacks_own_report_is_not_taken_for_the_record(drive: FakeDrive) -> None:
+    run_id = "374897ac-6b2a-41aa-97c2-d8a98f83830c"
+    _sync_run(drive, run_id, "sync")
+    drive.add(f"{rb.ROLLBACK_FLOW}-374897ac-20261114T052535Z.json", STATE, b"{}")
+    drive.add(f"{rb.ROLLBACK_FLOW}-{run_id}-20261114T052535Z.json", STATE, b"{}")
+
+    for given in ("374897ac", run_id):
+        _, name = rb.find_record(drive, STATE, given)
+        assert name == f"library-sync-{run_id}.json"
