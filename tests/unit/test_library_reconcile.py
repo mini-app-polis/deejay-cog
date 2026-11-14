@@ -1837,3 +1837,30 @@ def test_a_file_naming_another_song_still_gets_what_was_approved_for_it(
     assert frames["TIT2"] == "Attention (Lash Remix)"  # approved for this file
     assert frames["TCON"] == "Neo Soul"  # a whole kind: not applied here
     assert len(summary.other_song_held) == 1
+
+
+def test_a_field_kept_from_the_file_sends_up_no_other_field(
+    settings, writing, drive
+) -> None:
+    # A title VirtualDJ ran together with the artist: the same song, so the
+    # approved kind applies, and the title must stay where it is.
+    [drive_id] = _library(
+        drive,
+        writing,
+        [
+            {
+                "title": "Attention (Lash Remix) Charlie Puth",
+                "artist": "",
+                "year": "2016",
+            }
+        ],
+    )
+
+    _approve(writing, file_wins_kinds=["year_later"])
+
+    rec.library_reconcile(run_id="r-1")
+
+    [kept] = writing.kept
+    assert kept.keep_file == ["year"] and kept.tags.year == "2016"
+    sent = kept.tags.model_dump()
+    assert {name for name, value in sent.items() if value is not None} == {"year"}

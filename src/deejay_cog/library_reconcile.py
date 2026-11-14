@@ -1256,13 +1256,20 @@ def _keep_file(
     kept: list[Difference],
     summary: ReconcileSummary,
 ) -> set[str]:
-    """Send the fields approved for the file up to its entry; return those
-    the entry took. The file is not written. A field the API holds stays
-    open, with why."""
+    """Send the fields approved for the file up to its entry, and no other
+    field of the file; return those the entry took. The file is not written.
+    A field the API holds stays open, with why."""
     fields = sorted({d.field for d in kept if d.field in FIELDS})
     if not fields:
         return set()
-    tags = {name: value or None for name, value in read_tag_row(data).items()}
+    # Only the approved fields are sent. The API reads any other field that
+    # differs from the last sync as an edit made in the file and sends it up
+    # too, so a whole tag row would carry the file's title and artist into
+    # the entry along with an approved year.
+    tags = {
+        name: (value or None) if name in fields else None
+        for name, value in read_tag_row(data).items()
+    }
     result = api.report_library_file_edited(
         LibraryFileEdited(
             drive_file_id=row.drive_file_id,
