@@ -1,3 +1,15 @@
+# [2.66.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.65.2...v2.66.0) (2026-11-14)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 9.11.0 ([4faa187](https://github.com/mini-app-polis/deejay-cog/commit/4faa18732fb057a92da73f31ba6f42dce556228c))
+
+
+### Features
+
+* **library:** library-sync leaves fields with an open reconcile difference to the reconcile ([f288524](https://github.com/mini-app-polis/deejay-cog/commit/f2885249d361d473939f730d9deeff957ae888a4))
+
 ## [2.65.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.65.1...v2.65.2) (2026-11-14)
 
 
