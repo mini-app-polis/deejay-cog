@@ -1,3 +1,20 @@
+# [2.63.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.62.0...v2.63.0) (2026-11-14)
+
+
+### Bug Fixes
+
+* **rollback:** a short run id ignores files kept beside the record ([9a31b99](https://github.com/mini-app-polis/deejay-cog/commit/9a31b998e4acd41d06d6274b8418da49e08f5ce2))
+
+
+### Features
+
+* **rollback:** undo one file of a run with --file ([502a3d6](https://github.com/mini-app-polis/deejay-cog/commit/502a3d65394bc7fe05dff7dc1cfb1eb11dfda176))
+
+
+### Performance Improvements
+
+* **new-music:** decide from Drive's md5 and a ranged tag read, downloading a file whole only when it is taken in ([8fd87cf](https://github.com/mini-app-polis/deejay-cog/commit/8fd87cff0cc5f44cfc91662169f74791db5f505c))
+
 # [2.62.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.7...v2.62.0) (2026-11-14)
 
 
