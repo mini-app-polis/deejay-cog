@@ -1,3 +1,10 @@
+## [2.61.7](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.6...v2.61.7) (2026-11-14)
+
+
+### Bug Fixes
+
+* **new-music:** send no report when idle or off, and report a merged follow-up as taken by the queued run ([6a4793a](https://github.com/mini-app-polis/deejay-cog/commit/6a4793adb236baf0539c7bd8d41b8f332c02e936))
+
 ## [2.61.6](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.5...v2.61.6) (2026-11-14)
 
 
