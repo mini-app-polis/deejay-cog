@@ -1,3 +1,10 @@
+# [2.62.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.7...v2.62.0) (2026-11-14)
+
+
+### Features
+
+* **library-sync:** leave a title or artist edited in a file for the owner's review instead of sending it up ([c810cb8](https://github.com/mini-app-polis/deejay-cog/commit/c810cb8b14b7b69da14955bf603235c962518af6))
+
 ## [2.61.7](https://github.com/mini-app-polis/deejay-cog/compare/v2.61.6...v2.61.7) (2026-11-14)
 
 
