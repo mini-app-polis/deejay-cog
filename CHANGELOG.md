@@ -1,3 +1,10 @@
+## [2.67.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.67.0...v2.67.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **library:** identify makes no entry from a file-name title, and BPMs fill and compare as whole numbers ([e115528](https://github.com/mini-app-polis/deejay-cog/commit/e1155281667206ea1575135246a4768f477ac27c))
+
 # [2.67.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.66.0...v2.67.0) (2026-11-14)
 
 
