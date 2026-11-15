@@ -81,6 +81,7 @@ The **intake worker** (`intake_worker.py`) is a fourth Lambda behind its own FIF
 | **music_safety.py** | The safety layer every music-writing flow uses: modes, the audio check, run records. |
 | **music_rollback.py** | Local CLI: undo a music-tagging run from its run record (dry run unless `--apply`). |
 | **library_restore.py**, **restore_bpm.py**, **restore_styling.py**, **fingerprint_check.py**, **link_by_tags.py**, **relink.py** | Local repair CLIs for the library, each a dry run unless `--apply`; see [PIPELINE.md](docs/PIPELINE.md#run-records). |
+| **fx_roles.py** | Local CLI: write each FX Music file's role, from its folder, at the start of its comment (a dry run unless `--write`); see [PIPELINE.md](docs/PIPELINE.md#tagging-fx-music-files-with-their-role). |
 | **reconcile_admin.py** | Local CLI: review the library reconcile's differences by kind, print the approvals (set on the WCS review page), start a full pass and run it by hand. |
 | **deduplicate_summary.py** | CLI / helper to deduplicate summary spreadsheets. |
 | **spotify_sync.py** | Spotify helpers used from `process_new_files.py`. |

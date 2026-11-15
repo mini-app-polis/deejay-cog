@@ -922,6 +922,72 @@ def test_year_later_approved_for_the_file_takes_the_files_older_year(
     assert summary.kept == ["0.mp3 (year)"] and summary.written == []
 
 
+def test_one_files_catalog_wins_comes_ahead_of_its_kind_approved_for_the_file(
+    settings, writing, drive
+) -> None:
+    """year_later is approved for the file, and for one file the catalog
+    wins: that file is written with its entry's year (2014 over 1996), and
+    every other file of the kind still sends its older year up."""
+    ids = _library(drive, writing, [{"year": "1996"}, {"year": "1996"}])
+    for row in writing.rows:
+        writing.displays[row.catalog_id] = _display(row.catalog_id, release_year=2014)
+    other_entry = writing.rows[1].catalog_id
+    _approve(
+        writing,
+        kinds=["year_earlier"],
+        file_wins_kinds=["year_later"],
+        kinds_by_file={ids[0]: ["year_later"]},
+    )
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert _frames(drive.items[ids[0]].data)["TDRC"] == "2014"
+    assert _frames(drive.items[ids[1]].data)["TDRC"] == "1996"
+    [kept] = writing.kept
+    assert kept.drive_file_id == ids[1] and kept.keep_file == ["year"]
+    assert writing.displays[other_entry].release_year == 1996
+    assert summary.written == ["0.mp3 (year)"] and summary.kept == ["1.mp3 (year)"]
+    assert writing.reviews[0].differences == []
+
+
+def test_approvals_from_the_api_put_a_files_own_kind_ahead_of_the_kind() -> None:
+    approvals = rec.from_api(
+        ReconcileApprovals(
+            file_wins_kinds=["year_later"],
+            kinds_by_file={"a": ["year_later"]},
+            updated_at=_NOW,
+        )
+    )
+    assert approvals is not None
+
+    def year(file_id: str) -> rec.Difference:
+        return rec.Difference("x.mp3", file_id, "year", "1996", "2014", "year_later")
+
+    assert approvals.side(year("a")) == "catalog"
+    assert approvals.side(year("b")) == "file"
+    assert approvals.file_side(year("a")) == "catalog"
+    assert approvals.file_side(year("b")) is None
+
+
+def test_one_files_file_wins_comes_ahead_of_its_kind_approved_for_the_catalog(
+    settings, writing, drive
+) -> None:
+    ids = _library(drive, writing, [{"genre": "Neo Soul"}, {"genre": "Neo Soul"}])
+    _approve(
+        writing,
+        kinds=["genre_remapped"],
+        file_wins_kinds_by_file={ids[1]: ["genre_remapped"]},
+    )
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert _frames(drive.items[ids[0]].data)["TCON"] == "Pop"
+    assert _frames(drive.items[ids[1]].data)["TCON"] == "Neo Soul"
+    [kept] = writing.kept
+    assert kept.drive_file_id == ids[1] and kept.keep_file == ["genre"]
+    assert summary.written == ["0.mp3 (genre)"]
+
+
 def test_an_other_difference_goes_up_only_for_the_file_approved_for_it(
     settings, writing, drive
 ) -> None:
@@ -1940,6 +2006,20 @@ def test_a_file_naming_another_song_still_gets_what_was_approved_for_it(
     assert frames["TIT2"] == "Attention (Lash Remix)"  # approved for this file
     assert frames["TCON"] == "Neo Soul"  # a whole kind: not applied here
     assert len(summary.other_song_held) == 1
+
+
+def test_a_file_naming_another_song_gets_its_own_kind_approval(
+    settings, writing, drive
+) -> None:
+    [drive_id] = _library(drive, writing, [{"title": "Despacito", "genre": "Neo Soul"}])
+    _approve(writing, kinds_by_file={drive_id: ["genre_remapped"]})
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    frames = _frames(drive.items[drive_id].data)
+    assert frames["TCON"] == "Pop"  # approved for this file alone
+    assert frames["TIT2"] == "Despacito"  # not approved
+    assert summary.other_song_held == []
 
 
 def test_a_field_kept_from_the_file_sends_up_no_other_field(

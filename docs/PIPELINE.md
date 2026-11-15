@@ -459,6 +459,51 @@ with his approval), the safe way and recorded as an `fx-untagged` run that
 trash, marking it not present. Nothing is renamed or moved, and a row with
 an empty title or artist is never written.
 
+### Tagging FX Music files with their role
+
+Each FX Music file's role comes from its folder
+([ADR-0010, amended 2026-11-14](decisions/ADR-0010-tagging-rule-profiles.md#amended-2026-11-14-owner-fx-roles-and-events))
+and is written as `<FX><Role>` at the start of its comment.
+`python -m deejay_cog.fx_roles`, run locally under
+`doppler run --config prd`, does it:
+
+```bash
+doppler run --config prd -- uv run python -m deejay_cog.fx_roles          # what it would write
+doppler run --config prd -- uv run python -m deejay_cog.fx_roles --write  # write it
+```
+
+| Folder           | Role       |
+|------------------|------------|
+| `_WalkOn`        | `Walk On`  |
+| `_BowMusic`      | `Bow`      |
+| `_MCIntro`       | `MC Intro` |
+| `_RotationMusic` | `Rotation` |
+
+A file's role is that of the nearest of these folders in its registry path
+(so a role folder inside an event folder counts); a file under none of them
+is left alone. It reads every present FX Music file in the registry
+(`FX_LIBRARY_ROOT_FOLDER_ID`), reads its comment through the shared tagger
+(every format it supports), and applies the shared rule
+(`role_comment` in common-python-utils): `<FX><Role>` goes in front, or
+`<Role>` after an `<FX>` with no role, and the rest of the comment, the
+owner's hand-added `<…>` parts included, is kept as it is. It prints:
+
+- the comments it would write (with `--write`, wrote), before and after;
+- the files already tagged with their folder's role;
+- the role conflicts: a comment that starts with `<FX>` and another role,
+  with the file's path, its comment and its folder's role, left as they are
+  for the owner to settle;
+- the files the tagger cannot read.
+
+Without `--write` nothing is changed, not even a run record. With
+`--write` only the comment is written, the safe way (revision pinned, audio
+checked), and the writes are recorded as an `fx-roles` run that
+`music_rollback` can undo (`MUSIC_TAGGING_STATE_FOLDER_ID` must be set). No
+other tag, and no event tag, is written; no file is renamed, moved or
+trashed; main-library files are never read. A comment that already carries
+a role is left alone, so running it again changes only files that are new
+or have moved since; run it again after the FX folders are reorganized.
+
 ### Running a library job on demand
 
 `POST /v1/deejay/runs` with `{"mode": "library-backfill"}` or
@@ -947,13 +992,17 @@ its ID3v2 tag runs past the start read, when a range cannot be read (an
 empty file), or when an approved difference is written over it: a write and
 its audio check are always made on the whole file.
 
-**A kind approval covers every file of that kind.** There is no per-file
-exception to it: with `year_later` approved for the file, any file whose
-year is older than its entry's sends that year up, even when the entry's
-year was set in the editor on purpose. To make one such file follow the
-entry, change the entry once the sync has recorded the file's values; the
-sync then writes the entry's value to the file before the reconcile sees a
-difference. Only `other` differences are approved file by file.
+**A kind approval covers every file of that kind, unless the file has its
+own.** With `year_later` approved for the file, any file whose year is
+older than its entry's sends that year up. One file's difference of any
+kind can be approved on its own, for the catalog or for the file
+(`kinds_by_file`, `file_wins_kinds_by_file`, below): for that file it comes
+ahead of the kind's approval, and every other file of the kind keeps the
+kind's. So a file whose entry has the right, later year (1996 in the file,
+2014 the release) is approved Catalog wins on its own `year_later`, and the
+write run writes the entry's year over the file while the older-year rule
+holds for the rest of the library. `other` differences are approved only
+file by file and field by field.
 
 **Kinds:** `case_punctuation`, `featured_moved`, `artist_joiner`,
 `version_brackets`, `genre_remapped`, `genre_filled`, `year_filled` (the
@@ -994,7 +1043,9 @@ them from the API (`GET /v1/catalog/library/reconcile/approvals`):
 {"kinds": ["case_punctuation", "genre_remapped", "fill_up"],
  "files": {"<drive file id>": ["title"]},
  "file_wins_kinds": ["year_later", "bpm_differs"],
- "file_wins_files": {"<drive file id>": ["artist"]}}
+ "file_wins_files": {"<drive file id>": ["artist"]},
+ "kinds_by_file": {"<drive file id>": ["year_later"]},
+ "file_wins_kinds_by_file": {"<drive file id>": ["genre_remapped"]}}
 ```
 
 Every approval says which side wins, so every difference has a way to
@@ -1004,11 +1055,16 @@ over the file. `file_wins_kinds` and `file_wins_files` approve it **for the
 file**: the file's value goes up to the entry and the file is not written.
 `kinds` approves whole kinds (any but `other`); `files` approves `other`
 differences one file and field at a time (`title`, `artist`, `year`,
-`genre`, `bpm`, `label`). A `catalog_id` difference needs no approval: the
+`genre`, `bpm`, `label`). `kinds_by_file` and `file_wins_kinds_by_file`
+approve one file's differences of a kind (any but `other`) for that file
+alone, ahead of the kind's approval: on the review page each row of a kind
+has its own choice (As the kind, Catalog wins, File wins), and one can be
+added for a file by its Drive link or id before its difference is
+reported. A `catalog_id` difference needs no approval: the
 row's id always wins (see "What is compared"). The file's side takes the same
 shapes, but not `fill_up` (already the file's value going up), `year_filled`
-or `genre_filled` (the file has no value); a kind, or a
-file's field, goes one way only. Approvals that cannot be read stop
+or `genre_filled` (the file has no value); a kind, a file's field, or a
+file's kind goes one way only. Approvals that cannot be read stop
 the run before it compares anything; until any are set, a write run writes
 nothing. The approvals given before the API held them were kept in
 `library-reconcile-approvals.json` in the state folder; `reconcile_admin
@@ -1092,10 +1148,10 @@ against "California Gurls", not "Booty Swing Parov Stelar" against "Booty
 Swing"), the file is likely linked to the wrong song. A kind approved for
 every file (Catalog wins or File wins) is then not applied to it: it would
 write the other song's year or genre into the file, or send the file's up
-into the other song's entry. Only differences approved for that file, field
-by field, are settled. The report names each such file (`other_song_held`)
+into the other song's entry. Only differences approved for that file
+itself (`other` by field, or its own approval of a kind) are settled. The report names each such file (`other_song_held`)
 when an approved kind was held; relink it ([unlink](#unlinking-one-file-linked-to-another-song)),
-or approve its fields one by one.
+or approve its differences for that file alone.
 
 **Long-open differences:** `library-reconcile-open.json` in the state folder
 keeps when each open difference was first seen; a difference whose values

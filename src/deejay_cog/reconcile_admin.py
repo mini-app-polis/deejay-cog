@@ -85,6 +85,7 @@ from deejay_cog.library_reconcile import (
     MODE_FLAG,
     SEEN_NAME,
     Approvals,
+    Difference,
     baseline,
     from_api,
     library_reconcile,
@@ -155,18 +156,25 @@ def latest_items(records: Sequence[dict[str, Any]], since: str = "") -> list[Ite
     return list(latest.values())
 
 
+def _difference(item: Item) -> Difference:
+    return Difference(
+        item.path,
+        item.drive_file_id,
+        item.field,
+        item.file_value,
+        item.catalog_value,
+        item.kind,
+    )
+
+
 def _mark(item: Item, approvals: Approvals) -> str:
     """How the approvals settle one difference: approved (the catalog wins),
-    approved for the file, or held."""
-    if item.kind == "other":
-        if item.field in approvals.files.get(item.drive_file_id, frozenset()):
-            return "approved"
-        if item.field in approvals.file_files.get(item.drive_file_id, frozenset()):
-            return "approved for the file"
-        return "held"
-    if item.kind in approvals.kinds:
+    approved for the file, or held. The file's own approval comes ahead of
+    its kind's."""
+    side = approvals.side(_difference(item))
+    if side == "catalog":
         return "approved"
-    if item.kind in approvals.file_kinds:
+    if side == "file":
         return "approved for the file"
     return "held"
 
@@ -197,7 +205,7 @@ def review_text(items: Sequence[Item], approvals: Approvals, since: str = "") ->
         lines.append(f"## {kind} ({len(found)}, {state})")
         for i in found:
             mark = ""
-            if kind == "other":
+            if kind == "other" or approvals.file_side(_difference(i)) is not None:
                 mark = f" [{_mark(i, approvals)}]"
             lines.append(
                 f"- {i.name} [{i.drive_file_id}] {i.field}: "

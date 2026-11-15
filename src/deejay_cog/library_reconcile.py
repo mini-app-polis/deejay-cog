@@ -101,8 +101,9 @@ either.
 
 **A file whose title names another song** (:func:`names_another_song`: a
 likely wrong link) has no whole approved kind applied to it, either side:
-only differences approved for that file, field by field, are settled, and
-a write run names it (``other_song_held``) when it held an approved kind.
+only differences approved for that file itself (``other`` by field, or its
+own approval of a kind) are settled, and a write run names it
+(``other_song_held``) when it held an approved kind.
 
 **Long-open differences.** ``library-reconcile-open.json`` in the state
 folder keeps when each open difference was first seen (a difference whose
@@ -130,7 +131,9 @@ by each write run (``GET /v1/catalog/library/reconcile/approvals``)::
     {"kinds": ["case_punctuation", "genre_remapped", "fill_up"],
      "files": {"<drive file id>": ["title"]},
      "file_wins_kinds": ["year_later", "bpm_differs"],
-     "file_wins_files": {"<drive file id>": ["artist"]}}
+     "file_wins_files": {"<drive file id>": ["artist"]},
+     "kinds_by_file": {"<drive file id>": ["year_later"]},
+     "file_wins_kinds_by_file": {"<drive file id>": ["genre_remapped"]}}
 
 Each approval says which side wins, so every difference has a way to
 close. ``kinds`` and ``files`` approve it for the catalog: its value is
@@ -139,7 +142,12 @@ it for the file: its value goes up to the catalog entry (``POST
 /v1/catalog/library/files/edited`` with ``keep_file``) and the file is not
 written. ``kinds`` names whole kinds (any but ``other``); ``files`` approves
 ``other`` differences one file and field at a time, and the same for the
-file's side. Approvals given before
+file's side. ``kinds_by_file`` and ``file_wins_kinds_by_file`` approve one
+file's differences of a kind (any but ``other``), for the catalog or for
+the file: for that file they come ahead of the kind's approval, and every
+other file of the kind keeps it. So one file whose year the catalog has
+right is written with it while ``year_later`` stays approved for the file.
+Approvals given before
 the API held them were kept in ``library-reconcile-approvals.json`` in the
 state folder; ``python -m deejay_cog.reconcile_admin seed`` carries that file
 over once, and nothing reads it after. A write run writes each
@@ -637,18 +645,23 @@ def classify(
 
 @dataclass(frozen=True)
 class Approvals:
-    """What the owner approved, for the catalog (``kinds``, ``files``) or for
-    the file (``file_kinds``, ``file_files``): whole kinds, and ``other``
-    differences one file and field at a time."""
+    """What the owner approved, for the catalog (``kinds``, ``files``,
+    ``kinds_by_file``) or for the file (``file_kinds``, ``file_files``,
+    ``file_kinds_by_file``): whole kinds, ``other`` differences one file and
+    field at a time, and one file's differences of a kind, which come ahead
+    of the kind's approval for that file."""
 
     kinds: frozenset[str] = frozenset()
     files: dict[str, frozenset[str]] = field(default_factory=dict)
     file_kinds: frozenset[str] = frozenset()
     file_files: dict[str, frozenset[str]] = field(default_factory=dict)
+    kinds_by_file: dict[str, frozenset[str]] = field(default_factory=dict)
+    file_kinds_by_file: dict[str, frozenset[str]] = field(default_factory=dict)
 
-    def side(self, diff: Difference) -> str | None:
-        """Which value wins for ``diff``: ``catalog``, ``file``, or None when
-        the owner has not approved it."""
+    def file_side(self, diff: Difference) -> str | None:
+        """Which value wins for ``diff`` by what was approved for its file
+        alone (``other`` by field, any other kind by the file's own approval
+        of it), or None when nothing was."""
         if diff.kind == "other":
             if diff.field == "catalog_id":
                 # The row's id is the truth (a merge repoints rows only).
@@ -658,6 +671,19 @@ class Approvals:
             if diff.field in self.file_files.get(diff.drive_file_id, frozenset()):
                 return "file"
             return None
+        if diff.kind in self.kinds_by_file.get(diff.drive_file_id, frozenset()):
+            return "catalog"
+        if diff.kind in self.file_kinds_by_file.get(diff.drive_file_id, frozenset()):
+            return "file"
+        return None
+
+    def side(self, diff: Difference) -> str | None:
+        """Which value wins for ``diff``: ``catalog``, ``file``, or None when
+        the owner has not approved it. The file's own approval comes ahead of
+        its kind's."""
+        own = self.file_side(diff)
+        if own is not None or diff.kind == "other":
+            return own
         if diff.kind in self.kinds:
             return "catalog"
         if diff.kind in self.file_kinds:
@@ -707,6 +733,8 @@ def from_api(approvals: ReconcileApprovals) -> Approvals | None:
         {str(k): frozenset(v) for k, v in approvals.files.items()},
         frozenset(approvals.file_wins_kinds),
         {str(k): frozenset(v) for k, v in approvals.file_wins_files.items()},
+        {str(k): frozenset(v) for k, v in approvals.kinds_by_file.items()},
+        {str(k): frozenset(v) for k, v in approvals.file_wins_kinds_by_file.items()},
     )
 
 
@@ -1102,13 +1130,14 @@ def _apply_one(
         # Possibly linked to another song: a whole kind approved for every
         # file must not carry that song's values into this one, or this
         # file's up into that song's entry. Only what was approved for this
-        # file, field by field, is settled.
-        by_file = [d for d in approved if d.kind == "other"]
+        # file itself is settled.
+        by_file = [d for d in approved if approvals.file_side(d) is not None]
         if len(by_file) < len(approved):
             summary.other_song_held.append(
                 f"{row.path}: the file says {other_song[0]!r}, its entry "
                 f"{other_song[1]!r}; {len(approved) - len(by_file)} approved "
-                "kind(s) not applied (relink it, or approve its fields one by one)"
+                "kind(s) not applied (relink it, or approve its differences for "
+                "the file alone)"
             )
         approved = by_file
     summary.not_approved += len(diffs) - len(approved)
