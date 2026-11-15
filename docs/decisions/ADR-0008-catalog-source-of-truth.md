@@ -459,6 +459,45 @@ that case with a Drive revision check. This makes field ownership explicit.
    from its recorded value but has no open difference yet (one the
    reconcile has not compared since the change).
 
+## Decided with the owner, 2026-11-14 (one file's kind goes its own way)
+
+A kind approval covered every file of its kind, and only `other`
+differences could be approved for one file. `2AM` (Adrian Marcel) has 1996
+in the catalog and in the file, but came out in 2014. With `year_later`
+approved for the file (the older year is kept, 2026-11-07, decision 3), a
+fix to its entry was sent back up by the next write run, and approving
+`year_later` for the catalog instead would write the entry's year over
+every other file of that kind.
+
+1. **One file's difference of any kind can be approved on its own**, for
+   the catalog or for the file. For that file this approval comes ahead of
+   the kind's; every other file of the kind keeps the kind's approval. The
+   API holds these per file and kind (`kinds_by_file`,
+   `file_wins_kinds_by_file`, migration 115 in api-kaianolevine-com), and
+   the review page sets them on each row of a kind (As the kind, Catalog
+   wins, File wins), or for a file by its Drive link or id before its
+   difference is reported. A file's kind goes one way only; `other` stays
+   approved by file and field.
+2. **The rules for kinds stand.** The older year is kept for the library
+   as a whole (2026-11-07, decision 3), and the kind approvals already set
+   keep their meaning: one file's approval only overrides its own kind.
+3. **Catalog wins writes the catalog's value**, whatever the kind: a file's
+   own Catalog wins on `year_later` writes its entry's later year over the
+   file's older one.
+4. **A file whose title names another song gets what was approved for it
+   alone**: its own kind approvals are settled, as its `other` fields are;
+   a whole kind still is not applied to it.
+5. **A wrong year reaches the catalog from the file, with no catalog
+   edit.** For `2AM`: on the review page, approve the file's own
+   `year_earlier` File wins and its own `year_later` Catalog wins, then set
+   the file's year to 2014 in VirtualDJ. The next library job's sync sends
+   the edit up, or the reconcile files `year_earlier` and sends it up for
+   that file alone; either way the entry takes 2014. From then on the
+   file's own `year_later` Catalog wins writes the entry's 2014 back over
+   any older year the file is given. Any other file linked to the same
+   entry needs its own `year_later` Catalog wins too, or the kind's File
+   wins sends its older year up to the shared entry.
+
 ## Decided with the owner, 2026-11-09 (the steps' modes are feature flags)
 
 1. **Each step's mode lives in the API's feature flags**, not in a setting.

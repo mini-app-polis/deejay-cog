@@ -38,7 +38,8 @@ exemptions:
     reason: >
       music_rollback.py, reconcile_admin.py, restore_bpm.py,
       restore_styling.py, relink.py, fingerprint_check.py, link_by_tags.py,
-      library_restore.py, fx_untagged.py, owner_edits.py, new_music_redo.py,
+      library_restore.py, fx_untagged.py, fx_roles.py, owner_edits.py,
+      new_music_redo.py,
       unlink.py and link_audit.py are operator's
       command-line tools, run by hand as
       `python -m deejay_cog.music_rollback <run-id>`,
@@ -50,6 +51,7 @@ exemptions:
       `python -m deejay_cog.link_by_tags [--apply]`,
       `python -m deejay_cog.library_restore <time> [--apply]`,
       `python -m deejay_cog.fx_untagged propose|apply`,
+      `python -m deejay_cog.fx_roles [--write]`,
       `python -m deejay_cog.owner_edits propose|apply`,
       `python -m deejay_cog.new_music_redo propose|apply`,
       `python -m deejay_cog.unlink <file> [--apply]` and
@@ -57,4 +59,4 @@ exemptions:
       the plan, the review or the result, written for the person at the
       terminal, so they print rather than log. Nothing in the deployed
       functions imports them.
-    paths: [src/deejay_cog/music_rollback.py, src/deejay_cog/reconcile_admin.py, src/deejay_cog/restore_bpm.py, src/deejay_cog/restore_styling.py, src/deejay_cog/relink.py, src/deejay_cog/fingerprint_check.py, src/deejay_cog/link_by_tags.py, src/deejay_cog/library_restore.py, src/deejay_cog/fx_untagged.py, src/deejay_cog/owner_edits.py, src/deejay_cog/new_music_redo.py, src/deejay_cog/unlink.py, src/deejay_cog/link_audit.py]
+    paths: [src/deejay_cog/music_rollback.py, src/deejay_cog/reconcile_admin.py, src/deejay_cog/restore_bpm.py, src/deejay_cog/restore_styling.py, src/deejay_cog/relink.py, src/deejay_cog/fingerprint_check.py, src/deejay_cog/link_by_tags.py, src/deejay_cog/library_restore.py, src/deejay_cog/fx_untagged.py, src/deejay_cog/fx_roles.py, src/deejay_cog/owner_edits.py, src/deejay_cog/new_music_redo.py, src/deejay_cog/unlink.py, src/deejay_cog/link_audit.py]
