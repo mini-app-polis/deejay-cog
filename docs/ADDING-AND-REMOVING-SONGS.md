@@ -47,6 +47,7 @@ on, so it is safe too.
 | Tagged differently from its catalog entry | Its differences wait on the reconcile page | Approve the catalog's value or the file's, kind by kind or file by file |
 | One whose fingerprint disagrees with its tags | Given a second opinion; when that does not settle it, left unidentified with what each source found | Identify it on the unidentified-files page |
 | Identified by nothing (no catalog match, no confident fingerprint, tags that name no song) | Left unidentified, with why | Identify it on the unidentified-files page |
+| In a library folder, identified by nothing, its title an old file name (the check in this table's last row, such as the artist written again after the title by a tagger) | No entry is made from its tags; left unidentified, unrenamed, with the check that found it | Identify it on the unidentified-files page |
 | A byte-identical copy of a file already in the library (main folder or New Music) | Moved, unchanged, to needs-review, with the library file's path | Nothing: the library already has it |
 | Not an MP3 | Moved, unchanged, to needs-review | Nothing more: the main library takes MP3s only, and no file is converted |
 | Missing a usable title or artist | Moved, unchanged, to needs-review | Fix its tags and put it in the input folder again |

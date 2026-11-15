@@ -64,8 +64,9 @@ the start read, or when an approved difference is written over it.
 - ``year_later`` — the file's year is older than the catalog's (the older
   year is kept: leave this kind unapproved and the file keeps its year)
 - ``year_differs`` — a year that is not a number, so neither is older
-- ``bpm_rounding`` (less than ``BPM_ROUNDING`` apart), ``bpm_differs``,
-  ``label_differs``
+- ``bpm_rounding`` (less than ``BPM_ROUNDING`` apart, or the same tempo
+  with one side written with trailing zeros, "100.00" against "100": the
+  whole number is proposed), ``bpm_differs``, ``label_differs``
 - ``fill_up`` — the file has a value for a field the catalog leaves empty,
   which would go up to the catalog
 - ``other`` — anything else, listed file by file
@@ -147,7 +148,8 @@ through ``write_in_place`` (head revision kept, audio checked before and
 after, every write in ``library-reconcile-<run id>.json``, which
 ``python -m deejay_cog.music_rollback <run id>`` undoes), registers the file
 as synced, and sends approved ``fill_up`` values up to the catalog
-(``POST /v1/catalog/{id}/fill-up``) without writing the file. A difference
+(``POST /v1/catalog/{id}/fill-up``) without writing the file; a BPM goes up
+as a whole number ("100" for a file's "100.00"), as the library holds it. A difference
 approved for the file goes up to the entry without writing the file; one
 the API holds (a title or artist that does not split into parts cleanly, a
 genre off the vocabulary) stays open on the review page, with the reason in
@@ -484,6 +486,15 @@ def _number(text: str) -> float | None:
         return None
 
 
+def _whole_bpm(text: str) -> str:
+    """A BPM as the library holds it, a whole number ("100" for "100.00");
+    any other text as it is."""
+    number = _number(text)
+    if number is None or not number.is_integer():
+        return text
+    return str(int(number))
+
+
 _YEAR = re.compile(r"^\s*(\d{4})")
 
 
@@ -591,6 +602,10 @@ def classify(
             have_n, want_n = _number(have), _number(want)
             if have_n is not None and want_n is not None:
                 if have_n == want_n:
+                    # The same tempo, but one side written with trailing
+                    # zeros ("100.00"): the whole number is proposed.
+                    if _whole_bpm(have) != have or _whole_bpm(want) != want:
+                        add(name, "bpm_rounding")
                     continue
                 gap = abs(have_n - want_n)
                 add(name, "bpm_rounding" if gap < BPM_ROUNDING else "bpm_differs")
@@ -711,8 +726,9 @@ def _fill_up(diffs: list[Difference]) -> CatalogFillUp | None:
             values["release_year"] = int(diff.file_value)
         elif diff.field == "bpm":
             number = _number(diff.file_value)
-            if number is not None and number > 0:
-                values["bpm"] = number
+            if number is not None and round(number) > 0:
+                # A whole number, as the library holds every BPM.
+                values["bpm"] = round(number)
         elif diff.field in ("genre", "label"):
             values[diff.field] = diff.file_value
     return CatalogFillUp(**values) if values else None
@@ -1110,7 +1126,11 @@ def _apply_one(
     approved = [d for d in approved if approvals.side(d) == "catalog"]
     fills = [d for d in approved if d.kind == "fill_up"]
     fill = _fill_up(fills)
-    to_write = {d.field: wanted[d.field] for d in approved if d.kind != "fill_up"}
+    to_write = {
+        d.field: _whole_bpm(wanted[d.field]) if d.field == "bpm" else wanted[d.field]
+        for d in approved
+        if d.kind != "fill_up"
+    }
     if fill is not None and record.mode.writes and row.catalog_id:
         filled = api.fill_up_catalog_entry(row.catalog_id, fill).filled
         if filled:

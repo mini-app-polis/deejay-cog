@@ -16,7 +16,9 @@ song is linked to the catalog's entry for them, or to a library entry made
 from its title, artist and year, and its registry row keeps the mark
 ``identified by its own tags (<the fingerprint's note>)``. A file whose
 tags name no song (no title or artist, "Unknown", "Various Artists",
-"Track 3") is left for the owner.
+"Track 3"), or whose title looks like a file name by intake's check
+(:func:`deejay_cog.library_identify.title_looks_like_file_name`), is left
+for the owner.
 
 Without ``--apply`` it is a dry run: it reads the tags the registry holds,
 looks each up, and prints what it would do, downloading nothing. With it,
@@ -40,7 +42,11 @@ from mini_app_polis.environment import api_base_url
 from mini_app_polis.google import GoogleAPI
 
 from deejay_cog.api_client import api_client
-from deejay_cog.library_identify import link_by_own_tags, usable_track
+from deejay_cog.library_identify import (
+    link_by_own_tags,
+    title_looks_like_file_name,
+    usable_track,
+)
 from deejay_cog.music_safety import (
     STATE_FOLDER_VAR,
     FlowMode,
@@ -105,6 +111,10 @@ def plan(api: Any, found: list[Candidate]) -> None:
         track = usable_track(tags, c.row.path)
         if track is None:
             c.result = "left: its tags name no song"
+            continue
+        refused = title_looks_like_file_name(tags)
+        if refused is not None:
+            c.result = f"left: {refused}"
             continue
         c.song = f"{tags['artist']} - {tags['title']}"
         match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]

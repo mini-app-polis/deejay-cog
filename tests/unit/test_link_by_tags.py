@@ -151,6 +151,43 @@ def test_a_dry_run_plans_from_the_registry_and_changes_nothing() -> None:
     assert drive.writes() == []
 
 
+def test_a_title_that_looks_like_a_file_name_is_left() -> None:
+    drive, api = FakeDrive(), FakeApi()
+    _file(
+        drive,
+        api,
+        "Billie Jean Michael Jackson",
+        "Michael Jackson",
+        "fingerprint: no match",
+    )
+    found = link_by_tags.candidates(api)
+
+    link_by_tags.apply(drive, api, "state", found)
+
+    [c] = found
+    assert c.result == "left: its tags name no song"
+    assert api.created == [] and api.registrations == []
+
+
+def test_a_dry_run_names_why_a_file_name_title_is_left() -> None:
+    drive, api = FakeDrive(), FakeApi()
+    _file(
+        drive,
+        api,
+        "Billie Jean Michael Jackson",
+        "Michael Jackson",
+        "fingerprint: no match",
+    )
+    found = link_by_tags.candidates(api)
+
+    link_by_tags.plan(api, found)
+
+    assert [c.result for c in found] == [
+        "left: its title tag looks like a file name (the artist repeated in the "
+        "title): 'Billie Jean Michael Jackson'"
+    ]
+
+
 def test_apply_links_each_file_and_marks_it_as_linked_by_its_tags() -> None:
     drive, api = _library()
     found = link_by_tags.candidates(api)

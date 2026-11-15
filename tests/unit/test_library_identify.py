@@ -785,6 +785,82 @@ def test_a_dry_run_names_the_entry_its_tags_would_make(drive, api) -> None:
     assert api.created == [] and api.registrations == []
 
 
+def test_a_title_with_its_artist_appended_makes_no_entry(drive, api) -> None:
+    drive_id, result = _no_fingerprint(
+        drive, api, _song("Billie Jean Michael Jackson", "Michael Jackson")
+    )
+
+    assert result.outcome == "below_confidence"
+    assert api.created == [] and api.fills == []
+    [note] = api.registrations
+    assert note.identification_status == "unidentified" and note.catalog_id is None
+    assert note.identify_note == (
+        "fingerprint: no confident match (score 0.00); no entry made from its "
+        "own tags: its title tag looks like a file name (the artist repeated in "
+        "the title): 'Billie Jean Michael Jackson'"
+    )
+    assert "TXXX:CATALOG_ID" not in _frames(drive.items[drive_id].data)
+
+
+def test_link_by_own_tags_makes_no_entry_from_a_file_name_title(drive, api) -> None:
+    data = _song("Billie Jean Michael Jackson", "Michael Jackson")
+    drive_id = drive.add("track01.mp3", ROOT, data)
+
+    linked = ident.link_by_own_tags(
+        drive,
+        api,
+        _record(drive),
+        file_id=drive_id,
+        name="track01.mp3",
+        root=ROOT,
+        path="New/track01.mp3",
+        data=data,
+        why="fingerprint: no match",
+    )
+
+    assert linked is None
+    assert api.created == [] and api.registrations == []
+
+
+@pytest.mark.parametrize(
+    ("title", "artist", "reason"),
+    [
+        (
+            "Billie Jean Michael Jackson",
+            "Michael Jackson",
+            "its title tag looks like a file name (the artist repeated in the "
+            "title): 'Billie Jean Michael Jackson'",
+        ),
+        ("Billie Jean", "Michael Jackson", None),
+        # A real title holding an artist's name passes when the artist tag
+        # names someone else.
+        ("Michael Jackson", "Tim Gunter", None),
+        ("Hello Kelly Clarkson", "The Pianist", None),
+    ],
+)
+def test_the_file_name_check_is_intakes(
+    title: str, artist: str, reason: str | None
+) -> None:
+    tags = {"title": title, "artist": artist, "year": "", "bpm": "", "genre": ""}
+    assert ident.title_looks_like_file_name(tags) == reason
+
+
+def test_a_passing_title_still_makes_its_entry(drive, api) -> None:
+    _, result = _no_fingerprint(drive, api, _song("Billie Jean", "Michael Jackson"))
+
+    assert result.outcome == "linked_by_tags" and result.entry_created
+    [made] = api.created
+    assert (made.title, made.artist) == ("Billie Jean", "Michael Jackson")
+
+
+@pytest.mark.parametrize(
+    ("bpm", "filled"), [("100.00", 100), ("89.0", 89), ("125", 125)]
+)
+def test_a_fill_up_bpm_is_a_whole_number(bpm: str, filled: int) -> None:
+    fill = ident.fill_up_values({"title": "t", "artist": "a", "bpm": bpm})
+    assert fill is not None and fill.model_dump(exclude_none=True) == {"bpm": filled}
+
+
 @pytest.mark.parametrize(
     ("title", "artist", "usable"),
     [
