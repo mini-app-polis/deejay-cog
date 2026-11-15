@@ -4,7 +4,9 @@ Date: 2026-11-11
 
 ## Status
 
-Accepted (owner, 2026-11-11). Builds on
+Accepted (owner, 2026-11-11); decision 4, the role and event tags, was
+[decided on 2026-11-14](#amended-2026-11-14-owner-fx-roles-and-events).
+Builds on
 [ADR-0009](./ADR-0009-library-folders.md), which left how each library's
 files are tagged to a separate decision; this ADR is that decision. The
 [ADR-0007](./ADR-0007-music-tagging-redesign.md) safety rules and
@@ -69,6 +71,10 @@ catalog entries (ADR-0009).
 
 ### 4. Not decided yet: role and event tags
 
+*Decided 2026-11-14 ([below](#amended-2026-11-14-owner-fx-roles-and-events)):
+a role tag at the start of the comment, and events as generated VirtualDJ
+playlists, not a tag.*
+
 The owner leans towards two FX tags, neither settled:
 
 - a **role** tag taken from the file's folder (such as Walk On / Judges,
@@ -96,7 +102,7 @@ stay simple.
 - api-deejaytools can adopt the same profiles and tagger when it takes FX
   uploads, without a second implementation.
 - The role and event tags need a decision before the `fx` profile writes
-  them.
+  them. (Decided 2026-11-14, below.)
 
 ## Amended 2026-11-11 (owner): the reconcile over FX Music
 
@@ -133,3 +139,78 @@ so that an approval for the catalog never writes catalog values over one.
 - A wrong tag on an FX file reaches its fx entry. Plays never land on an fx
   entry and the main library never links to one, so the mistake stays with
   that file, and is fixed in the file's tags.
+
+## Amended 2026-11-14 (owner): FX roles and events
+
+### Context
+
+Decision 4 left the role and event tags as leanings. Many FX files already
+carry a role the owner wrote by hand at the start of their comment, with
+more `<…>` parts after it, such as `<FX><Walk On><Competitor Routine>`.
+The FX folders are still being reorganized: the event-specific folders
+(`EventSpecific`) are expected to move under FX Music (ADR-0009).
+
+### Decision
+
+1. **An FX file's role comes from its folder and goes in its comment.**
+   Four folders name a role:
+
+   | Folder           | Role         |
+   |------------------|--------------|
+   | `_WalkOn`        | `Walk On`    |
+   | `_BowMusic`      | `Bow`        |
+   | `_MCIntro`       | `MC Intro`   |
+   | `_RotationMusic` | `Rotation`   |
+
+   The role is the one of the nearest of these folders the file is under
+   (so a role folder inside an event folder counts too). A file under none
+   of them gets no role.
+2. **It is written as `<FX><Role>` at the start of the comment, and the
+   rest of the comment is kept.** The owner's hand-added `<…>` parts stay
+   after it, as he wrote them; they are never rewritten, reordered or
+   removed. In full:
+   - a comment that already starts with `<FX><Role>` for the file's role
+     is left as it is;
+   - a comment that starts with `<FX>` followed by another role is left as
+     it is and reported, for the owner to settle (the file may be in the
+     wrong folder, or the role was set by hand on purpose);
+   - a comment that starts with `<FX>` and no role gets `<Role>` after its
+     `<FX>`;
+   - any other comment gets `<FX><Role>` in front of it (a space between
+     them when the comment does not start with `<`), and an empty comment
+     becomes `<FX><Role>`.
+3. **This is the one part of an FX file's comment the system writes.** The
+   comment is still not a profile field: it never goes up to the catalog,
+   and the reconcile and sync neither compare nor write it. The main
+   library's comment stays VirtualDJ's and is never written (ADR-0008,
+   decided 2026-11-05, decision 5).
+4. **The role is written by a reviewed command, the safe way.** A dry run
+   lists every change; the write follows ADR-0007 (revision pinned, audio
+   checked, every write in a run record that `music_rollback` can undo), in
+   every format the shared tagger supports. Running it again changes only
+   files that are new or have moved since, so it is run again after the
+   folders are reorganized.
+5. **Events are generated VirtualDJ playlists, not a tag.** No event tag
+   is written to any file. For each event folder under FX Music, one
+   playlist is generated per role found in it, listing the event's files
+   for that role, so the event's music can be played from the playlists
+   rather than from more copies of the files. Generating them writes
+   playlist files only, never an audio file or its tags.
+6. **The personal rules stay simple.** Sharing an event's music between
+   users, access control, and events as data stay with deejaytools
+   (decision 1's context) and are not built here.
+
+### Consequences
+
+- The role rule (the comment prefix, given a role) is shared in
+  common-python-utils beside the `fx` profile, so api-deejaytools can use
+  it; which folder names which role is deejay-cog's configuration, as
+  decision 1 has it.
+- The build is three agent tasks, each small and in one repository: the
+  shared role rule in common-python-utils; the reviewed role command in
+  deejay-cog; and the event playlists in deejay-cog.
+- The event playlists find events under FX Music, so they have nothing to
+  list until `EventSpecific` has moved under it; the role tag does not
+  wait for the move, but is run again after it.
+- A file in two role folders is two files (ADR-0009), and each copy gets
+  its own folder's role.

@@ -49,7 +49,10 @@ the catalog has no song for it, and the file is then linked to that entry
 (fill-up, the catalog's values written in place, registered as identified).
 Below the score, or with no match, the file is linked by its own tags when
 they name a song (:func:`deejay_cog.library_identify.link_by_own_tags`), and
-otherwise left unchanged and unidentified. A confident match that disagrees
+otherwise left unchanged and unidentified. A title that fails intake's
+file-name check (:func:`deejay_cog.new_music.file_name_title`) names no
+song here: no entry is made from it, and the file's note gives the check's
+reason. A confident match that disagrees
 with the file's own tags goes to a second opinion
 (:mod:`deejay_cog.second_opinion`): the other recordings AcoustID links to
 the audio, then Spotify's length for each side. The file is linked by
@@ -899,9 +902,19 @@ def _identify_library_file(
 
     # The best match's score, once there is one; read when a note is made.
     score: float | None = None
+    # Why the file's own title makes no entry (it looks like a file name),
+    # once by_own_tags has been refused for it; kept in its note.
+    refused: str | None = None
 
     def by_own_tags(why: str) -> LibraryIdentifyResult | None:
-        """Link the file by its own tags; None when they name no song."""
+        """Link the file by its own tags; None when they name no song, or
+        when its title looks like a file name and no entry its tags found is
+        expected (it is then left unidentified, the reason in its note)."""
+        nonlocal refused
+        if expected is None:
+            refused = library_identify.title_looks_like_file_name(read_tag_row(data))
+            if refused is not None:
+                return None
         by_tags = library_identify.link_by_own_tags(
             drive,
             api,
@@ -930,6 +943,8 @@ def _identify_library_file(
         )
 
     def unidentified(outcome: str, note: str) -> LibraryIdentifyResult:
+        if refused is not None:
+            note = f"{note}; no entry made from its own tags: {refused}"
         if record.mode.writes:
             library_identify.record_unidentified(
                 api, file_id=file_id, root=root, path=path, data=data, note=note

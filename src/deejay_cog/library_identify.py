@@ -30,7 +30,11 @@ this step takes the next ``LIBRARY_IDENTIFY_CHUNK_SIZE`` of them (default
    AcoustID has no match for, or none it is confident of, is made a library
    entry from its own title, artist and year (:func:`link_by_own_tags`),
    when they name a song (an artist that is not "Unknown" or "Various", a
-   title that is not "Untitled" or a track number). Nothing contradicts
+   title that is not "Untitled" or a track number) and the title passes
+   intake's file-name check (:func:`deejay_cog.new_music.file_name_title`):
+   a title such as "Billie Jean Michael Jackson", the artist again after
+   it, is an old library name and makes no entry; the file stays
+   unidentified, its note saying why. Nothing else contradicts
    them, and the fingerprint never will. A file the fingerprint names as
    another song stays for the owner (ADR-0008, decided 2026-11-09).
 
@@ -161,6 +165,7 @@ from deejay_cog.music_tags import (
     read_tag_row,
     write_owned_fields,
 )
+from deejay_cog.new_music import file_name_title
 from deejay_cog.second_opinion import NO_SPOTIFY
 
 log = logger_mod.get_logger()
@@ -244,8 +249,8 @@ def chunk_size_setting() -> int | str:
 
 
 def fill_up_values(tags: dict[str, str]) -> CatalogFillUp | None:
-    """The file's year, genre, BPM and label, for the catalog's empty
-    fields; None when it has none of them."""
+    """The file's year, genre, BPM (a whole number) and label, for the
+    catalog's empty fields; None when it has none of them."""
     values: dict[str, Any] = {}
     year = tags.get("year", "")
     if year.isdigit() and 1000 <= int(year) <= 9999:
@@ -256,8 +261,9 @@ def fill_up_values(tags: dict[str, str]) -> CatalogFillUp | None:
         bpm = float(tags.get("bpm") or 0)
     except ValueError:
         bpm = 0.0
-    if bpm > 0:
-        values["bpm"] = bpm
+    if round(bpm) > 0:
+        # A whole number, as the library holds every BPM.
+        values["bpm"] = round(bpm)
     if tags.get("label"):
         values["label"] = tags["label"]
     return CatalogFillUp(**values) if values else None
@@ -357,6 +363,20 @@ def usable_track(tags: dict[str, str], name: str = "") -> IngestTrack | None:
     return track
 
 
+def title_looks_like_file_name(tags: dict[str, str]) -> str | None:
+    """Why the file's title tag looks like an old file name, by the check
+    intake uses (:func:`deejay_cog.new_music.file_name_title`, with the
+    artist tag), or None when it reads as a title. A file whose title fails
+    it is never made a catalog entry from its own tags: a title such as
+    "Billie Jean Michael Jackson" with the artist Michael Jackson is an old
+    library name, not the song's title."""
+    title = str(tags.get("title") or "").strip()
+    check = file_name_title(title, str(tags.get("artist") or ""))
+    if check is None:
+        return None
+    return f"its title tag looks like a file name ({check}): {title!r}"
+
+
 def _release_year(value: str | None) -> int | None:
     year = str(value or "").strip()[:4]
     return int(year) if len(year) == 4 and year.isdigit() else None
@@ -388,7 +408,8 @@ def link_by_own_tags(
     """Link a file the fingerprint could not identify by its own tags: to
     the catalog's entry for them, or to a library entry made from its title,
     artist and year. None when its tags do not name a song
-    (:func:`usable_track`); the file is then left as it is.
+    (:func:`usable_track`) or its title looks like a file name
+    (:func:`title_looks_like_file_name`); the file is then left as it is.
 
     ``catalog_id``, when given, is the entry the file's tags already found
     (a tag match sent to the fingerprint to confirm): the file is linked to
@@ -405,7 +426,7 @@ def link_by_own_tags(
     if catalog_id is None:
         tags = read_tag_row(data)
         track = usable_track(tags, name)
-        if track is None:
+        if track is None or title_looks_like_file_name(tags) is not None:
             return None
         match = api.lookup_catalog(CatalogLookupRequest(tracks=[track]))[0]
         if match is not None:

@@ -778,7 +778,15 @@ An entry kept before the md5 was is tried once more, to record it.
    the catalog's entry for them, or to a library entry made from its title,
    artist and year. Its registry note says so (`identified by its own tags
    (fingerprint: no match)`), marking the link as one no fingerprint
-   confirmed.
+   confirmed. A title that fails the check new-music uses on a title tag
+   (`new_music.file_name_title`, see
+   [new-music](#new-music)) names no song here: a title with the artist
+   again after it ("Billie Jean Michael Jackson" by Michael Jackson, an old
+   library name a tagger such as VirtualDJ wrote back to the file) makes no
+   entry, and the file stays unidentified, its note ending
+   `no entry made from its own tags: its title tag looks like a file name
+   (<the check>): '<title>'`. The file is not renamed. A title naming its
+   artist passes when the artist tag names someone else.
 5. A confident fingerprint match that disagrees with the file's own tags
    gets a second opinion (`second_opinion.py`, ADR-0008, decided
    2026-11-09): when another recording AcoustID links to the same audio is
@@ -847,7 +855,7 @@ catalog refuses as one to the other library (409 `other_library`) is an
 issue (`not_linkable`), never a crash; the run carries on.
 
 **Linking** fills the entry's empty fields from the file
-(`POST /v1/catalog/{id}/fill-up`), writes only the link
+(`POST /v1/catalog/{id}/fill-up`, a BPM as a whole number), writes only the link
 (`TXXX:CATALOG_ID`) to the same file, and registers it as identified with
 when it was synced. Every owned field is left to the reconcile, which
 writes the approved kinds when it reaches the file. The
@@ -953,7 +961,8 @@ file has none), `year_earlier` (the catalog's year is older), `year_later`
 (the file's year is older: approved for the file, the older year goes up to
 the catalog),
 `year_differs` (a year that is not a number), `bpm_rounding` (less than
-1.5 BPM), `bpm_differs`, `label_differs`, `fill_up` (a file value for a field
+1.5 BPM, or the same tempo with one side written with trailing zeros,
+`100.00` against `100`: the whole number is proposed), `bpm_differs`, `label_differs`, `fill_up` (a file value for a field
 the catalog leaves empty) and `other`.
 
 **Record:** `library-reconcile-<run id>.dry-run.json` in the state folder,
@@ -1011,7 +1020,8 @@ renamed, moved or deleted; head revision kept; audio checked before and
 after; every write in `library-reconcile-<run id>.json`, which
 `music_rollback` undoes. The file is then registered as synced. Approved
 `fill_up` values go up to the catalog (`POST /v1/catalog/{id}/fill-up`) and
-the file is not written. Differences approved for the file go up to the
+the file is not written; a BPM goes up as a whole number (`100` for a
+file's `100.00`), as every fill-up sends it. Differences approved for the file go up to the
 entry as a catalog revision (`POST /v1/catalog/library/files/edited` with
 `keep_file`, whatever the last sync recorded) and the file is not written;
 the library sync then carries the value to the entry's other files. One the
@@ -1563,7 +1573,8 @@ confident match" is linked by its own tags, as step 4 does. The dry run
 reads the tags the registry holds and downloads nothing; `--apply` reads
 each file, links it the library job's way, and records a
 `library-link-by-tags` run that `music_rollback` can undo. A file whose
-tags name no song is left for the owner.
+tags name no song, or whose title fails the file-name check as in step 4,
+is left for the owner.
 
 ### Relinking files matched past a version
 

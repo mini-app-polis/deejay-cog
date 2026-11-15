@@ -144,13 +144,43 @@ def test_a_year_that_is_not_a_number_differs() -> None:
 
 def test_bpm_under_one_and_a_half_beats_is_rounding_and_more_is_different() -> None:
     assert _kinds(_tags(bpm="96"), _tags(bpm="95.5")) == {"bpm": "bpm_rounding"}
-    assert _kinds(_tags(bpm="100"), _tags(bpm="100.0")) == {}
+    assert _kinds(_tags(bpm="100"), _tags(bpm="100")) == {}
     assert _kinds(_tags(bpm="98"), _tags(bpm="95.5")) == {"bpm": "bpm_differs"}
     # Less than 1.5 BPM is rounding; 1.5 or more, a different tempo.
     assert _kinds(_tags(bpm="112.84"), _tags(bpm="113.1")) == {"bpm": "bpm_rounding"}
     assert _kinds(_tags(bpm="100"), _tags(bpm="101.4")) == {"bpm": "bpm_rounding"}
     assert _kinds(_tags(bpm="100"), _tags(bpm="101.5")) == {"bpm": "bpm_differs"}
     assert _kinds(_tags(bpm="fast"), _tags(bpm="95.5")) == {"bpm": "bpm_differs"}
+
+
+@pytest.mark.parametrize(
+    ("file_bpm", "catalog_bpm"),
+    [("100.00", "100"), ("89.0", "89"), ("100", "100.00"), ("100.00", "100.0")],
+)
+def test_a_bpm_written_with_trailing_zeros_is_a_rounding_difference(
+    file_bpm: str, catalog_bpm: str
+) -> None:
+    assert _kinds(_tags(bpm=file_bpm), _tags(bpm=catalog_bpm)) == {
+        "bpm": "bpm_rounding"
+    }
+
+
+def test_a_catalog_bpm_is_compared_as_a_whole_number() -> None:
+    entry = uuid.uuid4()
+    shown = rec.expected(_display(entry, bpm=100.00), _row("f", entry))
+    assert shown["bpm"] == "100"
+
+
+def test_a_fill_up_bpm_goes_up_as_a_whole_number() -> None:
+    diffs = [
+        rec.Difference("a.mp3", "a", "bpm", "100.00", "", "fill_up"),
+    ]
+    fill = rec._fill_up(diffs)
+    assert fill is not None and fill.bpm == 100
+    assert fill.model_dump(exclude_none=True) == {"bpm": 100}
+    assert rec._fill_up(
+        [rec.Difference("b.mp3", "b", "bpm", "89.00", "", "fill_up")]
+    ) == rec.CatalogFillUp(bpm=89)
 
 
 def test_a_different_label() -> None:
@@ -793,6 +823,55 @@ def test_an_approved_fill_up_goes_to_the_catalog_and_the_file_is_unchanged(
     assert drive.items[drive_id].data == before
 
 
+def test_a_file_bpm_with_trailing_zeros_fills_the_catalog_as_a_whole_number(
+    settings, writing, drive
+) -> None:
+    [drive_id] = _library(drive, writing, [{"bpm": "100.00"}])
+    entry = writing.rows[0].catalog_id
+    writing.displays[entry] = _display(entry, bpm=None)
+    before = drive.items[drive_id].data
+    _approve(writing, kinds=["fill_up"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    [(catalog_id, fill)] = writing.fills
+    assert catalog_id == str(entry)
+    assert fill.model_dump(exclude_none=True) == {"bpm": 100}
+    assert summary.filled == ["0.mp3 (bpm)"]
+    assert drive.items[drive_id].data == before
+
+
+def test_an_approved_trailing_zero_bpm_is_written_as_the_whole_number(
+    settings, writing, drive
+) -> None:
+    [drive_id] = _library(drive, writing, [{"bpm": "100.00"}])
+    _approve(writing, kinds=["bpm_rounding"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    assert _frames(drive.items[drive_id].data)["TBPM"] == "100"
+    assert summary.written == ["0.mp3 (bpm)"]
+
+
+def test_an_unapproved_trailing_zero_bpm_is_proposed_not_written(
+    settings, writing, drive
+) -> None:
+    [drive_id] = _library(drive, writing, [{"bpm": "89.00"}])
+    writing.displays[writing.rows[0].catalog_id] = _display(
+        writing.rows[0].catalog_id, bpm=89.0
+    )
+    before = drive.items[drive_id].data
+    _approve(writing, kinds=["fill_up"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    [diff] = summary.differences["bpm_rounding"]
+    assert (diff.file_value, diff.catalog_value) == ("89.00", "89")
+    assert drive.items[drive_id].data == before
+    [review] = writing.reviews
+    assert [(d.field, d.kind) for d in review.differences] == [("bpm", "bpm_rounding")]
+
+
 def test_a_kind_approved_for_the_file_goes_up_and_the_file_is_unchanged(
     settings, writing, drive, posted, monkeypatch
 ) -> None:
@@ -817,6 +896,30 @@ def test_a_kind_approved_for_the_file_goes_up_and_the_file_is_unchanged(
     _forget_seen(drive)
     again = rec.run_reconcile(run_id="r-2", mode=FlowMode.DRY_RUN, api=writing)
     assert again.compared == 1 and again.matching == 1
+
+
+def test_year_later_approved_for_the_file_takes_the_files_older_year(
+    settings, writing, drive
+) -> None:
+    """Pins the older-year rule as it stands: a file whose year is older than
+    its entry's (1996 against 2014) is filed under year_later, and with that
+    kind approved for the file the older year goes up to the entry, even
+    when the file's year is the wrong one. The file is not written."""
+    [drive_id] = _library(drive, writing, [{"year": "1996"}])
+    entry = writing.rows[0].catalog_id
+    writing.displays[entry] = _display(entry, release_year=2014)
+    before = drive.items[drive_id].data
+    _approve(writing, kinds=["year_earlier"], file_wins_kinds=["year_later"])
+
+    summary = rec.library_reconcile(run_id="r-1")
+
+    [diff] = summary.differences["year_later"]
+    assert (diff.file_value, diff.catalog_value) == ("1996", "2014")
+    [kept] = writing.kept
+    assert kept.keep_file == ["year"] and kept.tags.year == "1996"
+    assert writing.displays[entry].release_year == 1996
+    assert drive.items[drive_id].data == before
+    assert summary.kept == ["0.mp3 (year)"] and summary.written == []
 
 
 def test_an_other_difference_goes_up_only_for_the_file_approved_for_it(
