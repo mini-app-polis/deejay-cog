@@ -1,3 +1,16 @@
+# [2.68.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.67.1...v2.68.0) (2026-11-15)
+
+
+### Bug Fixes
+
+* **deps:** bump miniapppolis-common-utils to 9.12.0 ([7e0633a](https://github.com/mini-app-polis/deejay-cog/commit/7e0633aace4b6a474bb94ff8641f3ff1eea6c3b3))
+* **deps:** bump miniapppolis-common-utils to 9.13.0 ([999f349](https://github.com/mini-app-polis/deejay-cog/commit/999f34989ef8b77c54ad9103dc3309bfbda3841c))
+
+
+### Features
+
+* **reconcile:** apply one file's own kind approval ahead of the kind's, and add the reviewed FX role command ([9c43370](https://github.com/mini-app-polis/deejay-cog/commit/9c43370c5e5d1985f7c7d61cfc21404a7f12458a))
+
 ## [2.67.1](https://github.com/mini-app-polis/deejay-cog/compare/v2.67.0...v2.67.1) (2026-11-15)
 
 
