@@ -212,18 +212,27 @@ def _other_row(
 
 _AGREE_PARTS = re.compile(r"[\[(][^\])]*[\])]|\s+-\s+.*$")
 _AGREE_CREDIT = re.compile(r"\s+(?:feat\.?|ft\.?|featuring)\s+.*$", re.IGNORECASE)
+#: Where the first credited artist ends: a joiner after some name, never one
+#: that starts the credit ("X Ambassadors", "With Love" are names).
 _AGREE_SPLIT = re.compile(
-    r"\s*(?:,|&|\bx\b|\band\b|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b)\s*",
+    r"(?<=\S)\s*(?:,|&|\bx\b|\band\b|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b)\s*",
     re.IGNORECASE,
 )
 
 
 def _agree_key(text: str) -> str:
     """``text`` folded for agreement: accents, case, "&" and punctuation
-    ignored."""
+    ignored. Latin text keeps a-z and 0-9; letters and digits of every other
+    script are kept too, so a title in Chinese, Hebrew or Korean is not
+    folded to nothing."""
     folded = unicodedata.normalize("NFKD", text.replace("&", " and "))
-    folded = "".join(c for c in folded if not unicodedata.combining(c))
-    key = re.sub(r"[^a-z0-9]+", "", folded.lower())
+    folded = "".join(c for c in folded if not unicodedata.combining(c)).lower()
+    key = "".join(
+        c
+        for c in folded
+        if (c.isascii() and c.isalnum())
+        or (not c.isascii() and c.isalnum() and "LATIN" not in unicodedata.name(c, ""))
+    )
     return key.replace("rmix", "remix")
 
 

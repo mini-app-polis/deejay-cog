@@ -87,6 +87,25 @@ def test_tags_agree_on_versions_credits_and_punctuation() -> None:
     assert not tags_agree("Fast Car", "Daniel Hanson", "Fast Car", "Tracy Chapman")
 
 
+def test_tags_agree_on_titles_in_other_scripts() -> None:
+    assert tags_agree("有點甜", "汪苏泷", "有點甜", "汪苏泷")
+    assert tags_agree(
+        "תל אביב זה אני ואת", "אמיר ובן", "תל אביב זה אני ואת", "אמיר ובן"
+    )
+    assert tags_agree("작은 것들을 위한 시", "BTS", "작은 것들을 위한 시", "BTS")
+    assert not tags_agree("有點甜", "汪苏泷", "תל אביב זה אני ואת", "אמיר ובן")
+
+
+def test_tags_agree_on_an_artist_name_that_starts_with_a_joiner() -> None:
+    assert tags_agree("Renegades", "X Ambassadors", "Renegades", "X Ambassadors")
+    assert tags_agree(
+        "Someone You Loved",
+        "With Love feat. Connor Maynard",
+        "Someone You Loved",
+        "With Love",
+    )
+
+
 def test_tags_agree_only_on_the_same_version() -> None:
     # The original found for a remix, or a remix for the original, does not agree.
     assert not tags_agree(
