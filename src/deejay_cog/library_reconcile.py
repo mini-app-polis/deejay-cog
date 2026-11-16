@@ -112,7 +112,14 @@ values change starts again). Every run counts those open longer than
 tried and the catalog refused (the file keeps that value on purpose): by
 then each has had the chance to settle, so each has no decision or one
 that cannot apply. The first run to find any warns (``long_open``, with the count by kind); it warns
-again only after the count has been back to zero.
+again only after the count has been back to zero. An open difference whose
+file has left the library is dropped (``open_gone``): one not in the scan's
+latest complete listing (``library-scan-listing.json``), or not among the
+registry's present, identified files under the root. Such a file is never
+compared again, so its difference could never close. When the listing is
+not complete (a new one is being listed) only the registry is used, and an
+open difference on a file still there that the run did not compare stays as
+it is.
 
 **Owner edits.** A file whose title the owner retitled with a version in
 ``< >`` ("Song <Intro Cut>": a cut he made himself) while its entry is the
@@ -797,6 +804,8 @@ class ReconcileSummary:
     review_problem: str = ""
     long_open: dict[str, int] = field(default_factory=dict)
     long_open_warn: bool = False
+    #: Open differences dropped because their file has left the library.
+    open_gone: int = 0
     open_problem: str = ""
     #: Files compared first because they had an approved open difference.
     approved_first: int = 0
@@ -919,13 +928,18 @@ def _all_rows(api: Catalog, root: str) -> list[LibraryFile]:
             return rows
 
 
-def _drive_modified(drive: Any, settings: BackfillSettings) -> dict[str, str]:
-    """When Drive last saw each library file change, from the scan's listing."""
+def _drive_modified(
+    drive: Any, settings: BackfillSettings
+) -> tuple[dict[str, str], set[str] | None]:
+    """When Drive last saw each library file change, from the scan's listing,
+    and every file that listing found: ``None`` unless the listing is complete
+    (one being listed has found only some of the library)."""
     listing = StateFile(drive, settings.state, SCAN_LISTING_NAME).load() or {}
-    return {
+    modified = {
         str(item["id"]): str(item.get("modified") or "")
         for item in listing.get("files") or []
     }
+    return modified, set(modified) if listing.get("complete") else None
 
 
 def _stamp(modified: dict[str, str], row: LibraryFile, display: Any) -> dict[str, str]:
@@ -1378,7 +1392,7 @@ def _reconcile(
     seen_store = StateFile(drive, settings.state, SEEN_NAME)
     try:
         held = seen_store.load() or {}
-        modified = _drive_modified(drive, settings)
+        modified, listed = _drive_modified(drive, settings)
     except StateProblem as exc:
         summary.problems.append(str(exc))
         return
@@ -1514,7 +1528,7 @@ def _reconcile(
                 # A run that compared nothing leaves no record.
                 _save_record(drive, settings.state, run_id, summary)
             _send_review(api, run_id, summary)
-            _track_open(drive, settings, summary)
+            _track_open(drive, settings, summary, registered=present, listed=listed)
     if summary.aborted:
         _report_abort(run_id, summary)
 
@@ -1894,17 +1908,36 @@ def _open_key(diff: Difference) -> str:
     return f"{diff.drive_file_id}|{diff.field}"
 
 
+def _gone(file_id: str, registered: set[str], listed: set[str] | None) -> bool:
+    """Whether a file has left the library: not among the root's present,
+    identified registry rows, or not in the scan's complete listing. Neither
+    source says so when it holds nothing (no rows, no complete listing)."""
+    if registered and file_id not in registered:
+        return True
+    return listed is not None and bool(listed) and file_id not in listed
+
+
 def _track_open(
-    drive: Any, settings: BackfillSettings, summary: ReconcileSummary
+    drive: Any,
+    settings: BackfillSettings,
+    summary: ReconcileSummary,
+    *,
+    registered: set[str] | None = None,
+    listed: set[str] | None = None,
 ) -> None:
     """Keep when each open difference was first seen and first reported,
     and count those open longer than ``LONG_OPEN_DAYS`` by kind. One already
     reported with the same values goes in ``summary.reported_before``.
 
     For every file this run compared, its entries are replaced by what is
-    open on it now; a difference whose values changed starts again. A run
-    warns once when the count first goes above zero, and again only after
-    it has been back to zero. A failure is reported, never raised."""
+    open on it now; a difference whose values changed starts again. An
+    entry on a file the run did not compare is kept, unless the file has
+    left the library (:func:`_gone`, from ``registered``, the root's present,
+    identified files, and ``listed``, the scan's complete listing or
+    ``None``): it is dropped and counted in ``summary.open_gone``, as it
+    could never be compared again. A run warns once when the count first
+    goes above zero, and again only after it has been back to zero. A
+    failure is reported, never raised."""
     store = StateFile(drive, settings.state, OPEN_NAME)
     try:
         held = store.load() or {}
@@ -1912,7 +1945,15 @@ def _track_open(
         compared = set(summary.reviewed)
         now = datetime.now(UTC)
         stamp = now.isoformat(timespec="seconds")
-        kept = {k: v for k, v in entries.items() if k.split("|", 1)[0] not in compared}
+        kept: dict[str, dict[str, str]] = {}
+        for key, value in entries.items():
+            file_id = key.split("|", 1)[0]
+            if file_id in compared:
+                continue
+            if _gone(file_id, registered or set(), listed):
+                summary.open_gone += 1
+                continue
+            kept[key] = value
         for diff in summary.open:
             key = _open_key(diff)
             was = entries.get(key)
@@ -2089,6 +2130,7 @@ def _record(report: Any, summary: ReconcileSummary, duration_sec: float) -> None
             f"({kinds}): decide them on the review page",
         )
     report.count("long_open", long_open)
+    report.count("open_gone", summary.open_gone)
     report.count("compared", summary.compared)
     report.count("changed_left", summary.changed_left)
     report.count("approved_first", summary.approved_first)
