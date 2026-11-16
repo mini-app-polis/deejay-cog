@@ -1,3 +1,10 @@
+## [2.68.3](https://github.com/mini-app-polis/deejay-cog/compare/v2.68.2...v2.68.3) (2026-11-16)
+
+
+### Bug Fixes
+
+* **identify:** compare non-Latin titles and joiner-led artist names when checking a fingerprint ([ebfa0ca](https://github.com/mini-app-polis/deejay-cog/commit/ebfa0ca393cab51ba80eae922700164c615f66b8))
+
 ## [2.68.2](https://github.com/mini-app-polis/deejay-cog/compare/v2.68.1...v2.68.2) (2026-11-16)
 
 
