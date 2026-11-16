@@ -522,11 +522,16 @@ def _forget_seen(drive: FakeDrive) -> None:
     store.save({"files": {}})
 
 
-def _listed(drive: FakeDrive, modified: dict[str, str]) -> None:
+def _listed(
+    drive: FakeDrive, modified: dict[str, str], *, complete: bool = False
+) -> None:
     """The scan's listing, with when Drive last saw each file change."""
     found = [i for i in drive.in_folder(STATE) if i.name == scan.LISTING_NAME]
     data = json.dumps(
-        {"files": [{"id": k, "modified": v} for k, v in modified.items()]}
+        {
+            "complete": complete,
+            "files": [{"id": k, "modified": v} for k, v in modified.items()],
+        }
     ).encode()
     if found:
         found[0].data = data
@@ -1358,10 +1363,13 @@ def test_a_refused_fill_up_is_not_counted_as_long_open(
     settings, wired, drive, catalog
 ) -> None:
     [drive_id] = _library(drive, catalog, [{}])
-    StateFile(drive, STATE, rec.OPEN_NAME).save(
+    rec.library_reconcile(run_id="r-0")  # compared: the next run leaves it be
+    store = StateFile(drive, STATE, rec.OPEN_NAME)
+    store.load()
+    store.save(
         {
             "open": {
-                "other-file|genre": {
+                f"{drive_id}|genre": {
                     "since": "2026-01-01T00:00:00+00:00",
                     "kind": "fill_up",
                     "path": "x.mp3",
@@ -1375,7 +1383,8 @@ def test_a_refused_fill_up_is_not_counted_as_long_open(
 
     summary = rec.library_reconcile(run_id="r-1")
 
-    assert drive_id and summary.long_open == {} and not summary.long_open_warn
+    assert summary.reviewed == [] and summary.open_gone == 0
+    assert summary.long_open == {} and not summary.long_open_warn
 
 
 def test_an_unapproved_open_difference_waits_for_the_cursor(
@@ -1452,6 +1461,80 @@ def test_a_settled_difference_leaves_the_record_and_the_warning_resets(
     assert settled.long_open == {}
     assert _state(drive, rec.OPEN_NAME)["open"] == {}
     assert _state(drive, rec.OPEN_NAME)["warned"] is False
+
+
+def _hold_open_on(drive: FakeDrive, ids: list[str]) -> None:
+    """An open genre difference recorded on each of ``ids``, long open."""
+    store = StateFile(drive, STATE, rec.OPEN_NAME)
+    store.load()
+    store.save(
+        {
+            "open": {
+                f"{drive_id}|genre": {
+                    "since": "2026-01-01T00:00:00+00:00",
+                    "kind": "genre_remapped",
+                    "path": f"{n}.mp3",
+                    "file": "Neo Soul",
+                    "catalog": "Pop",
+                }
+                for n, drive_id in enumerate(ids)
+            },
+            "warned": True,
+        }
+    )
+
+
+def test_an_open_difference_on_a_file_gone_from_the_registry_is_dropped(
+    settings, wired, drive, catalog
+) -> None:
+    ids = _library(drive, catalog, [{}, {}])
+    rec.library_reconcile(run_id="r-1")
+    _hold_open_on(drive, ids)
+    catalog.rows[0] = catalog.rows[0].model_copy(update={"present": False})
+
+    summary = rec.library_reconcile(run_id="r-2")
+
+    # Neither file was compared: the one still there keeps its difference.
+    assert summary.reviewed == [] and summary.open_gone == 1
+    assert list(_state(drive, rec.OPEN_NAME)["open"]) == [f"{ids[1]}|genre"]
+    assert summary.long_open == {"genre_remapped": 1}
+
+
+def test_an_open_difference_on_a_file_the_complete_listing_lacks_is_dropped(
+    settings, wired, drive, catalog
+) -> None:
+    ids = _library(drive, catalog, [{}, {}])
+    # No change time for the first file, so leaving the listing does not
+    # make it look changed (and compared again).
+    _listed(drive, {ids[0]: "", ids[1]: "2026-11-07T00:00:00.000Z"}, complete=True)
+    rec.library_reconcile(run_id="r-1")
+    _hold_open_on(drive, ids)
+    # Moved out of the library; the registry has not caught up yet.
+    _listed(drive, {ids[1]: "2026-11-07T00:00:00.000Z"}, complete=True)
+
+    summary = rec.library_reconcile(run_id="r-2")
+
+    assert summary.reviewed == [] and summary.open_gone == 1
+    assert list(_state(drive, rec.OPEN_NAME)["open"]) == [f"{ids[1]}|genre"]
+    assert summary.long_open == {"genre_remapped": 1}
+
+
+def test_a_listing_still_in_progress_drops_no_open_difference(
+    settings, wired, drive, catalog
+) -> None:
+    ids = _library(drive, catalog, [{}, {}])
+    _listed(drive, {ids[0]: "", ids[1]: "2026-11-07T00:00:00.000Z"}, complete=True)
+    rec.library_reconcile(run_id="r-1")
+    _hold_open_on(drive, ids)
+    # A new listing has found only one of the files so far.
+    _listed(drive, {ids[1]: "2026-11-07T00:00:00.000Z"})
+
+    summary = rec.library_reconcile(run_id="r-2")
+
+    assert summary.open_gone == 0
+    assert sorted(_state(drive, rec.OPEN_NAME)["open"]) == sorted(
+        f"{i}|genre" for i in ids
+    )
 
 
 def test_a_tracker_that_fails_is_reported_and_the_run_carries_on(

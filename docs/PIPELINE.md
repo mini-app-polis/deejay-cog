@@ -1160,7 +1160,13 @@ change starts again. Every run counts those open more than 7 days
 the catalog would not take; above). A full pass has had the chance to settle each of them, so it
 has no decision, or one that cannot apply. The first run to find any warns
 once (`long_open`, with the count by kind), and again only after the count
-has been back to zero.
+has been back to zero. An open difference whose file has left the library
+is dropped and counted (`open_gone`): a file not in the scan's latest
+complete listing (`library-scan-listing.json`), or no longer among the
+registry's present, identified files under the root, is never compared
+again, so its difference could never close. While a new listing is still
+being made only the registry is used. An open difference on a file still in
+the library that the run did not compare stays as it is.
 
 **Approval rules:** what is approved, and why some kinds are held, is in
 [ADR-0008, decided 2026-11-07](decisions/ADR-0008-catalog-source-of-truth.md#decided-with-the-owner-2026-11-07-the-first-reconcile-review).
