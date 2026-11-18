@@ -50,7 +50,8 @@ Each group has a key made from its files, so an unchanged library reports
 the same groups every run. With ``flags.deejay_cog.library_duplicates`` at ``write`` the
 groups go to the API (``POST /v1/catalog/library/duplicates``), where the
 WCS duplicates page shows them; they replace the open groups for that root,
-each root reported on its own. A dry run lists the groups in the run report
+each root reported on its own; a root whose groups are the same as the last
+write run posted is not posted again. A dry run lists the groups in the run report
 only.
 
 **Reported when they change.** ``library-duplicates-seen.json`` in
@@ -58,7 +59,10 @@ only.
 FX Music's sets across folders) as the last run found them. A run whose
 groups are the same as then, for every root, and that the API found nothing
 added to or dropped from, names no group and posts no report: the run is
-still logged with its counts, and the digest saved. A group added, dropped
+still logged with its counts, and the digest saved. In write, an unchanged
+root's groups are no longer sent to the API (only a digest a write run
+posted counts, never one a dry run saved, and none that could not be read).
+A group added, dropped
 or changed reports as before; so does a root that failed.
 """
 
@@ -166,6 +170,9 @@ class RootDuplicates:
     #: for the owner to decide, never offered as a group to resolve.
     across_folders: list[list[str]] = field(default_factory=list)
     failed: str = ""
+    #: Write mode: the groups are those the last write run posted, so they
+    #: were not posted again.
+    skipped: bool = False
 
 
 @dataclass
@@ -464,34 +471,62 @@ def digest(found: RootDuplicates) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _compare_with_last(
-    drive: Any, settings: BackfillSettings, summary: DuplicatesSummary
-) -> None:
-    """Set ``summary.unchanged`` when every root's groups are the digest
-    the last run saved and the API added or dropped none, then save this
-    run's digests. A root that failed keeps its last digest. A state folder
-    that cannot be read or written is named, and the run reports as usual."""
-    store = StateFile(drive, settings.state, SEEN_NAME)
+def _load_last(
+    store: StateFile, summary: DuplicatesSummary
+) -> tuple[dict[str, str], dict[str, str]]:
+    """The digests the last run saved: each root's as it found them, and
+    each root's as a write run posted them. Both are empty, and the problem
+    is named, when the state folder cannot be read: nothing is then skipped."""
     try:
         held = store.load() or {}
-        last: dict[str, str] = dict(held.get("roots") or {})
+        return dict(held.get("roots") or {}), dict(held.get("written") or {})
+    except Exception as exc:  # noqa: BLE001 — the memory is not the report
+        log.exception("library-duplicates: last run's groups not read")
+        summary.seen_problem = f"{type(exc).__name__}: {exc}"
+        return {}, {}
+
+
+def _compare_with_last(
+    store: StateFile,
+    last: dict[str, str],
+    written: dict[str, str],
+    summary: DuplicatesSummary,
+) -> None:
+    """Set ``summary.unchanged`` when every root's groups are the digest
+    the last run saved and the API added or dropped none (a root not posted
+    for being unchanged has nothing to add or drop), then save this run's
+    digests. Only a write run records what it posted, so a digest saved by a
+    dry run never stands for a POST. A root that failed keeps its last
+    digest. A state folder that cannot be read or written is named, and the
+    run reports as usual."""
+    try:
         now = dict(last)
+        now_written = dict(written)
         for found in summary.roots:
             if not found.failed:
                 now[found.root.key] = digest(found)
-        summary.unchanged = bool(summary.roots) and all(
-            not found.failed
-            and last.get(found.root.key) == now[found.root.key]
-            and (
-                found.result is None
-                or (not found.result.added and not found.result.dropped)
+                if summary.mode.writes:
+                    now_written[found.root.key] = now[found.root.key]
+        summary.unchanged = (
+            not summary.seen_problem
+            and bool(summary.roots)
+            and all(
+                not found.failed
+                and last.get(found.root.key) == now[found.root.key]
+                and (
+                    found.skipped
+                    or found.result is None
+                    or (not found.result.added and not found.result.dropped)
+                )
+                for found in summary.roots
             )
-            for found in summary.roots
         )
-        if now != last:
-            store.save({"flow": FLOW_NAME, "version": 1, "roots": now})
+        if now != last or now_written != written:
+            store.save(
+                {"flow": FLOW_NAME, "version": 1, "roots": now, "written": now_written}
+            )
     except Exception as exc:  # noqa: BLE001 — the memory is not the report
-        log.exception("library-duplicates: last run's groups not read or saved")
+        log.exception("library-duplicates: last run's groups not saved")
         summary.unchanged = False
         summary.seen_problem = f"{type(exc).__name__}: {exc}"
 
@@ -530,20 +565,29 @@ def run_duplicates(
             client = api or cast(
                 Catalog, api_client(base_url=api_base_url().strip() or None)
             )
+            store = StateFile(drive, settings.state, SEEN_NAME) if drive else None
+            last: dict[str, str] = {}
+            written: dict[str, str] = {}
+            if store is not None:
+                last, written = _load_last(store, summary)
             for root in settings.roots:
-                summary.roots.append(_root_duplicates(client, root, summary))
+                summary.roots.append(_root_duplicates(client, root, summary, written))
             _totals(summary)
-            if drive is not None:
-                _compare_with_last(drive, settings, summary)
+            if store is not None:
+                _compare_with_last(store, last, written, summary)
         finally:
             _record(report, summary, monotonic() - started_at)
     return summary
 
 
 def _root_duplicates(
-    api: Catalog, root: LibraryRoot, summary: DuplicatesSummary
+    api: Catalog,
+    root: LibraryRoot,
+    summary: DuplicatesSummary,
+    written: dict[str, str],
 ) -> RootDuplicates:
-    """Group one root's files and, in write mode, send its groups. A
+    """Group one root's files and, in write mode, send its groups unless
+    they are the digest a write run last posted for it (``written``). A
     failure is the root's alone: the other roots still run."""
     found = RootDuplicates(root)
     try:
@@ -563,7 +607,9 @@ def _root_duplicates(
             groups = find_groups(rows, shown)
         found.left_out = max(0, len(groups) - DUPLICATE_REPORT_MAX_GROUPS)
         found.groups = groups[:DUPLICATE_REPORT_MAX_GROUPS]
-        if summary.mode.writes:
+        if summary.mode.writes and written.get(root.key) == digest(found):
+            found.skipped = True
+        elif summary.mode.writes:
             found.result = api.report_duplicate_groups(
                 DuplicateReport(library_root_id=root.root_id, groups=found.groups)
             )
@@ -642,7 +688,9 @@ def _record(report: Any, summary: DuplicatesSummary, duration_sec: float) -> Non
                 label=f"groups in {found.root.name}",
             )
         result = found.result
-        unchanged = result is not None and not result.added and not result.dropped
+        unchanged = found.skipped or (
+            result is not None and not result.added and not result.dropped
+        )
         if not unchanged:
             # The groups are named when they change (or in a dry run); open
             # groups that are the same as last run wait on the page, unrepeated.

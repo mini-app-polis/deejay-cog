@@ -1515,8 +1515,11 @@ reasons and files, FX Music's sets across folders, and how many groups were
 left out) as the last run found them. A run whose groups are the same for
 every root, and that the API found nothing added to or dropped from, posts
 no report, dry or write: it names no group, is logged with its counts
-(`files`, `groups`, `unchanged_since_last_run`) and still sends the groups
-to the API in write. A group added, dropped or changed, or a root that
+(`files`, `groups`, `unchanged_since_last_run`), and in write an unchanged
+root's groups are no longer sent to the API: the check is per root, against
+the digest the last write run posted (a digest a dry run saved never
+counts, nor does a root that failed or a state file that can't be read;
+those post as before). A group added, dropped or changed, or a root that
 failed, reports as above. A state file that can't be read or saved is
 named (`last_run_not_compared`) and the run reports as usual.
 
