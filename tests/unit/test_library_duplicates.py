@@ -987,8 +987,8 @@ def test_the_same_groups_as_the_last_run_post_no_report(posted, state_drive) -> 
 
     assert again.unchanged and len(again.groups) == 1
     assert not _posted_a_report(posted)
-    # The run is still recorded: its counts, and the groups sent to the API.
-    assert posted.call_args.kwargs["groups"] == 1 and len(catalog.reports) == 2
+    # The run is still recorded: its counts; the groups are not sent again.
+    assert posted.call_args.kwargs["groups"] == 1 and len(catalog.reports) == 1
     assert [i.name for i in state_drive.in_folder(STATE)] == [dup.SEEN_NAME]
 
 
@@ -1050,3 +1050,119 @@ def test_fx_sets_across_folders_unchanged_post_no_report(
     again = _run(catalog, state_drive, 2)
 
     assert again.unchanged and not _posted_a_report(posted)
+
+
+# ── No POST for a root whose groups are unchanged ─────────────────────────
+
+
+def _spy(catalog: KeyedCatalog) -> MagicMock:
+    spy = MagicMock(side_effect=catalog.report_duplicate_groups)
+    catalog.report_duplicate_groups = spy  # type: ignore[method-assign]
+    return spy
+
+
+def test_an_unchanged_root_is_not_posted_and_the_run_is_recorded(
+    posted, state_drive
+) -> None:
+    catalog = KeyedCatalog(rows=_catalog().rows)
+    _run(catalog, state_drive, 1)
+    spy = _spy(catalog)
+
+    again = _run(catalog, state_drive, 2)
+
+    spy.assert_not_called()
+    assert again.unchanged and again.roots[0].skipped
+    assert posted.call_args.kwargs["groups"] == 1
+    assert [i.name for i in state_drive.in_folder(STATE)] == [dup.SEEN_NAME]
+
+
+def test_a_changed_root_is_posted(posted, state_drive) -> None:
+    catalog = KeyedCatalog(rows=_catalog().rows)
+    _run(catalog, state_drive, 1)
+    catalog.rows += [
+        _file("c", "Rock/x.mp3", md5="same"),
+        _file("d", "Rock/y.mp3", md5="same"),
+    ]
+    spy = _spy(catalog)
+
+    changed = _run(catalog, state_drive, 2)
+
+    spy.assert_called_once()
+    assert not changed.unchanged and len(changed.groups) == 2
+
+
+def test_only_the_changed_root_is_posted(roots, posted, state_drive) -> None:
+    catalog = RootsCatalog(
+        rows=[
+            _file("a", "Pop/x.mp3", md5="m1"),
+            _file("b", "Pop/x (1).mp3", md5="m1"),
+            _fx("c", "Bows/y.mp3", md5="m2"),
+            _fx("d", "Bows/y (1).mp3", md5="m2"),
+        ]
+    )
+    _run(catalog, state_drive, 1)
+    catalog.rows.append(_fx("e", "Bows/z.mp3", md5="m2"))
+    catalog.reports.clear()
+
+    _run(catalog, state_drive, 2)
+
+    assert [r.library_root_id for r in catalog.reports] == [FX]
+
+
+def test_a_root_with_no_saved_digest_is_posted(posted, state_drive) -> None:
+    catalog = KeyedCatalog(rows=_catalog().rows)
+    spy = _spy(catalog)
+
+    _run(catalog, state_drive, 1)
+
+    spy.assert_called_once()
+
+
+def test_a_root_that_failed_last_run_is_posted(roots, posted, state_drive) -> None:
+    catalog = RootsCatalog(
+        rows=[_fx("c", "Bows/y.mp3", md5="m2"), _fx("d", "Bows/y (1).mp3", md5="m2")],
+        broken={ROOT},
+    )
+    _run(catalog, state_drive, 1)
+    catalog.broken = set()
+    catalog.rows += [
+        _file("a", "Pop/x.mp3", md5="m1"),
+        _file("b", "Pop/x (1).mp3", md5="m1"),
+    ]
+    catalog.reports.clear()
+
+    _run(catalog, state_drive, 2)
+
+    assert {r.library_root_id for r in catalog.reports} == {ROOT}
+
+
+def test_an_unreadable_state_folder_still_posts(
+    posted, state_drive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = KeyedCatalog(rows=_catalog().rows)
+    _run(catalog, state_drive, 1)
+    spy = _spy(catalog)
+
+    def broken(**kwargs: Any) -> Any:
+        raise RuntimeError("drive down")
+
+    monkeypatch.setattr(state_drive, "list_files", broken)
+
+    again = _run(catalog, state_drive, 2)
+
+    spy.assert_called_once()
+    assert not again.unchanged and "drive down" in again.seen_problem
+
+
+def test_a_dry_run_digest_does_not_make_the_first_write_run_skip(
+    posted, state_drive
+) -> None:
+    catalog = KeyedCatalog(rows=_catalog().rows)
+    _run(catalog, state_drive, 1, FlowMode.DRY_RUN)
+    spy = _spy(catalog)
+
+    _run(catalog, state_drive, 2)
+    spy.assert_called_once()
+
+    _run(catalog, state_drive, 3)
+    spy.assert_called_once()  # now unchanged since a write run posted it
