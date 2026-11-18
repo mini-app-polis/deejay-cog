@@ -1,3 +1,10 @@
+# [2.69.0](https://github.com/mini-app-polis/deejay-cog/compare/v2.68.5...v2.69.0) (2026-11-18)
+
+
+### Features
+
+* **library-duplicates:** skip the POST for a root whose groups are unchanged ([4fc7793](https://github.com/mini-app-polis/deejay-cog/commit/4fc77936d78d6808ae1a43c7d5d98ea4807f392e))
+
 ## [2.68.5](https://github.com/mini-app-polis/deejay-cog/compare/v2.68.4...v2.68.5) (2026-11-18)
 
 
