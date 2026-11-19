@@ -60,7 +60,7 @@ FX Music's sets across folders) as the last run found them. A run whose
 groups are the same as then, for every root, and that the API found nothing
 added to or dropped from, names no group and posts no report: the run is
 still logged with its counts, and the digest saved. In write, an unchanged
-root's groups are no longer sent to the API (only a digest a write run
+root's groups are not sent to the API again (only a digest a write run
 posted counts, never one a dry run saved, and none that could not be read).
 A group added, dropped
 or changed reports as before; so does a root that failed.
